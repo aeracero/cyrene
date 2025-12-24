@@ -66,9 +66,10 @@ RANDOM_ON_MENTION = (
 def get_cyrene_reply(message: str) -> str:
     msg = message.lower().strip()
 
-    # ① @のみ → 毎回ランダム
+    # ① @のみ（内容が空）のとき → waitingだけ
     if msg == "":
-        return random.choice(RANDOM_ON_MENTION)
+        return random.choice(CYRENE_LINES["waiting"])
+
 
     # ② 挨拶
     if any(w in msg for w in ["hello♪", "hi♪", "hey♪", "こんにちは♪", "こんばんは♪", "おはよう♪"]):
