@@ -66,12 +66,11 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    print(f"RECV {message.author.id}: {message.content!r}")
-
+    # 🔴 bot本人へのメンション以外は無視（ロール対策）
     if client.user not in message.mentions:
         return
 
-    # メンション削除
+    # メンション削除（botのみ）
     content = re.sub(rf"<@!?{client.user.id}>", "", message.content).strip()
 
     user_id = message.author.id
@@ -87,7 +86,7 @@ async def on_message(message: discord.Message):
             await message.channel.send(
                 f"{message.author.mention} あたし、どう呼べばいいの？"
             )
-            return
+            return  # ← 超重要
 
         set_nickname(user_id, new_name)
         await message.channel.send(
@@ -123,10 +122,19 @@ async def on_message(message: discord.Message):
         return
 
     # =====================
+    # 内容なし → waiting のみ
+    # =====================
+    if content == "":
+        reply = get_cyrene_reply("")
+        await message.channel.send(
+            f"{message.author.mention} {name}、{reply}"
+        )
+        return
+
+    # =====================
     # 通常応答
     # =====================
     reply = get_cyrene_reply(content)
-
     await message.channel.send(
         f"{message.author.mention} {name}、{reply}"
     )
