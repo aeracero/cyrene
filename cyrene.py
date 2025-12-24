@@ -7,101 +7,131 @@ from dotenv import load_dotenv
 from lines import get_cyrene_reply
 
 # =====================
-# 環境変数読み込み
+# 環境変数
 # =====================
 load_dotenv()
-
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 if not DISCORD_TOKEN:
     raise RuntimeError("DISCORD_TOKEN is not set")
 
 # =====================
-# Discord 設定
+# Discord
 # =====================
 intents = discord.Intents.default()
 intents.message_content = True
-
 client = discord.Client(intents=intents)
 
 # =====================
-# あだ名保存（JSON）
+# あだ名保存
 # =====================
-NICKNAME_FILE = Path("nicknames.json")
+DATA_FILE = Path("nicknames.json")
 
-def load_nicknames():
-    if not NICKNAME_FILE.exists():
+def load_data():
+    if not DATA_FILE.exists():
         return {}
-    return json.loads(NICKNAME_FILE.read_text(encoding="utf-8"))
+    return json.loads(DATA_FILE.read_text(encoding="utf-8"))
 
-def save_nicknames(data):
-    NICKNAME_FILE.write_text(
+def save_data(data):
+    DATA_FILE.write_text(
         json.dumps(data, ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
 
-def set_nickname(user_id: int, nickname: str):
-    data = load_nicknames()
+def set_nickname(user_id, nickname):
+    data = load_data()
     data[str(user_id)] = nickname
-    save_nicknames(data)
+    save_data(data)
 
-def get_nickname(user_id: int):
-    data = load_nicknames()
-    return data.get(str(user_id))
+def delete_nickname(user_id):
+    data = load_data()
+    if str(user_id) in data:
+        del data[str(user_id)]
+        save_data(data)
+
+def get_nickname(user_id):
+    return load_data().get(str(user_id))
 
 # =====================
-# 起動時
+# 起動
 # =====================
 @client.event
 async def on_ready():
     print(f"ログイン成功: {client.user}")
 
 # =====================
-# メッセージ受信
+# メッセージ処理
 # =====================
 @client.event
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    # ログ（Render Logs で確認できる）
-    print(f"RECV from {message.author} ({message.author.id}): {message.content!r}")
+    print(f"RECV {message.author.id}: {message.content!r}")
 
-    # Botへのメンション検出
-    if client.user and client.user in message.mentions:
-        # メンション部分を削除
-        content = re.sub(rf"<@!?{client.user.id}>", "", message.content).strip()
+    if client.user not in message.mentions:
+        return
 
-        # ==========
-        # あだ名登録
-        # ==========
-        if content.startswith("あだ名登録"):
-            nickname = content.replace("あだ名登録", "").strip()
+    # メンション削除
+    content = re.sub(rf"<@!?{client.user.id}>", "", message.content).strip()
 
-            if nickname == "":
-                await message.channel.send(
-                    f"{message.author.mention} あたし、どう呼べばいいの？"
-                )
-                return
+    user_id = message.author.id
+    nickname = get_nickname(user_id)
+    name = nickname if nickname else message.author.display_name
 
-            set_nickname(message.author.id, nickname)
+    # =====================
+    # あだ名登録
+    # =====================
+    if content.startswith("あだ名登録"):
+        new_name = content.replace("あだ名登録", "").strip()
+        if not new_name:
             await message.channel.send(
-                f"{message.author.mention} ふふ…これからは「{nickname}」って呼ぶわね♪"
+                f"{message.author.mention} あたし、どう呼べばいいの？"
             )
             return
 
-        # ==========
-        # 通常返信
-        # ==========
-        nickname = get_nickname(message.author.id)
-        name = nickname if nickname else message.author.display_name
-
-        reply = get_cyrene_reply(content)
-
+        set_nickname(user_id, new_name)
         await message.channel.send(
-            f"{message.author.mention} {name}、{reply}"
+            f"{message.author.mention} ふふ…これからは「{new_name}」って呼ぶわね♪"
         )
+        return
+
+    # =====================
+    # あだ名変更
+    # =====================
+    if content.startswith("あだ名変更"):
+        new_name = content.replace("あだ名変更", "").strip()
+        if not new_name:
+            await message.channel.send(
+                f"{message.author.mention} 新しい呼び名、教えて？"
+            )
+            return
+
+        set_nickname(user_id, new_name)
+        await message.channel.send(
+            f"{message.author.mention} 了解♪ 今日から「{new_name}」よ。"
+        )
+        return
+
+    # =====================
+    # あだ名削除
+    # =====================
+    if content.startswith("あだ名削除"):
+        delete_nickname(user_id)
+        await message.channel.send(
+            f"{message.author.mention} わかったわ。元の呼び方に戻すわね。"
+        )
+        return
+
+    # =====================
+    # 通常応答
+    # =====================
+    reply = get_cyrene_reply(content)
+
+    await message.channel.send(
+        f"{message.author.mention} {name}、{reply}"
+    )
 
 # =====================
-# 起動
+# 実行
 # =====================
 client.run(DISCORD_TOKEN)
