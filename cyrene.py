@@ -1,145 +1,122 @@
+# cyrene.py
 import os
 import re
 import json
 from pathlib import Path
+
 import discord
 from dotenv import load_dotenv
+
 from lines import get_cyrene_reply
 
-# =====================
-# 環境変数
-# =====================
+# ===== env =====
 load_dotenv()
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
 if not DISCORD_TOKEN:
     raise RuntimeError("DISCORD_TOKEN is not set")
 
-# =====================
-# Discord
-# =====================
-intents = discord.Intents.default()
-intents.message_content = True
-client = discord.Client(intents=intents)
-
-# =====================
-# あだ名保存
-# =====================
+# ===== nicknames =====
 DATA_FILE = Path("nicknames.json")
 
 def load_data():
     if not DATA_FILE.exists():
         return {}
-    return json.loads(DATA_FILE.read_text(encoding="utf-8"))
+    try:
+        return json.loads(DATA_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
 
 def save_data(data):
-    DATA_FILE.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8"
-    )
+    DATA_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
-def set_nickname(user_id, nickname):
+def set_nickname(user_id: int, nickname: str):
     data = load_data()
     data[str(user_id)] = nickname
     save_data(data)
 
-def delete_nickname(user_id):
+def delete_nickname(user_id: int):
     data = load_data()
     if str(user_id) in data:
         del data[str(user_id)]
         save_data(data)
 
-def get_nickname(user_id):
+def get_nickname(user_id: int):
     return load_data().get(str(user_id))
 
-# =====================
-# 起動
-# =====================
+# ===== discord =====
+intents = discord.Intents.default()
+intents.message_content = True
+client = discord.Client(intents=intents)
+
+def strip_bot_mention(text: str, bot_id: int) -> str:
+    # <@id> と <@!id> を削除
+    return re.sub(rf"<@!?{bot_id}>", "", text).strip()
+
+def is_mention_to_me(message: discord.Message) -> bool:
+    # ロールメンション等で反応しない（bot本人へのメンションのみ）
+    return (client.user is not None) and (client.user in message.mentions)
+
 @client.event
 async def on_ready():
-    print(f"ログイン成功: {client.user}")
+    print(f"ログイン成功: {client.user} ({client.user.id})")
 
-# =====================
-# メッセージ処理
-# =====================
 @client.event
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    # 🔴 bot本人へのメンション以外は無視（ロール対策）
-    if client.user not in message.mentions:
+    if not is_mention_to_me(message):
         return
 
-    # メンション削除（botのみ）
-    content = re.sub(rf"<@!?{client.user.id}>", "", message.content).strip()
+    content = strip_bot_mention(message.content, client.user.id)
+
+    # ログ（必要なら）
+    print(f"RECV: {message.author}({message.author.id}) content='{content}' raw='{message.content}'")
 
     user_id = message.author.id
     nickname = get_nickname(user_id)
     name = nickname if nickname else message.author.display_name
 
-    # =====================
-    # あだ名登録
-    # =====================
+    # 返信は「必ず1回だけ」送る
+    reply_text = None
+
+    # ========= あだ名コマンド =========
+    # 形式:
+    #   あだ名登録 〇〇
+    #   あだ名変更 〇〇
+    #   あだ名削除
     if content.startswith("あだ名登録"):
-        new_name = content.replace("あだ名登録", "").strip()
+        new_name = content.replace("あだ名登録", "", 1).strip()
         if not new_name:
-            await message.channel.send(
-                f"{message.author.mention} あたし、どう呼べばいいの？"
-            )
-            return  # ← 超重要
+            reply_text = f"{message.author.mention} あたし、どう呼べばいいの？"
+        else:
+            set_nickname(user_id, new_name)
+            reply_text = f"{message.author.mention} ふふ…これからは「{new_name}」って呼ぶわね♪"
 
-        set_nickname(user_id, new_name)
-        await message.channel.send(
-            f"{message.author.mention} ふふ…これからは「{new_name}」って呼ぶわね♪"
-        )
-        return
-
-    # =====================
-    # あだ名変更
-    # =====================
-    if content.startswith("あだ名変更"):
-        new_name = content.replace("あだ名変更", "").strip()
+    elif content.startswith("あだ名変更"):
+        new_name = content.replace("あだ名変更", "", 1).strip()
         if not new_name:
-            await message.channel.send(
-                f"{message.author.mention} 新しい呼び名、教えて？"
-            )
-            return
+            reply_text = f"{message.author.mention} 新しい呼び名、教えて？"
+        else:
+            set_nickname(user_id, new_name)
+            reply_text = f"{message.author.mention} 了解♪ 今日から「{new_name}」よ。"
 
-        set_nickname(user_id, new_name)
-        await message.channel.send(
-            f"{message.author.mention} 了解♪ 今日から「{new_name}」よ。"
-        )
-        return
-
-    # =====================
-    # あだ名削除
-    # =====================
-    if content.startswith("あだ名削除"):
+    elif content.startswith("あだ名削除"):
         delete_nickname(user_id)
-        await message.channel.send(
-            f"{message.author.mention} わかったわ。元の呼び方に戻すわね。"
-        )
-        return
+        reply_text = f"{message.author.mention} わかったわ。元の呼び方に戻すわね。"
 
-    # =====================
-    # 内容なし → waiting のみ
-    # =====================
-    if content == "":
-        reply = get_cyrene_reply("")
-        await message.channel.send(
-            f"{message.author.mention} {name}、{reply}"
-        )
-        return
+    # ========= 通常応答 =========
+    else:
+        # 「何も書かなかった時」は waiting だけ
+        if content == "":
+            cy = get_cyrene_reply("")
+            reply_text = f"{message.author.mention} {name}、{cy}"
+        else:
+            cy = get_cyrene_reply(content)
+            reply_text = f"{message.author.mention} {name}、{cy}"
 
-    # =====================
-    # 通常応答
-    # =====================
-    reply = get_cyrene_reply(content)
-    await message.channel.send(
-        f"{message.author.mention} {name}、{reply}"
-    )
+    # ここで1回だけ送信
+    if reply_text is not None:
+        await message.channel.send(reply_text)
 
-# =====================
-# 実行
-# =====================
 client.run(DISCORD_TOKEN)
