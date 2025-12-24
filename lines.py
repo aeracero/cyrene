@@ -80,7 +80,7 @@ def get_cyrene_reply(message: str) -> str:
         return random.choice(CYRENE_LINES["askaboutothers"])
 
     # ④ 戦闘ボイス
-    if "戦闘中にやってる" in msg:
+    if "戦闘中のやつやってよ" in msg:
         return random.choice(CYRENE_LINES["battlevoices"])
 
     # ⑤ 甘える
@@ -95,6 +95,15 @@ def get_cyrene_reply(message: str) -> str:
             + random.choice(CYRENE_LINES["nagayozuki2"])
         )
 
+    if "自己紹介して" in msg:
+        return (
+            "こんにちは、あたしはキュレネよ♪\n"
+            "みんなについて教えてと言ってくれればあたしなりの意見を言うわ♪\n"
+            "戦闘中のやつやってよと言ってくれればあたしの戦闘ボイスを聞かせてあげるわ♪\n"
+            "甘えていいんだよと言ってくれればあたしは甘えちゃうわ♪\n"
+            "ecのために長夜月やってと言ってくれれば、あたしの渾身の長夜月の真似を披露するわ♪\n"
+            "みんな、あたしともっと仲良くしてね♪"
+        )
     # ⑦ 既定
     return (
         "ごめんなさい、あたしまだ完全に復活できてないの…♪\n"
