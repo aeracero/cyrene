@@ -2,12 +2,13 @@
 import os
 import re
 import json
+import random
 from pathlib import Path
 
 import discord
 from dotenv import load_dotenv
 
-from lines import get_cyrene_reply
+from lines import get_cyrene_reply, get_rps_line  # ★ ここで追加
 
 # =====================
 # 環境変数
@@ -119,6 +120,7 @@ waiting_for_rename = set()        # あだ名変更入力待ち
 admin_data_mode = set()           # データ管理モード中のユーザー
 waiting_for_admin_add = set()     # 管理者追加で @待ち
 waiting_for_admin_remove = set()  # 管理者削除で @待ち
+waiting_for_rps_choice = set()    # じゃんけんの手入力待ち
 
 # =====================
 # 起動
@@ -126,6 +128,34 @@ waiting_for_admin_remove = set()  # 管理者削除で @待ち
 @client.event
 async def on_ready():
     print(f"ログイン成功: {client.user} ({client.user.id})")
+
+# =====================
+# じゃんけん用ヘルパ
+# =====================
+JANKEN_HANDS = ["グー", "チョキ", "パー"]
+
+def parse_hand(text: str) -> str | None:
+    if "グー" in text:
+        return "グー"
+    if "チョキ" in text:
+        return "チョキ"
+    if "パー" in text:
+        return "パー"
+    return None
+
+def judge_janken(user_hand: str, bot_hand: str) -> str:
+    """
+    ユーザーとbotの手から
+    'win' / 'lose' / 'draw' のいずれかを返す
+    """
+    if user_hand == bot_hand:
+        return "draw"
+    win = (
+        (user_hand == "グー" and bot_hand == "チョキ") or
+        (user_hand == "チョキ" and bot_hand == "パー") or
+        (user_hand == "パー" and bot_hand == "グー")
+    )
+    return "win" if win else "lose"
 
 # =====================
 # メッセージ処理
@@ -140,11 +170,12 @@ async def on_message(message: discord.Message):
     # 状態フラグ
     is_waiting_nick = (user_id in waiting_for_nickname) or (user_id in waiting_for_rename)
     is_waiting_admin = (user_id in waiting_for_admin_add) or (user_id in waiting_for_admin_remove)
+    is_waiting_rps = (user_id in waiting_for_rps_choice)
     is_admin_mode = user_id in admin_data_mode
     is_mentioned = client.user in message.mentions
 
     # どのモードでもない＋メンションもない → 完全無視
-    if not (is_mentioned or is_waiting_nick or is_waiting_admin or is_admin_mode):
+    if not (is_mentioned or is_waiting_nick or is_waiting_admin or is_waiting_rps or is_admin_mode):
         return
 
     # メンション（bot本人）だけ削除したテキスト
@@ -153,6 +184,29 @@ async def on_message(message: discord.Message):
     # あだ名と表示名
     nickname = get_nickname(user_id)
     name = nickname if nickname else message.author.display_name
+
+    # =====================
+    # ✅ じゃんけんの手入力待ち
+    # =====================
+    if user_id in waiting_for_rps_choice:
+        text = content if content else message.content.strip()
+        hand = parse_hand(text)
+        if not hand:
+            await message.channel.send(
+                f"{message.author.mention} グー / チョキ / パー のどれかで教えて？"
+            )
+            return
+
+        bot_hand = random.choice(JANKEN_HANDS)
+        result = judge_janken(hand, bot_hand)
+        flavor = get_rps_line(result)
+
+        waiting_for_rps_choice.discard(user_id)
+
+        await message.channel.send(
+            f"{message.author.mention} {name} は **{hand}**、あたしは **{bot_hand}** よ。\n{flavor}"
+        )
+        return
 
     # =====================
     # ✅ 管理者追加の @ 待ち
@@ -240,10 +294,9 @@ async def on_message(message: discord.Message):
         return
 
     # =====================
-    # ⭐ データ管理モード中のコマンド（先に処理）
+    # ⭐ データ管理モード中のコマンド
     # =====================
     if user_id in admin_data_mode:
-        # データ管理終了
         if "データ管理終了" in content:
             admin_data_mode.discard(user_id)
             await message.channel.send(
@@ -251,7 +304,6 @@ async def on_message(message: discord.Message):
             )
             return
 
-        # ニックネーム確認
         if "ニックネーム確認" in content:
             data = load_data()
             if not data:
@@ -279,7 +331,6 @@ async def on_message(message: discord.Message):
             await message.channel.send("\n".join(lines))
             return
 
-        # 管理者編集（ガイド）
         if "管理者編集" in content:
             await message.channel.send(
                 f"{message.author.mention} 管理者をどうしたい？\n"
@@ -289,7 +340,6 @@ async def on_message(message: discord.Message):
             )
             return
 
-        # 管理者追加モードへ
         if "管理者追加" in content:
             waiting_for_admin_add.add(user_id)
             await message.channel.send(
@@ -297,7 +347,6 @@ async def on_message(message: discord.Message):
             )
             return
 
-        # 管理者削除モードへ
         if "管理者削除" in content:
             waiting_for_admin_remove.add(user_id)
             await message.channel.send(
@@ -305,7 +354,6 @@ async def on_message(message: discord.Message):
             )
             return
 
-        # それ以外 → メニュー案内
         await message.channel.send(
             f"{message.author.mention} ごめんね、そのコマンドはまだ知らないの…。\n"
             "いま使えるのは\n"
@@ -319,7 +367,7 @@ async def on_message(message: discord.Message):
         return
 
     # =====================
-    # ⭐ データ管理モードに入る（ここは最後に判定）
+    # ⭐ データ管理モードに入る
     # =====================
     if content == "データ管理":
         if not is_admin(user_id):
@@ -383,6 +431,28 @@ async def on_message(message: discord.Message):
         waiting_for_rename.discard(user_id)
         await message.channel.send(
             f"{message.author.mention} わかったわ。元の呼び方に戻すわね。"
+        )
+        return
+
+    # =====================
+    # ⭐ じゃんけん開始コマンド
+    # =====================
+    if "じゃんけん" in content:
+        # 一発指定（例: じゃんけん グー）
+        hand = parse_hand(content)
+        if hand:
+            bot_hand = random.choice(JANKEN_HANDS)
+            result = judge_janken(hand, bot_hand)
+            flavor = get_rps_line(result)
+            await message.channel.send(
+                f"{message.author.mention} {name} は **{hand}**、あたしは **{bot_hand}** よ。\n{flavor}"
+            )
+            return
+
+        # 手はまだ → 手入力待ちモードへ
+        waiting_for_rps_choice.add(user_id)
+        await message.channel.send(
+            f"{message.author.mention} じゃんけんしよ♪ グー / チョキ / パー、どれにする？"
         )
         return
 
