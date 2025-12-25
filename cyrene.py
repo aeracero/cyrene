@@ -452,7 +452,7 @@ async def on_message(message: discord.Message):
         # 手はまだ → 手入力待ちモードへ
         waiting_for_rps_choice.add(user_id)
         await message.channel.send(
-            f"{message.author.mention} じゃんけんしよ♪ グー / チョキ / パー、どれにする？"
+            f"{message.author.mention} じゃんけんをしましょう♪ グー / チョキ / パー、どれにするかしら？"
         )
         return
 
