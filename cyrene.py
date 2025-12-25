@@ -18,7 +18,7 @@ if not DISCORD_TOKEN:
     raise RuntimeError("DISCORD_TOKEN is not set")
 
 # ★ 最初のメイン管理者（あなたのID）
-PRIMARY_ADMIN_ID = 916106297190019102  # 必要なら自分のIDに変更
+PRIMARY_ADMIN_ID = 1453032382700716074  # 必要なら自分のIDに変更
 
 # =====================
 # Discord
@@ -90,13 +90,11 @@ def save_admin_ids(id_set):
     )
 
 def is_admin(user_id):
-    # PRIMARY_ADMIN_ID は常に管理者
     if user_id == PRIMARY_ADMIN_ID:
         return True
     return user_id in load_admin_ids()
 
 def add_admin(user_id):
-    # メイン管理者はファイルに重複保存しなくていい＆削除不可
     if user_id == PRIMARY_ADMIN_ID:
         return
     ids = load_admin_ids()
@@ -105,7 +103,6 @@ def add_admin(user_id):
 
 def remove_admin(user_id):
     if user_id == PRIMARY_ADMIN_ID:
-        # メイン管理者は削除させない
         return False
     ids = load_admin_ids()
     if user_id in ids:
@@ -161,7 +158,6 @@ async def on_message(message: discord.Message):
     # ✅ 管理者追加の @ 待ち
     # =====================
     if user_id in waiting_for_admin_add:
-        # ユーザーへのメンションから追加対象を決める（bot自身は除外）
         targets = [m for m in message.mentions if m.id != client.user.id]
 
         if not targets:
@@ -244,27 +240,7 @@ async def on_message(message: discord.Message):
         return
 
     # =====================
-    # ⭐ データ管理モードに入る
-    # =====================
-    if content.startswith("データ管理"):
-        if not is_admin(user_id):
-            await message.channel.send(
-                f"{message.author.mention} ごめんね、このモードは管理者専用なの。"
-            )
-            return
-
-        admin_data_mode.add(user_id)
-        await message.channel.send(
-            f"{message.author.mention} データ管理モードに入ったわ。\n"
-            "何を確認したい？\n"
-            "- `ニックネーム確認`\n"
-            "- `管理者編集`\n"
-            "- `データ管理終了` でこのモードを終わるわ。"
-        )
-        return
-
-    # =====================
-    # ⭐ データ管理モード中のコマンド
+    # ⭐ データ管理モード中のコマンド（先に処理）
     # =====================
     if user_id in admin_data_mode:
         # データ管理終了
@@ -285,7 +261,6 @@ async def on_message(message: discord.Message):
                 return
 
             lines = ["【あだ名一覧】"]
-            # data: { "user_id": "nickname" }
             for uid_str, nick in data.items():
                 try:
                     uid_int = int(uid_str)
@@ -304,7 +279,7 @@ async def on_message(message: discord.Message):
             await message.channel.send("\n".join(lines))
             return
 
-        # 管理者編集（ガイドだけ）
+        # 管理者編集（ガイド）
         if "管理者編集" in content:
             await message.channel.send(
                 f"{message.author.mention} 管理者をどうしたい？\n"
@@ -340,6 +315,26 @@ async def on_message(message: discord.Message):
             "- `管理者削除`\n"
             "- `データ管理終了`\n"
             "よ。"
+        )
+        return
+
+    # =====================
+    # ⭐ データ管理モードに入る（ここは最後に判定）
+    # =====================
+    if content == "データ管理":
+        if not is_admin(user_id):
+            await message.channel.send(
+                f"{message.author.mention} ごめんね、このモードは管理者専用なの。"
+            )
+            return
+
+        admin_data_mode.add(user_id)
+        await message.channel.send(
+            f"{message.author.mention} データ管理モードに入ったわ。\n"
+            "何を確認したい？\n"
+            "- `ニックネーム確認`\n"
+            "- `管理者編集`\n"
+            "- `データ管理終了` でこのモードを終わるわ。"
         )
         return
 
