@@ -18,7 +18,7 @@ if not DISCORD_TOKEN:
     raise RuntimeError("DISCORD_TOKEN is not set")
 
 # ★ 最初のメイン管理者（あなたのID）
-PRIMARY_ADMIN_ID = 1453032382700716074  # 必要なら自分のIDに変更
+PRIMARY_ADMIN_ID = 916106297190019102  # 必要なら自分のIDに変更
 
 # =====================
 # Discord
