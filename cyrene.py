@@ -26,7 +26,6 @@ PRIMARY_ADMIN_ID = 916106297190019102  # 必要なら自分のIDに変更
 # =====================
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members = True  # ★ 不明ユーザー対策：メンバー情報も受け取る
 client = discord.Client(intents=intents)
 
 # =====================
