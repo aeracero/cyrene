@@ -29,9 +29,16 @@ intents.message_content = True
 client = discord.Client(intents=intents)
 
 # =====================
-# あだ名保存（永続: nicknames.json）
+# データ保存用ディレクトリ（Railway volume: /data）
 # =====================
-DATA_FILE = Path("nicknames.json")
+DATA_DIR = Path("/data")
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+# =====================
+# あだ名保存（永続: /data/nicknames.json）
+# =====================
+DATA_FILE = DATA_DIR / "nicknames.json"
+
 
 def load_data():
     if not DATA_FILE.exists():
@@ -41,16 +48,19 @@ def load_data():
     except Exception:
         return {}
 
+
 def save_data(data):
     DATA_FILE.write_text(
         json.dumps(data, ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
 
+
 def set_nickname(user_id, nickname):
     data = load_data()
     data[str(user_id)] = nickname
     save_data(data)
+
 
 def delete_nickname(user_id):
     data = load_data()
@@ -58,14 +68,16 @@ def delete_nickname(user_id):
         del data[str(user_id)]
         save_data(data)
 
+
 def get_nickname(user_id):
     data = load_data()
     return data.get(str(user_id))
 
 # =====================
-# 管理者保存（永続: admins.json）
+# 管理者保存（永続: /data/admins.json）
 # =====================
-ADMINS_FILE = Path("admins.json")
+ADMINS_FILE = DATA_DIR / "admins.json"
+
 
 def load_admin_ids():
     if not ADMINS_FILE.exists():
@@ -84,16 +96,19 @@ def load_admin_ids():
     except Exception:
         return set()
 
+
 def save_admin_ids(id_set):
     ADMINS_FILE.write_text(
         json.dumps(list(id_set), ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
 
+
 def is_admin(user_id):
     if user_id == PRIMARY_ADMIN_ID:
         return True
     return user_id in load_admin_ids()
+
 
 def add_admin(user_id):
     if user_id == PRIMARY_ADMIN_ID:
@@ -101,6 +116,7 @@ def add_admin(user_id):
     ids = load_admin_ids()
     ids.add(user_id)
     save_admin_ids(ids)
+
 
 def remove_admin(user_id):
     if user_id == PRIMARY_ADMIN_ID:
@@ -134,6 +150,7 @@ async def on_ready():
 # =====================
 JANKEN_HANDS = ["グー", "チョキ", "パー"]
 
+
 def parse_hand(text: str) -> str | None:
     if "グー" in text:
         return "グー"
@@ -142,6 +159,7 @@ def parse_hand(text: str) -> str | None:
     if "パー" in text:
         return "パー"
     return None
+
 
 def judge_janken(user_hand: str, bot_hand: str) -> str:
     """
