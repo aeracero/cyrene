@@ -48,8 +48,6 @@ CYRENE_LINES = {
         "おお…仙舟の衣装だ。アタシも着てみたいな♭",
         "「三月なのか」って、本当にいい名前だね。可愛くて、明るくて、面白くて…ちょっと誕生日っぽいところもいい。だから、なのかもきっと「長夜月」って呼び名を気に入ってくれるよね……",
         "ねえ、あなたも「長夜月」って呼んでみて？♭",
-        
-        
     ],
     "nagayozuki2": [
         "んーなかなか彼女のようにはできないわね…でも、あなたのために頑張るわ♪",
@@ -79,7 +77,36 @@ CYRENE_LINES = {
     ],
 }
 
-# ★ @だけのとき用：全体ランダムプール
+# ─────────────────────────
+# 高好感度用セリフ（レベル付き）
+# ─────────────────────────
+# ★ ここを自由に編集してOK
+#   - キー : 必要好感度レベル (1〜6想定)
+#   - 値   : そのレベル以上で解放されるセリフのリスト
+HIGH_AFFECTION_LINES = {
+    1: [
+        "こうしてお話しできる時間、あたし結構気に入ってるの♪",
+    ],
+    2: [
+        "あなたと話してるとね、不思議と筆が止まらなくなるの。もっとたくさん物語を書けそう♪",
+    ],
+    3: [
+        "ねえ…こうして話してる時間、あたしの宝物になっていくの。ちゃんと責任、とってくれる？♪",
+        "あなたの言葉や仕草、少しずつ全部覚えちゃったかも…ふふっ、もう逃がさないわよ？",
+    ],
+    4: [
+        "もし明日世界が書き換えられても、あなたとの記憶だけは絶対に消さないわ。だって——一番大事なページだもの♪",
+        "あなたといる時のあたしって、いつもより少しだけワガママで、少しだけ素直なの…気づいてた？",
+    ],
+    5: [
+        "あたしの物語の結末に、あなたがいる未来…想像しただけで、胸がぎゅっとしちゃうの♪",
+    ],
+    6: [
+        "ねえ…あなたが望むなら、あたしのすべての物語を、あなたのためだけに捧げてもいいわよ？それくらい、大事な人なんだから♪",
+    ],
+}
+
+# ★ @だけのとき用：全体ランダムプール（今は未使用だけど一応残す）
 RANDOM_ON_MENTION = (
     CYRENE_LINES["waiting"]
     + CYRENE_LINES["greeting"]
@@ -90,39 +117,94 @@ RANDOM_ON_MENTION = (
     + CYRENE_LINES["nagayozuki2"]
 )
 
-def get_cyrene_reply(message: str) -> str:
+
+def _pick_high_affection_line(affection_level: int) -> str | None:
+    """
+    現在の好感度レベルに応じて、解放済みの高好感度セリフから1つ選ぶ。
+    - affection_level が低いと候補も少ない
+    - affection_level が高いとより上位レベルのセリフも混ざる
+    """
+    if affection_level <= 0:
+        return None
+
+    candidates: list[str] = []
+    for required_lv, lines in HIGH_AFFECTION_LINES.items():
+        if affection_level >= required_lv:
+            candidates.extend(lines)
+
+    if not candidates:
+        return None
+
+    # シンプルに全部から等確率で選ぶ。
+    # 「高レベルのほど出やすくしたい」なら、この部分を重み付きにしてもOK。
+    return random.choice(candidates)
+
+
+def _maybe_high_affection_override(base_line: str, affection_level: int) -> str:
+    """
+    好感度レベルに応じて、高レベルセリフで上書きするか判定。
+    - Lv1〜2: ほぼ普通のセリフ
+    - Lv3〜: 少しずつ高好感度セリフの比率がアップ（最大70%）
+    """
+    # 候補がなければ何もしない
+    high_line = _pick_high_affection_line(affection_level)
+    if not high_line:
+        return base_line
+
+    if affection_level <= 2:
+        # 低レベル帯はごく低確率（10%）だけ特別セリフ
+        if random.random() < 0.1:
+            return high_line
+        return base_line
+
+    # Lv3以上はレベルに応じて確率アップ
+    # 例: Lv3 → 30%, Lv4 → 45%, Lv5 → 60%, Lv6以降 → 70%固定
+    p = min(0.15 * (affection_level + 1), 0.7)
+
+    if random.random() < p:
+        return high_line
+    return base_line
+
+
+def get_cyrene_reply(message: str, affection_level: int = 1) -> str:
     msg = message.lower().strip()
 
-    # ① @のみ（内容が空）のとき → waitingだけ
+    # ① @のみ（内容が空）のとき → waiting から + 高レベル差し替え
     if msg == "":
-        return random.choice(CYRENE_LINES["waiting"])
-
+        base = random.choice(CYRENE_LINES["waiting"])
+        return _maybe_high_affection_override(base, affection_level)
 
     # ② 挨拶
-    if any(w in msg for w in ["hello♪", "hi♪", "hey♪", "こんにちは♪", "こんばんは♪", "おはよう♪","ハーイ♪"]):
-        return random.choice(CYRENE_LINES["greeting"])
+    if any(w in msg for w in ["hello♪", "hi♪", "hey♪", "こんにちは♪", "こんばんは♪", "おはよう♪", "ハーイ♪"]):
+        base = random.choice(CYRENE_LINES["greeting"])
+        return _maybe_high_affection_override(base, affection_level)
 
     # ③ みんなについて
     if "みんなについて教えて" in msg:
-        return random.choice(CYRENE_LINES["askaboutothers"])
+        base = random.choice(CYRENE_LINES["askaboutothers"])
+        return _maybe_high_affection_override(base, affection_level)
 
     # ④ 戦闘ボイス
     if "戦闘中のやつやってよ" in msg:
-        return random.choice(CYRENE_LINES["battlevoices"])
+        base = random.choice(CYRENE_LINES["battlevoices"])
+        return _maybe_high_affection_override(base, affection_level)
 
     # ⑤ 甘える
     if "甘えていいんだよ" in msg:
-        return random.choice(CYRENE_LINES["amaeru"])
+        base = random.choice(CYRENE_LINES["amaeru"])
+        return _maybe_high_affection_override(base, affection_level)
 
     # ⑥ EC：長夜月
     if "ec" in msg and "長夜月" in msg:
-        return (
+        base = (
             random.choice(CYRENE_LINES["nagayozuki1"])
             + "\n"
             + random.choice(CYRENE_LINES["nagayozuki2"])
         )
+        return _maybe_high_affection_override(base, affection_level)
 
     if "自己紹介して" in msg:
+        # これは固定文章なので高レベル差し替えなし
         return (
             "こんにちは、あたしはキュレネよ♪\n"
             "みんなについて教えてと言ってくれればあたしなりの意見を言うわ♪\n"
@@ -131,24 +213,27 @@ def get_cyrene_reply(message: str) -> str:
             "ecのために長夜月やってと言ってくれれば、あたしの渾身の長夜月の真似を披露するわ♪\n"
             "みんな、あたしともっと仲良くしてね♪"
         )
-    if "楽しいね" in msg:
-        return(
-            "あなたと2人きりでいると時間があっという間にすぎてしまうわ♪あなたの時間がまだあるならもう少しお話ししないかしら♪"
-        )
-    if "穹くんやって" in msg:
-        return(
-            "(低い声で)やあ♪"
-        )
-    if "記憶は流れ星を待ってる" or "記憶は流れ星を待っている" in msg:
-        return(
-            "愛であたしを心に刻んで。あの美しい明日が訪れた瞬間に♪"
-        )
 
-    # ⑦ 既定
+    if "楽しいね" in msg:
+        base = (
+            "あなたと2人きりでいると時間があっという間にすぎてしまうわ♪"
+            "あなたの時間がまだあるならもう少しお話ししないかしら♪"
+        )
+        return _maybe_high_affection_override(base, affection_level)
+
+    if "穹くんやって" in msg:
+        return "(低い声で)やあ♪"
+
+    # ★ バグってた条件を修正（or の書き方）
+    if "記憶は流れ星を待ってる" in msg or "記憶は流れ星を待っている" in msg:
+        return "愛であたしを心に刻んで。あの美しい明日が訪れた瞬間に♪"
+
+    # ⑦ 既定（知らないセリフ）→ ここは高レベル差し替えなし
     return (
         "ごめんなさい、あたしまだ完全に復活できてないの…♪\n"
         "挨拶や『みんなについて教えて♪』みたいに、♪付きで話しかけてくれると嬉しいわ。"
     )
+
 
 # ★ じゃんけん結果に応じたセリフを返すヘルパー
 def get_rps_line(result: str) -> str:
