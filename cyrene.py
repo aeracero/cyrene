@@ -129,6 +129,53 @@ def remove_admin(user_id):
     return False
 
 # =====================
+# 親衛隊レベル保存（永続: /data/guardian_levels.json）
+# =====================
+GUARDIAN_FILE = DATA_DIR / "guardian_levels.json"
+
+
+def load_guardian_levels() -> dict:
+    """親衛隊レベルの dict を読み込む {user_id(str): level(int)}"""
+    if not GUARDIAN_FILE.exists():
+        return {}
+    try:
+        data = json.loads(GUARDIAN_FILE.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {}
+        return data
+    except Exception:
+        return {}
+
+
+def save_guardian_levels(data: dict):
+    """親衛隊レベル dict を保存"""
+    GUARDIAN_FILE.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+
+
+def set_guardian_level(user_id: int, level: int):
+    """指定ユーザーの親衛隊レベルを設定/更新"""
+    data = load_guardian_levels()
+    data[str(user_id)] = int(level)
+    save_guardian_levels(data)
+
+
+def get_guardian_level(user_id: int):
+    """指定ユーザーの親衛隊レベルを取得。なければ None"""
+    data = load_guardian_levels()
+    return data.get(str(user_id))
+
+
+def delete_guardian_level(user_id: int):
+    """指定ユーザーの親衛隊レベルを削除"""
+    data = load_guardian_levels()
+    if str(user_id) in data:
+        del data[str(user_id)]
+        save_guardian_levels(data)
+
+# =====================
 # 会話状態管理
 # =====================
 waiting_for_nickname = set()      # 新規あだ名入力待ち
@@ -349,6 +396,80 @@ async def on_message(message: discord.Message):
             await message.channel.send("\n".join(lines))
             return
 
+        # ★ 親衛隊レベル一覧（管理者用）
+        if "親衛隊レベル確認" in content:
+            levels = load_guardian_levels()
+            if not levels:
+                await message.channel.send(
+                    f"{message.author.mention} まだ親衛隊レベルは誰も登録されていないみたい。"
+                )
+                return
+
+            lines = ["【親衛隊レベル一覧】"]
+            for uid_str, lv in levels.items():
+                try:
+                    uid_int = int(uid_str)
+                except Exception:
+                    uid_int = None
+
+                member = None
+                if message.guild and uid_int is not None:
+                    member = message.guild.get_member(uid_int)
+
+                if member:
+                    lines.append(f"- {member.display_name} (ID: {uid_str}) → Lv.{lv}")
+                else:
+                    lines.append(f"- 不明ユーザー (ID: {uid_str}) → Lv.{lv}")
+
+            await message.channel.send("\n".join(lines))
+            return
+
+        # ★ 親衛隊レベル設定（管理者用）
+        if content.startswith("親衛隊レベル設定"):
+            targets = [m for m in message.mentions if m.id != client.user.id]
+            if not targets:
+                await message.channel.send(
+                    f"{message.author.mention} 誰のレベルを設定するか、`@ユーザー` を付けて教えて？\n"
+                    "例: `親衛隊レベル設定 @ユーザー 3`"
+                )
+                return
+
+            target = targets[0]
+
+            # メッセージから数値を拾う
+            m_num = re.search(r"(-?\d+)", content)
+            if not m_num:
+                await message.channel.send(
+                    f"{message.author.mention} レベルの数値が見つからないみたい。\n"
+                    "例: `親衛隊レベル設定 @ユーザー 3` のように数字も一緒に送ってね。"
+                )
+                return
+
+            level = int(m_num.group(1))
+            set_guardian_level(target.id, level)
+
+            await message.channel.send(
+                f"{message.author.mention} {target.display_name} の親衛隊レベルを **Lv.{level}** に設定したわ♪"
+            )
+            return
+
+        # ★ 親衛隊レベル削除（管理者用・任意）
+        if content.startswith("親衛隊レベル削除"):
+            targets = [m for m in message.mentions if m.id != client.user.id]
+            if not targets:
+                await message.channel.send(
+                    f"{message.author.mention} 誰のレベルを消すか、`@ユーザー` を付けて教えて？\n"
+                    "例: `親衛隊レベル削除 @ユーザー`"
+                )
+                return
+
+            target = targets[0]
+            delete_guardian_level(target.id)
+            await message.channel.send(
+                f"{message.author.mention} {target.display_name} の親衛隊レベルを削除したわ。"
+            )
+            return
+
         if "管理者編集" in content:
             await message.channel.send(
                 f"{message.author.mention} 管理者をどうしたい？\n"
@@ -379,6 +500,9 @@ async def on_message(message: discord.Message):
             "- `管理者編集`\n"
             "- `管理者追加`\n"
             "- `管理者削除`\n"
+            "- `親衛隊レベル確認`（親衛隊レベルの一覧を表示）\n"
+            "- `親衛隊レベル設定 @ユーザー 数値`\n"
+            "- `親衛隊レベル削除 @ユーザー`\n"
             "- `データ管理終了`\n"
             "よ。"
         )
@@ -400,8 +524,25 @@ async def on_message(message: discord.Message):
             "何を確認したい？\n"
             "- `ニックネーム確認`\n"
             "- `管理者編集`\n"
+            "- `親衛隊レベル確認`\n"
             "- `データ管理終了` でこのモードを終わるわ。"
         )
+        return
+
+    # =====================
+    # ⭐ 一般ユーザー用：自分の親衛隊レベル確認
+    # =====================
+    if content in ["親衛隊レベル", "親衛隊レベル確認"]:
+        level = get_guardian_level(user_id)
+        if level is None:
+            await message.channel.send(
+                f"{message.author.mention} まだ親衛隊レベルは登録されていないみたい。\n"
+                "そのうち誰かがレベルを付けてくれるかもね？"
+            )
+        else:
+            await message.channel.send(
+                f"{message.author.mention} あなたの親衛隊レベルは **Lv.{level}** よ♪"
+            )
         return
 
     # =====================
