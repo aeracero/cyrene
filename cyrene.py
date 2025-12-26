@@ -208,8 +208,8 @@ AFFECTION_CONFIG_FILE = DATA_DIR / "affection_config.json"
 # ★ デフォルト設定（ここを書き換えれば初期値を変えられる）
 DEFAULT_AFFECTION_CONFIG = {
     # 各レベルに必要な累積経験値（インデックス = レベル）
-    # 例: Lv1:0, Lv2:20, Lv3:60, Lv4:120, Lv5:200
-    "level_thresholds": [0, 0, 20, 60, 120, 200],
+    # 例: Lv1:0, Lv2:1000, Lv3:4000, Lv4:16000, Lv5:640000, Lv6:33350337
+    "level_thresholds": [0, 1000, 4000, 16000, 640000, 33350337],
     # 各アクションで獲得する経験値
     "xp_actions": {
         "talk": 3,
