@@ -1519,18 +1519,6 @@ async def on_message(message: discord.Message):
         )
         return
 
-    # =====================
-    # 通常応答 + 丹恒解放ステップ1チェック
-    # =====================
-    reply = get_cyrene_reply(content)
-
-    # ★ 荒笛ラインを引き当てたらフラグON（lines.py から import した定数で判定）
-    if ARAFUE_TRIGGER_LINE in reply:
-        mark_danheng_stage1(user_id)
-
-    await message.channel.send(f"{message.author.mention} {name}、{reply}")
-
-
     # ===== あだ名系 =====
     if content.startswith("あだ名登録"):
         new_name = content.replace("あだ名登録", "", 1).strip()
@@ -1668,8 +1656,18 @@ async def on_message(message: discord.Message):
 
     # ===== 通常応答 =====
     xp, level_val = get_user_affection(user_id)
+
+    # 変身状態に応じた返事を生成（キュレネ・黄金裔・開拓者）
     reply = generate_reply_for_form(current_form, content, level_val)
+
+    # ★ 丹恒解放ステップ1チェック
+    # キュレネとして話していて、なおかつ荒笛トリガー台詞を引き当てたときだけフラグON
+    if current_form == "cyrene" and ARAFUE_TRIGGER_LINE in reply:
+        mark_danheng_stage1(user_id)
+
     await message.channel.send(f"{message.author.mention} {name}、{reply}")
+
+    # 好感度XP加算（会話）
     cfg = load_affection_config()
     delta = int(cfg.get("xp_actions", {}).get("talk", 0))
     add_affection_xp(user_id, delta, reason="talk")
