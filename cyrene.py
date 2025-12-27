@@ -1359,6 +1359,95 @@ async def on_message(message: discord.Message):
                 f"{message.author.mention} {target.display_name} からメッセージ制限bypassを外したわ。"
             )
             return
+        
+                # じゃんけん勝利数を任意回数増やす（管理者用）
+        if content.startswith("じゃんけん勝利数追加"):
+            if user_id != PRIMARY_ADMIN_ID:
+                await message.channel.send(
+                    f"{message.author.mention} ごめんね、この操作はメイン管理者だけができるの。"
+                )
+                return
+            # 例: 「じゃんけん勝利数追加 @ユーザー 5」
+            targets = [m for m in message.mentions if m.id != client.user.id]
+            if not targets:
+                await message.channel.send(
+                    f"{message.author.mention} 誰の勝利数を増やすか、`@ユーザー` を付けて教えて？\n"
+                    "例: `じゃんけん勝利数追加 @ユーザー 5`"
+                )
+                return
+
+            target = targets[0]
+
+            # メンション表記を抜いたテキストから数字だけ抜き出す
+            plain = re.sub(r"<@!?\d+>", "", content)
+            nums = re.findall(r"(-?\d+)", plain)
+            if not nums:
+                await message.channel.send(
+                    f"{message.author.mention} いくつ増やすか、最後に数字も書いてほしいな。\n"
+                    "例: `じゃんけん勝利数追加 @ユーザー 5`"
+                )
+                return
+
+            delta = int(nums[-1])
+            if delta <= 0:
+                await message.channel.send(
+                    f"{message.author.mention} ごめんね、0以下は増やせないの。正の数字で教えて？"
+                )
+                return
+
+            # delta 回だけ勝利数をインクリメント
+            for _ in range(delta):
+                inc_janken_win(target.id)
+
+            wins = get_janken_wins(target.id)
+            await message.channel.send(
+                f"{message.author.mention} {target.display_name} のじゃんけん勝利数を **{delta} 回** 増やしたわ。\n"
+                f"いまは合計 **{wins} 回** 勝っていることになっているわよ。"
+            )
+            return
+        
+                # 好感度XPを直接増減させる（管理者用）
+        if content.startswith("好感度XP追加"):
+            if user_id != PRIMARY_ADMIN_ID:
+                await message.channel.send(
+                    f"{message.author.mention} ごめんね、この操作はメイン管理者だけができるの。"
+                )
+                return
+
+            # 例: 「好感度XP追加 @ユーザー 1000」 / 「好感度XP追加 @ユーザー -500」
+            targets = [m for m in message.mentions if m.id != client.user.id]
+            if not targets:
+                await message.channel.send(
+                    f"{message.author.mention} 誰のXPをいじるか、`@ユーザー` を付けて教えて？\n"
+                    "例: `好感度XP追加 @ユーザー 1000`"
+                )
+                return
+
+            target = targets[0]
+
+            # メンション表記を抜いてから数字だけ拾う
+            plain = re.sub(r"<@!?\d+>", "", content)
+            nums = re.findall(r"(-?\d+)", plain)
+            if not nums:
+                await message.channel.send(
+                    f"{message.author.mention} どれくらい増やす（または減らす）か、数字も書いてほしいな。\n"
+                    "例: `好感度XP追加 @ユーザー 1000`"
+                )
+                return
+
+            delta = int(nums[-1])
+
+            # 好感度XPを加算（マイナスもOK。内部で0未満にはならない）
+            add_affection_xp(target.id, delta, reason="admin_adjust")
+
+            xp, level_val = get_user_affection(target.id)
+            await message.channel.send(
+                f"{message.author.mention} {target.display_name} の好感度XPを **{delta}** だけ調整したわ。\n"
+                f"いまの状態は **Lv.{level_val} / {xp} XP** になっているわよ。"
+            )
+            return
+
+
 
         # 変身管理メニュー
         if "変身管理" in content:
@@ -1557,7 +1646,6 @@ async def on_message(message: discord.Message):
         )
         return
 
-    # ===== データ管理モードへ入る =====
     if content == "データ管理":
         if not is_admin(user_id):
             await message.channel.send(
@@ -1572,13 +1660,15 @@ async def on_message(message: discord.Message):
             "- `管理者編集`\n"
             "- `親衛隊レベル編集`\n"
             "- `好感度編集`\n"
+            "- `好感度XP追加`\n"
+            "- `じゃんけん勝利数追加`\n"
             "- `メッセージ制限編集`\n"
             "- `メッセージ制限bypass編集`（メイン管理者専用）\n"
             "- `変身管理`\n"
-            "- `変身解放状況確認`（メイン管理者専用）\n"
             "- `データ管理終了`"
         )
         return
+
 
     # ===== 一般：親衛隊レベル確認 =====
     if content in ["親衛隊レベル", "親衛隊レベル確認"]:
