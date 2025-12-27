@@ -66,23 +66,32 @@ def _pick_high_affection_line(affection_level: int) -> str | None:
     selected_tier = random.choices(valid_tiers, weights=weights, k=1)[0]
     return random.choice(LINES[f"high_l{selected_tier}"])
 
-def get_reply(message: str, affection_level: int) -> str:
+# 修正: user_name 引数を追加し、戻り値で replace を実行
+def get_reply(message: str, affection_level: int, user_name: str) -> str:
     high_prob = 0.1
     if affection_level == 3: high_prob = 0.6
     elif affection_level >= 4: high_prob = 0.7
 
     msg_check = message.strip() == "" or any(x in message for x in ["こんにちは", "おはよう", "甘えて"])
     
+    line = None
     if msg_check and random.random() < high_prob:
         line = _pick_high_affection_line(affection_level)
-        if line: return line
+    
+    if not line:
+        line = random.choice(LINES["normal"])
+    
+    # ここで {name} を置き換えます
+    return line.replace("{name}", user_name)
 
-    return random.choice(LINES["normal"])
-
-def get_nickname_line(action: str) -> str:
+# 修正: user_name 引数を追加
+def get_nickname_line(action: str, user_name: str) -> str:
     key = "nickname_ask" if action == "ask" else "nickname_confirm"
-    return random.choice(LINES.get(key, ["..."]))
+    line = random.choice(LINES.get(key, ["..."]))
+    return line.replace("{name}", user_name)
 
-def get_rps_flavor(result: str) -> str:
+# 修正: user_name 引数を追加
+def get_rps_flavor(result: str, user_name: str) -> str:
     key = f"rps_{result}"
-    return random.choice(LINES.get(key, ["..."]))
+    line = random.choice(LINES.get(key, ["..."]))
+    return line.replace("{name}", user_name)
