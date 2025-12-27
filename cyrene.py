@@ -1113,6 +1113,72 @@ def parse_hand(text: str):
         return "パー"
     return None
 
+def get_rps_prompt_for_form(form_key: str) -> str:
+    """
+    フォームごとの「じゃんけんしよ〜」の誘い文句。
+    必要に応じて他キャラもここに追加してOK。
+    """
+    if form_key == "hyacinthia":
+        # ヒアシンシア風
+        return "いいですよ〜。では、グー / チョキ / パー、どれにするか選んでください。"
+
+    # ここに他キャラ用を足していけばOK
+    # if form_key == "aglaia":
+    #     return "さ、じゃんけんといきましょうか。グー / チョキ / パー、どれを出します？"
+
+    # デフォルト（キュレネ口調）
+    return "じゃんけんをしましょう♪ グー / チョキ / パー、どれにするかしら？"
+
+
+def get_rps_flavor_for_form(form_key: str, result: str) -> str:
+    """
+    勝ち / 負け / あいこ のリアクションをフォーム別に出し分ける。
+    未定義のフォームは従来通り get_rps_line(result) を使う。
+    """
+    if form_key == "hyacinthia":
+        if result == "win":
+            return "ふふ、お見事です〜。あなたの勝ちですね。もう一回、いきますか？"
+        elif result == "lose":
+            return "あら、今回はわたしの勝ちみたいですね〜。でも次はどうなるでしょう？"
+        else:  # draw
+            return "おや、あいこですね〜。もう一度、やってみましょうか。"
+
+    # ここに他キャラ用の分岐を増やせる
+    # if form_key == "aglaia":
+    #     ...
+
+    # デフォルト（キュレネのじゃんけん用セリフ）
+    return get_rps_line(result)
+
+
+def format_rps_result_message(
+    form_key: str,
+    name: str,
+    user_hand: str,
+    bot_hand: str,
+    flavor: str,
+    wins: int,
+) -> str:
+    """
+    結果表示の文面をフォームごとに調整。
+    """
+    # デフォルトはキュレネの「あたし」
+    self_pronoun = "あたし"
+
+    if form_key == "hyacinthia":
+        self_pronoun = "わたし"
+
+    # 他キャラもここで好きに変えられる
+    # if form_key == "danheng":
+    #     self_pronoun = "俺"
+
+    return (
+        f"{name} は **{user_hand}**、{self_pronoun}は **{bot_hand}** ね。\n"
+        f"{flavor}\n"
+        f"（これまでに {wins} 回、{self_pronoun}に勝ってるわ♡）"
+    )
+
+
 
 def get_bot_hand_against(user_hand: str, force_win: bool = False) -> str:
     """
@@ -1610,7 +1676,8 @@ async def on_message(message: discord.Message):
         else:
             result = judge_janken(hand, bot_hand)
 
-        flavor = get_rps_line(result)
+        # フォームに応じたじゃんけんセリフ
+        flavor = get_rps_flavor_for_form(current_form, result)
 
         # ★ 勝ったら勝利数カウント
         if result == "win":
@@ -1620,13 +1687,21 @@ async def on_message(message: discord.Message):
 
         waiting_for_rps_choice.discard(user_id)
 
+        result_text = format_rps_result_message(
+            current_form,
+            name,
+            hand,
+            bot_hand,
+            flavor,
+            wins,
+        )
+
         await send_myu(
             message,
             user_id,
-            f"{message.author.mention} {name} は **{hand}**、あたしは **{bot_hand}** よ。\n"
-            f"{flavor}\n"
-            f"（これまでに {wins} 回、あたしに勝ってるわ♡）"
+            f"{message.author.mention} {result_text}"
         )
+
 
         cfg = load_affection_config()
         xp_actions = cfg.get("xp_actions", {})
@@ -2876,7 +2951,9 @@ async def on_message(message: discord.Message):
         if hand:
             bot_hand = random.choice(JANKEN_HANDS)
             result = judge_janken(hand, bot_hand)
-            flavor = get_rps_line(result)
+
+            # フォームに応じたじゃんけんセリフ（勝ち/負け/あいこ）
+            flavor = get_rps_flavor_for_form(current_form, result)
 
             # ★ 勝利カウント
             if result == "win":
@@ -2884,12 +2961,19 @@ async def on_message(message: discord.Message):
             else:
                 wins = get_janken_wins(user_id)
 
+            result_text = format_rps_result_message(
+                current_form,
+                name,
+                hand,
+                bot_hand,
+                flavor,
+                wins,
+            )
+
             await send_myu(
                 message,
                 user_id,
-                f"{message.author.mention} {name} は **{hand}**、あたしは **{bot_hand}** よ。\n"
-                f"{flavor}\n"
-                f"（これまでに {wins} 回、あたしに勝ってるわ♡）"
+                f"{message.author.mention} {result_text}"
             )
 
             cfg = load_affection_config()
@@ -2903,13 +2987,16 @@ async def on_message(message: discord.Message):
             add_affection_xp(user_id, delta, reason=f"rps_{result}")
             return
 
+        # 手をあとで選ぶパターン
         waiting_for_rps_choice.add(user_id)
+        prompt = get_rps_prompt_for_form(current_form)
         await send_myu(
             message,
             user_id,
-            f"{message.author.mention} じゃんけんをしましょう♪ グー / チョキ / パー、どれにするかしら？"
+            f"{message.author.mention} {prompt}"
         )
         return
+
 
     # ===== メンションだけのとき =====
     if content == "":
