@@ -43,6 +43,50 @@ def add_affection_xp(user_id: int, delta: int, reason: str = ""):
     data[str(user_id)] = info
     db.save_affection_data(data)
 
+# ★管理者用：全員のリスト
+def format_all_affection_status(guild) -> str:
+    data = db.load_affection_data()
+    if not data:
+        return "まだ好感度データは誰も登録されていないみたい。"
+    
+    cfg = db.load_affection_config()
+    
+    user_list = []
+    for uid_str, info in data.items():
+        xp = int(info.get("xp", 0))
+        level = get_level_from_xp(xp, cfg)
+        user_list.append((uid_str, xp, level))
+    
+    user_list.sort(key=lambda x: x[1], reverse=True)
+    
+    lines = ["【みんなの好感度・経験値一覧】"]
+    for uid_str, xp, level in user_list:
+        name = f"ID: {uid_str}"
+        if guild:
+            try:
+                member = guild.get_member(int(uid_str))
+                if member: name = member.display_name
+            except: pass
+        lines.append(f"- **{name}**: Lv.{level} ({xp} XP)")
+        
+    return "\n".join(lines)
+
+# ★追加：一般ユーザー用好感度メッセージ生成
+def get_affection_status_message(user_id: int) -> str:
+    xp, level = get_user_affection(user_id)
+    cfg = db.load_affection_config()
+    thresholds = cfg.get("level_thresholds", [0])
+    
+    # 次のレベルの閾値を確認
+    if level + 1 < len(thresholds):
+        next_xp_req = thresholds[level + 1]
+        needed = max(0, next_xp_req - xp)
+        return (f"あなたの好感度は **Lv.{level}** (累計 {xp} XP) よ♪\n"
+                f"次の Lv.{level + 1} までは、あと **{needed} XP** 必要ね。")
+    else:
+        return (f"あなたの好感度は **Lv.{level}** (累計 {xp} XP) よ♪\n"
+                "もう十分すぎるくらい仲良しね！これ以上は数え切れないわ♪")
+
 # --- ミュリオンロジック ---
 MYURION_SYLLABLES = ["ミュ", "ミュウ", "ミュミュ", "ミュイー"]
 
@@ -145,8 +189,8 @@ JANKEN_HANDS = ["グー", "チョキ", "パー"]
 def judge_janken(user_hand, bot_hand):
     if user_hand == bot_hand: return "draw"
     if (user_hand=="グー" and bot_hand=="チョキ") or \
-        (user_hand=="チョキ" and bot_hand=="パー") or \
-        (user_hand=="パー" and bot_hand=="グー"): return "win"
+       (user_hand=="チョキ" and bot_hand=="パー") or \
+       (user_hand=="パー" and bot_hand=="グー"): return "win"
     return "lose"
 
 def get_bot_hand(user_hand, force_win=False):
