@@ -2,20 +2,28 @@
 import json
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
+# =====================
+# 永続保存ディレクトリ（Railwayの /data）
+# =====================
+DATA_DIR = Path("/data")
 DATA_DIR.mkdir(exist_ok=True)
 
 FILE = DATA_DIR / "special_unlocks.json"
 
+# =====================
+# デフォルト状態
+# =====================
 _DEFAULT_STATE = {
     "janken_wins": 0,          # じゃんけん勝利数
-    "nanoka_unlocked": False,  # 三月なのか 解放済みか
-    "danheng_stage1": False,   # 荒笛ラインを引き当てたか
-    "danheng_unlocked": False, # 丹恒 解放済みか
+    "nanoka_unlocked": False,  # 三月なのか 解放済み
+    "danheng_stage1": False,   # 荒笛ラインを引いた
+    "danheng_unlocked": False, # 丹恒 解放済み
 }
 
 
+# =====================
+# 内部ユーティリティ
+# =====================
 def _load_all() -> dict:
     if not FILE.exists():
         return {}
@@ -35,9 +43,11 @@ def _save_all(data: dict) -> None:
 def _get_state_for(user_id: int) -> dict:
     data = _load_all()
     key = str(user_id)
+
     state = data.get(key, {})
     merged = _DEFAULT_STATE.copy()
     merged.update(state)
+
     return merged
 
 
@@ -47,10 +57,11 @@ def _set_state_for(user_id: int, state: dict) -> None:
     _save_all(data)
 
 
-# ---------- じゃんけん勝利数 ----------
-
+# =====================
+# じゃんけん勝利数
+# =====================
 def inc_janken_win(user_id: int) -> int:
-    """勝利数を+1して、現在の勝利数を返す"""
+    """勝利数を+1 → 保存 → 現在値を返す"""
     state = _get_state_for(user_id)
     state["janken_wins"] = int(state.get("janken_wins", 0)) + 1
     _set_state_for(user_id, state)
@@ -61,8 +72,9 @@ def get_janken_wins(user_id: int) -> int:
     return int(_get_state_for(user_id).get("janken_wins", 0))
 
 
-# ---------- 三月なのか 解放 ----------
-
+# =====================
+# 三月なのか 解放
+# =====================
 def is_nanoka_unlocked(user_id: int) -> bool:
     return bool(_get_state_for(user_id).get("nanoka_unlocked", False))
 
@@ -73,8 +85,9 @@ def set_nanoka_unlocked(user_id: int, value: bool = True) -> None:
     _set_state_for(user_id, state)
 
 
-# ---------- 丹恒 解放条件（ステップ1：荒笛ライン） ----------
-
+# =====================
+# 丹恒 ステップ1（荒笛ライン）
+# =====================
 def has_danheng_stage1(user_id: int) -> bool:
     return bool(_get_state_for(user_id).get("danheng_stage1", False))
 
@@ -85,8 +98,9 @@ def mark_danheng_stage1(user_id: int) -> None:
     _set_state_for(user_id, state)
 
 
-# ---------- 丹恒 解放フラグ ----------
-
+# =====================
+# 丹恒 解放フラグ
+# =====================
 def is_danheng_unlocked(user_id: int) -> bool:
     return bool(_get_state_for(user_id).get("danheng_unlocked", False))
 
