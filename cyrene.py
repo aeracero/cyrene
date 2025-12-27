@@ -1718,7 +1718,7 @@ async def on_message(message: discord.Message):
 
         unlocked_now = False
         wins = get_janken_wins(user_id)
-        if wins >= 30 and not is_nanoka_unlocked(user_id):
+        if wins >= 307 and not is_nanoka_unlocked(user_id):
             set_nanoka_unlocked(user_id, True)
             unlocked_now = True
 
