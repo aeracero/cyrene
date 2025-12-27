@@ -306,6 +306,59 @@ def get_level_from_xp(xp: int, cfg: dict) -> int:
             break
     return max(1, level)
 
+MYURION_SYLLABLES = ["ミュ", "ミュウ", "ミュミュ", "ミュイー"]
+
+
+def to_myurion_text(body: str) -> str:
+    """
+    日本語テキストをミュウリオン語に変換。
+    改行・句読点は残して、それ以外の文字をミュ～に変える。
+    """
+    result = []
+    for ch in body:
+        # 改行はそのまま
+        if ch in "\r\n":
+            result.append(ch)
+            continue
+        # スペースはそのまま
+        if ch.isspace():
+            result.append(ch)
+            continue
+        # 記号系はそのまま
+        if ch in "。、！？…,.!?「」『』()（）[]【】:：;；/｜|\\-—ー♪☆★":
+            result.append(ch)
+            continue
+        # それ以外はミュ化
+        result.append(random.choice(MYURION_SYLLABLES))
+    return "".join(result)
+
+
+def apply_myurion_filter(user_id: int, text: str) -> str:
+    """
+    先頭のメンション部分は残して、その後ろだけミュウリオン語にする。
+    ミュリオンモードがOFFのときは text をそのまま返す。
+    """
+    if not is_myurion_enabled(user_id):
+        return text
+
+    m = re.match(r"^(<@!?\d+>)(.*)$", text, flags=re.DOTALL)
+    if not m:
+        return to_myurion_text(text)
+
+    mention = m.group(1)
+    body = m.group(2)
+    return mention + to_myurion_text(body)
+
+
+async def send_myu(message: discord.Message, user_id: int, text: str):
+    """
+    返信用ヘルパー。
+    ミュリオンモード中なら本文をミュ語化して送信する。
+    OFFなら、そのまま普通の日本語で送られる。
+    """
+    text = apply_myurion_filter(user_id, text)
+    await message.channel.send(text)
+
 
 def get_user_affection(user_id: int):
     """(xp, level) を返す"""
@@ -315,6 +368,7 @@ def get_user_affection(user_id: int):
     xp = int(info.get("xp", 0))
     level = get_level_from_xp(xp, cfg)
     return xp, level
+
 
 def get_cyrene_affection_multiplier(user_id: int) -> float:
     """
@@ -407,6 +461,7 @@ def format_gacha_status(user_id: int) -> str:
         "・`ガチャ説明` … 排出率や仕様の詳細を見る",
     ]
     return "\n".join(lines)
+
 
 def perform_gacha_pulls(user_id: int, num_pulls: int, use_ticket: bool = False) -> tuple[bool, str]:
     """
@@ -532,7 +587,6 @@ def perform_gacha_pulls(user_id: int, num_pulls: int, use_ticket: bool = False) 
     )
 
     return True, header + "\n".join(body_lines) + footer
-
 
 
 def add_affection_xp(user_id: int, delta: int, reason: str = ""):
@@ -776,6 +830,7 @@ def get_gacha_state(user_id: int) -> dict:
         save_gacha_data(data)
     return state
 
+
 def grant_daily_stones(user_id: int, amount: int = 16000) -> tuple[bool, int, str]:
     """
     デイリー石を付与。
@@ -799,6 +854,201 @@ def save_gacha_state(user_id: int, state: dict):
     data = load_gacha_data()
     data[str(user_id)] = state
     save_gacha_data(data)
+
+# =====================
+# ミュリオンモード保存（永続: /data/myurion_mode.json）
+# =====================
+MYURION_FILE = DATA_DIR / "myurion_mode.json"
+
+
+def load_myurion_data() -> dict:
+    if not MYURION_FILE.exists():
+        return {}
+    try:
+        data = json.loads(MYURION_FILE.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {}
+        return data
+    except Exception:
+        return {}
+
+
+def save_myurion_data(data: dict):
+    MYURION_FILE.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+
+
+def get_myurion_state(user_id: int) -> dict:
+    """
+    {
+    "unlocked": bool,      # ミュリオンモード解放済みか
+    "enabled": bool,       # 現在ミュリオンモード中か
+    "quiz_correct": int,   # 累計正解数（開放前）
+    }
+    """
+    data = load_myurion_data()
+    st = data.get(str(user_id))
+    if not isinstance(st, dict):
+        st = {
+            "unlocked": False,
+            "enabled": False,
+            "quiz_correct": 0,
+        }
+        data[str(user_id)] = st
+        save_myurion_data(data)
+    return st
+
+
+def save_myurion_state(user_id: int, st: dict):
+    data = load_myurion_data()
+    data[str(user_id)] = st
+    save_myurion_data(data)
+
+
+def is_myurion_unlocked(user_id: int) -> bool:
+    st = get_myurion_state(user_id)
+    return bool(st.get("unlocked", False))
+
+
+def is_myurion_enabled(user_id: int) -> bool:
+    st = get_myurion_state(user_id)
+    return bool(st.get("enabled", False))
+
+
+def set_myurion_enabled(user_id: int, enabled: bool):
+    st = get_myurion_state(user_id)
+    st["enabled"] = bool(enabled)
+    if enabled and not st.get("unlocked", False):
+        st["unlocked"] = True
+    save_myurion_state(user_id, st)
+
+
+def add_myurion_correct(user_id: int) -> int:
+    """クイズ正解数を+1して返す（開放後はカウントだけ増える感じ）"""
+    st = get_myurion_state(user_id)
+    st["quiz_correct"] = int(st.get("quiz_correct", 0)) + 1
+    save_myurion_state(user_id, st)
+    return st["quiz_correct"]
+
+# =====================
+# ミュリオンクイズ状態
+# =====================
+# { user_id: { "question": dict, "options": list[str], "correct_index": int } }
+MYURION_QUIZ_STATE = {}
+
+MYURION_QUESTIONS = [
+    {
+        "q": "ミュミュ、ミミュミュミュミュウミュミュウミー",
+        "choices": [
+            "ミュウミーミミュミミュミュ",
+            "ミミュミュウミーミーミュウミュウミミ",
+            "ミュウミみミュみミミュミュミュミュウ",
+            "ミュウミュミュミュミュウ",
+        ],
+        "answer_index": 0,
+    },
+    {
+        "q": "ミュウミュミュミュウミュミュミュウウミュウ？",
+        "choices": [
+            "ミュウミミミュミュミュミュウミ",
+            "ミュウーミミュミュミュウミュウ",
+            "ミュウミュウミュミュミュミュミュ",
+            "ミミミュミュミュムミュウミミミュ",
+        ],
+        "answer_index": 1,
+    },
+    {
+        "q": "ミュミュミミュウミュユミミュミュウ？",
+        "choices": [
+            "ミュウミュミュミュミュ、ミーミュユミュミュウ",
+            "ミミュミュミーミーミュ。ミュミュミーミュミュ",
+            "ミュウミュミュミュウ。ミュウミーみミュミュウ",
+            "ミュウ。",
+        ],
+        "answer_index": 0,
+    },
+    {
+        "q": "ミュミュミュミュミューーミュウミュウミュウミュウミュウ？",
+        "choices": [
+            "ミュウミュユミュミュミューミュウミュウミュウミュウ",
+            "ミュウ。ミミュミュミュミーミミュミュミュミュミュウ",
+            "ミミミュミュミュミュウ",
+            "ミュウミュミュミュミュミュミュミュミュミュミュ",
+        ],
+        "answer_index": 1,
+    },
+    {
+        "q": "ミュミュミュミュウミュウミュウミュウミュウミュウミュウミュウ？",
+        "choices": [
+            "ミュウ!",
+            "ミュウ?",
+            "ミュウ。",
+            "ミュウ♪",
+        ],
+        "answer_index": 0,
+    },
+]
+
+
+def parse_myurion_answer(text: str) -> int | None:
+    """
+    ユーザーの返答から 1〜4 のどれを選んだかを判定。
+    """
+    # 全角半角両対応
+    if any(ch in text for ch in ["1", "１"]):
+        return 1
+    if any(ch in text for ch in ["2", "２"]):
+        return 2
+    if any(ch in text for ch in ["3", "３"]):
+        return 3
+    if any(ch in text for ch in ["4", "４"]):
+        return 4
+    return None
+
+
+async def send_myurion_question(message: discord.Message, user_id: int, correct_count: int):
+    """
+    新しいミュリオンクイズを1問出題。
+    """
+    q = random.choice(MYURION_QUESTIONS)
+    # 選択肢をシャッフル
+    indexed = list(enumerate(q["choices"]))
+    random.shuffle(indexed)
+
+    # シャッフル後の正解の位置を特定
+    correct_original_idx = q["answer_index"]
+    correct_index = None
+    for new_idx, (orig_idx, _) in enumerate(indexed):
+        if orig_idx == correct_original_idx:
+            correct_index = new_idx
+            break
+
+    # 1〜4 の表示用に変換
+    options_text_lines = []
+    for i, (_, choice_text) in enumerate(indexed, start=1):
+        options_text_lines.append(f"{i}. {choice_text}")
+
+    body = (
+        f"ミュミュミュ…（現在 {correct_count} / 3 問正解ミュ）\n"
+        f"{q['q']}\n"
+        "ミュミュ…好きな番号を選んでミュ（1〜4のどれかを送ってミュ）\n\n"
+        + "\n".join(options_text_lines)
+    )
+
+    MYURION_QUIZ_STATE[user_id] = {
+        "question": q,
+        "options": [c for _, c in indexed],
+        "correct_index": correct_index,  # 0〜3
+    }
+
+    await send_myu(
+        message,
+        user_id,
+        f"{message.author.mention} {body}"
+    )
+
 
 # =====================
 # 会話状態管理
@@ -839,6 +1089,7 @@ def parse_hand(text: str):
         return "パー"
     return None
 
+
 def get_bot_hand_against(user_hand: str, force_win: bool = False) -> str:
     """
     force_win = True のときは、必ずユーザーが勝つ手を返す。
@@ -868,6 +1119,7 @@ def judge_janken(user_hand: str, bot_hand: str) -> str:
     )
     return "win" if win else "lose"
 
+
 async def handle_danheng_special_code(message: discord.Message, user_id: int, content: str):
     """
     丹恒の特殊解放コード（SkoPeo365 / skepeo365 系）を処理するハンドラ。
@@ -883,7 +1135,9 @@ async def handle_danheng_special_code(message: discord.Message, user_id: int, co
     if has_danheng_stage1(user_id) and not is_danheng_unlocked(user_id):
         # ★ ここで special_unlocks.py 経由で解放状態を書き込み（/data 側にも保存）
         set_danheng_unlocked(user_id, True)
-        await message.channel.send(
+        await send_myu(
+            message,
+            user_id,
             f"{message.author.mention} 丹恒の解放条件を達成したわ！\n"
             "『たんたんになってみて』って言ってみない？"
         )
@@ -891,59 +1145,64 @@ async def handle_danheng_special_code(message: discord.Message, user_id: int, co
 
     if is_danheng_unlocked(user_id):
         # すでに解放済み
-        await message.channel.send(
+        await send_myu(
+            message,
+            user_id,
             f"{message.author.mention} そのコードはもう使われているわ。\n"
             "いつでも『たんたんになってみて』って言えば、彼の姿になれるわよ♪"
         )
         return
 
     # まだステップ1を踏んでいない場合
-    await message.channel.send(
+    await send_myu(
+        message,
+        user_id,
         f"{message.author.mention} ん…まだ何かが足りないみたい。\n"
         "まずは『みんなについて教えて』ってお願いして、彼のことをちゃんと知ってみない？"
     )
 
 
-def generate_reply_for_form(form_key: str, message: str, affection_level: int) -> str:
+def generate_reply_for_form(form_key: str, message_text: str, affection_level: int) -> str:
     """
     変身状態（黄金裔/開拓者）に応じて返答を切り替える。
     - 各フォームは lines_◯◯.py の get_reply を使う
     - 未定義 or 不明なフォームキーの場合はキュレネにフォールバック
     """
     if form_key == "aglaia":
-        return get_aglaia_reply(message, affection_level)
+        return get_aglaia_reply(message_text, affection_level)
     if form_key == "trisbeas":
-        return get_trisbeas_reply(message, affection_level)
+        return get_trisbeas_reply(message_text, affection_level)
     if form_key == "anaxagoras":
-        return get_anaxagoras_reply(message, affection_level)
+        return get_anaxagoras_reply(message_text, affection_level)
     if form_key == "hyacinthia":
-        return get_hyacinthia_reply(message, affection_level)
+        return get_hyacinthia_reply(message_text, affection_level)
     if form_key == "medimos":
-        return get_medimos_reply(message, affection_level)
+        return get_medimos_reply(message_text, affection_level)
     if form_key == "sepharia":
-        return get_sepharia_reply(message, affection_level)
+        return get_sepharia_reply(message_text, affection_level)
     if form_key == "castoris":
-        return get_castoris_reply(message, affection_level)
+        return get_castoris_reply(message_text, affection_level)
     if form_key == "phainon_kasreina":
-        return get_phainon_kasreina_reply(message, affection_level)
+        return get_phainon_kasreina_reply(message_text, affection_level)
     if form_key == "electra":
-        return get_electra_reply(message, affection_level)
+        return get_electra_reply(message_text, affection_level)
     if form_key == "cerydra":
-        return get_cerydra_reply(message, affection_level)
+        return get_cerydra_reply(message_text, affection_level)
     if form_key == "nanoka":
-        return get_nanoka_reply(message, affection_level)
+        return get_nanoka_reply(message_text, affection_level)
     if form_key == "danheng":
-        return get_danheng_reply(message, affection_level)
+        return get_danheng_reply(message_text, affection_level)
     if form_key == "furina":
-        return get_furina_reply(message, affection_level)
+        return get_furina_reply(message_text, affection_level)
 
     # キュレネ（デフォルト）
     try:
         # 好感度対応版（message, affection_level 両方取る版）に対応
-        return get_cyrene_reply(message, affection_level)
+        return get_cyrene_reply(message_text, affection_level)
     except TypeError:
         # 古い lines.py（message だけ取る版）の場合でも落ちないようフォールバック
-        return get_cyrene_reply(message)
+        return get_cyrene_reply(message_text)
+
 
 # =====================
 # メッセージ処理
@@ -964,10 +1223,12 @@ async def on_message(message: discord.Message):
     is_waiting_limit = user_id in waiting_for_msg_limit
     is_waiting_transform = user_id in waiting_for_transform_code
     is_mentioned = client.user in message.mentions
+    is_myurion_quiz = user_id in MYURION_QUIZ_STATE
 
     # どのモードでもない＋メンションもない → 無視
     if not (is_mentioned or is_waiting_nick or is_waiting_admin or is_waiting_rps
-            or is_admin_mode or is_waiting_guardian or is_waiting_limit or is_waiting_transform):
+            or is_admin_mode or is_waiting_guardian or is_waiting_limit or is_waiting_transform
+            or is_myurion_quiz):
         return
 
     # 本文（botメンションを除去）
@@ -987,18 +1248,142 @@ async def on_message(message: discord.Message):
         # 変身コード入力中は制限チェックをスキップしてもいいかな、と判断
         if not is_waiting_transform:
             if is_over_message_limit(user_id):
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} ごめんね、今日はここまでにしておきましょう？\n"
                     "また明日、ゆっくりお話ししましょ♪"
                 )
                 return
             increment_message_usage(user_id)
 
+    # ===== ミュリオンクイズ回答中 =====
+    if is_myurion_quiz:
+        # 先に本体からメンションを除いたテキストを取る
+        text = content if content else message.content.strip()
+
+        ans = parse_myurion_answer(text)
+        if ans is None:
+            await send_myu(
+                message,
+                user_id,
+                f"{message.author.mention} ミュミュ？ 1〜4の番号で答えてほしいミュ。"
+            )
+            return
+
+        state = MYURION_QUIZ_STATE.get(user_id, {})
+        correct_idx = state.get("correct_index", 0)  # 0〜3
+        # ユーザーの選択は 1〜4 → 0〜3 に変換
+        if ans - 1 == correct_idx:
+            # 正解
+            total = add_myurion_correct(user_id)
+            if total >= 3 and not is_myurion_unlocked(user_id):
+                # ★ ここでミュリオンモード開放 & 自動ON
+                st = get_myurion_state(user_id)
+                st["unlocked"] = True
+                st["enabled"] = True
+                save_myurion_state(user_id, st)
+
+                MYURION_QUIZ_STATE.pop(user_id, None)
+
+                await send_myu(
+                    message,
+                    user_id,
+                    f"{message.author.mention} ミュイーー！！ 3問正解ミュ！\n"
+                    "ミュリオンモードが開放されたミュ！ これからは、あたしの返事がミュウリオン語になるミュ～♪\n"
+                    "（もし元の言葉に戻したくなったら `ミュリオンモードオフ` って言ってミュ）"
+                )
+                return
+            else:
+                MYURION_QUIZ_STATE.pop(user_id, None)
+                await send_myu(
+                    message,
+                    user_id,
+                    f"{message.author.mention} ミュミュ♪ 正解ミュ！ 今 {total}/3 問正解ミュ！\n"
+                    "もう一度「ミュウ、ミュミュミュウミュウ、ミュイー」って言えば、次の問題に挑戦できるミュ！"
+                )
+                return
+        else:
+            # 不正解 → 状態はリセット
+            MYURION_QUIZ_STATE.pop(user_id, None)
+            await send_myu(
+                message,
+                user_id,
+                f"{message.author.mention} ミュウ…残念ミュ。今回はハズレミュ。\n"
+                "また「ミュウ、ミュミュミュウミュウ、ミュイー」って言って再挑戦してミュ！"
+            )
+            return
+
+    # ===== ミュリオンモード：クイズ開始 =====
+    if "ミュウ、ミュミュミュウミュウ、ミュイー" in content:
+        st = get_myurion_state(user_id)
+        if st.get("unlocked", False):
+            # もう開放済みなら、ONにしてあげる
+            st["enabled"] = True
+            save_myurion_state(user_id, st)
+            await send_myu(
+                message,
+                user_id,
+                f"{message.author.mention} ミュミュ♪ ミュリオンモードはもう開放済みミュ。\n"
+                "今からまたミュウリオン語でお話しするミュ～！"
+            )
+            return
+
+        # まだ未開放 → クイズ開始
+        correct_count = int(st.get("quiz_correct", 0))
+        await send_myu(
+            message,
+            user_id,
+            f"{message.author.mention} ミュミュミュ…ミュリオンへの扉を開きたいミュ？\n"
+            "これからミュミュな三択…じゃなくて四択クイズを出すミュ！\n"
+            "3問正解したらミュリオンモード解放ミュ～♪"
+        )
+        await send_myurion_question(message, user_id, correct_count)
+        return
+
+    # ===== ミュリオンモード ON/OFF トグル =====
+    if content in ["ミュリオンモードオン", "ミュリオンモード", "ミュリオンオン"]:
+        st = get_myurion_state(user_id)
+        if not st.get("unlocked", False):
+            await send_myu(
+                message,
+                user_id,
+                f"{message.author.mention} まだミュリオンモードの扉は開いていないみたい…。\n"
+                "「ミュウ、ミュミュミュウミュウ、ミュイー」って唱えて、クイズに挑戦してみない？"
+            )
+            return
+        st["enabled"] = True
+        save_myurion_state(user_id, st)
+        await send_myu(
+            message,
+            user_id,
+            f"{message.author.mention} ミュミュ♪ ミュリオンモード起動ミュ～！"
+        )
+        return
+
+    if content in ["ミュリオンモードオフ", "ミュリオン解除", "ミュリオンオフ"]:
+        st = get_myurion_state(user_id)
+        if not st.get("enabled", False):
+            # OFFの案内は普通の言葉でOK
+            await message.channel.send(
+                f"{message.author.mention} いまは普通の言葉で話しているみたいよ？"
+            )
+            return
+        st["enabled"] = False
+        save_myurion_state(user_id, st)
+        # ここだけは絶対にミュ語にならないよう、直接 send
+        await message.channel.send(
+            f"{message.author.mention} 了解♪ いったんミュウリオン語はお休みして、普通の言葉に戻るわね。"
+        )
+        return
+
     # ===== メイン管理者専用：じゃんけん確定勝利スイッチ =====
     # 「愛は、永遠に」を送ると、次の自分のじゃんけんだけ確定勝利
     if user_id == PRIMARY_ADMIN_ID and "愛は、永遠に" in content:
         FORCE_RPS_WIN_NEXT.add(user_id)
-        await message.channel.send(
+        await send_myu(
+            message,
+            user_id,
             f"{message.author.mention} ふふっ、次のじゃんけんは……あなたの勝ちが約束されてるわ♡"
         )
         return
@@ -1022,14 +1407,18 @@ async def on_message(message: discord.Message):
             waiting_for_transform_code.discard(user_id)
 
             if not is_nanoka_unlocked(user_id):
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} ごめんね、その姿になるにはまだ条件が足りないみたい…。\n"
                     "まずは、あたしとのじゃんけんに何度も勝ってみて？ それからもう一度お願いしてくれる？"
                 )
                 return
 
             set_user_form(user_id, "nanoka")
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} 今日から、あたしは「三月なのか / 長夜月」の姿でもあなたと一緒にいられるわ♪"
             )
             return
@@ -1040,14 +1429,18 @@ async def on_message(message: discord.Message):
             waiting_for_transform_code.discard(user_id)
 
             if not is_danheng_unlocked(user_id):
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} その姿になるには、まだ鍵が足りないみたい…。\n"
                     "あの荒笛のことを、もっとよく知ってみて？ きっと道が開けるわ。"
                 )
                 return
 
             set_user_form(user_id, "danheng")
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} …わかった。今日は彼の姿で、あなたと共に歩こう。\n"
                 "無茶だけはしないでね。あなたを守る役目は、ちゃんと果たしたいから。"
             )
@@ -1058,7 +1451,9 @@ async def on_message(message: discord.Message):
         form_key = resolve_form_code(code)
 
         if not form_key:
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} そのコードでは変身できないみたい…。\n"
                 "アグライアなら `KaLos618`、トリスビアスなら `HapLotes405` みたいに、"
                 "もう一度正しい変身コードを教えてくれる？"
@@ -1069,7 +1464,9 @@ async def on_message(message: discord.Message):
         waiting_for_transform_code.discard(user_id)
 
         form_name = get_form_display_name(form_key)
-        await message.channel.send(
+        await send_myu(
+            message,
+            user_id,
             f"{message.author.mention} 分かったわ、今からあたしは **{form_name}** として振る舞うわ♪"
         )
         return
@@ -1080,7 +1477,9 @@ async def on_message(message: discord.Message):
         text = content if content else message.content.strip()
         nums = re.findall(r"(-?\d+)", text)
         if not nums:
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} 親衛隊レベルは数字で教えて？ 例えば `3` みたいにね。"
             )
             return
@@ -1096,7 +1495,9 @@ async def on_message(message: discord.Message):
 
         del waiting_for_guardian_level[user_id]
 
-        await message.channel.send(
+        await send_myu(
+            message,
+            user_id,
             f"{message.author.mention} {display} の親衛隊レベルを **Lv.{level_val}** に設定したわ♪"
         )
         return
@@ -1107,7 +1508,9 @@ async def on_message(message: discord.Message):
         text = content if content else message.content.strip()
         nums = re.findall(r"(-?\d+)", text)
         if not nums:
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} 1日に何回までにするか、数字で教えて？\n"
                 "例えば `20` って送ってくれれば、1日20回までにするわ♪\n"
                 "`0` 以下なら制限なしに戻すわ。"
@@ -1126,11 +1529,15 @@ async def on_message(message: discord.Message):
         del waiting_for_msg_limit[user_id]
 
         if limit_val <= 0:
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} {display} のメッセージ制限を解除したわ。"
             )
         else:
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} {display} は 1日 **{limit_val} 回** までお話しできるように設定したわ♪"
             )
         return
@@ -1140,7 +1547,9 @@ async def on_message(message: discord.Message):
         text = content if content else message.content.strip()
         hand = parse_hand(text)
         if not hand:
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} グー / チョキ / パー のどれかで教えて？"
             )
             return
@@ -1165,10 +1574,11 @@ async def on_message(message: discord.Message):
         else:
             wins = get_janken_wins(user_id)
 
-
         waiting_for_rps_choice.discard(user_id)
 
-        await message.channel.send(
+        await send_myu(
+            message,
+            user_id,
             f"{message.author.mention} {name} は **{hand}**、あたしは **{bot_hand}** よ。\n"
             f"{flavor}\n"
             f"（これまでに {wins} 回、あたしに勝ってるわ♡）"
@@ -1189,14 +1599,18 @@ async def on_message(message: discord.Message):
     if user_id in waiting_for_admin_add:
         targets = [m for m in message.mentions if m.id != client.user.id]
         if not targets:
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} 管理者にしたい人を `@ユーザー` で教えて？"
             )
             return
         target = targets[0]
         add_admin(target.id)
         waiting_for_admin_add.discard(user_id)
-        await message.channel.send(
+        await send_myu(
+            message,
+            user_id,
             f"{message.author.mention} {target.display_name} を管理者に追加したわ♪"
         )
         return
@@ -1204,7 +1618,9 @@ async def on_message(message: discord.Message):
     if user_id in waiting_for_admin_remove:
         targets = [m for m in message.mentions if m.id != client.user.id]
         if not targets:
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} 管理者から外したい人を `@ユーザー` で教えて？"
             )
             return
@@ -1213,11 +1629,15 @@ async def on_message(message: discord.Message):
         waiting_for_admin_remove.discard(user_id)
 
         if ok:
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} {target.display_name} を管理者から外したわ。"
             )
         else:
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} その人は管理者じゃないか、メイン管理者だから外せないみたい。"
             )
         return
@@ -1226,13 +1646,17 @@ async def on_message(message: discord.Message):
     if user_id in waiting_for_nickname:
         new_name = content if content else message.content.strip()
         if not new_name:
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} もう一度、呼び名を教えて？"
             )
             return
         set_nickname(user_id, new_name)
         waiting_for_nickname.discard(user_id)
-        await message.channel.send(
+        await send_myu(
+            message,
+            user_id,
             f"{message.author.mention} ふふ…これからは「{new_name}」って呼ぶわね♪"
         )
         return
@@ -1240,13 +1664,17 @@ async def on_message(message: discord.Message):
     if user_id in waiting_for_rename:
         new_name = content if content else message.content.strip()
         if not new_name:
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} 新しい呼び名、もう一度教えて？"
             )
             return
         set_nickname(user_id, new_name)
         waiting_for_rename.discard(user_id)
-        await message.channel.send(
+        await send_myu(
+            message,
+            user_id,
             f"{message.author.mention} 了解♪ 今日から「{new_name}」よ。"
         )
         return
@@ -1256,7 +1684,9 @@ async def on_message(message: discord.Message):
         # データ管理終了
         if "データ管理終了" in content:
             admin_data_mode.discard(user_id)
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} データ管理モードを終了するわ。また必要になったら呼んでね。"
             )
             return
@@ -1265,7 +1695,9 @@ async def on_message(message: discord.Message):
         if "ニックネーム確認" in content:
             data = load_data()
             if not data:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} まだ登録されているあだ名はないみたい。"
                 )
                 return
@@ -1282,17 +1714,23 @@ async def on_message(message: discord.Message):
                     lines.append(f"- {member.display_name} (ID: {uid_str}) → {nick}")
                 else:
                     lines.append(f"- ID: {uid_str} → {nick}")
-            await message.channel.send("\n".join(lines))
+            await send_myu(
+                message,
+                user_id,
+                "\n".join(lines)
+            )
             return
 
         # 親衛隊レベル編集メニュー
         if "親衛隊レベル編集" in content:
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} 親衛隊レベルをどうしたい？\n"
                 "- `親衛隊レベル確認` … 全員のレベル一覧を表示\n"
                 "- `親衛隊レベル設定 @ユーザー` … 特定ユーザーのレベルを設定/変更\n"
                 "- `親衛隊レベル削除 @ユーザー` … 特定ユーザーのレベルを削除\n"
-                "- `データ管理終了` … モード終了"
+                "- `データ管理終了`"
             )
             return
 
@@ -1300,7 +1738,9 @@ async def on_message(message: discord.Message):
         if content == "親衛隊レベル確認":
             levels = load_guardian_levels()
             if not levels:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} まだ親衛隊レベルは誰も登録されていないみたい。"
                 )
                 return
@@ -1317,21 +1757,29 @@ async def on_message(message: discord.Message):
                     lines.append(f"- {member.display_name} (ID: {uid_str}) → Lv.{lv}")
                 else:
                     lines.append(f"- ID: {uid_str} → Lv.{lv}")
-            await message.channel.send("\n".join(lines))
+            await send_myu(
+                message,
+                user_id,
+                "\n".join(lines)
+            )
             return
 
         # 親衛隊レベル設定
         if content.startswith("親衛隊レベル設定"):
             targets = [m for m in message.mentions if m.id != client.user.id]
             if not targets:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} 誰のレベルを設定するか、`@ユーザー` を付けて教えて？\n"
                     "例: `親衛隊レベル設定 @ユーザー`"
                 )
                 return
             target = targets[0]
             waiting_for_guardian_level[user_id] = target.id
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} {target.display_name} の親衛隊レベルをいくつにする？ 数字で教えてね。\n"
                 "例えば `3` みたいに送ってくれればいいわ♪"
             )
@@ -1341,21 +1789,27 @@ async def on_message(message: discord.Message):
         if content.startswith("親衛隊レベル削除"):
             targets = [m for m in message.mentions if m.id != client.user.id]
             if not targets:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} 誰のレベルを消すか、`@ユーザー` を付けて教えて？\n"
                     "例: `親衛隊レベル削除 @ユーザー`"
                 )
                 return
             target = targets[0]
             delete_guardian_level(target.id)
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} {target.display_name} の親衛隊レベルを削除したわ。"
             )
             return
 
         # 好感度編集メニュー
         if "好感度編集" in content:
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} 好感度の設定をどうする？\n"
                 "- `好感度設定確認` … レベル閾値とアクションごとのXPを表示\n"
                 "- `好感度アクション設定 アクション名 数値` … 例: `好感度アクション設定 talk 5`\n"
@@ -1375,14 +1829,20 @@ async def on_message(message: discord.Message):
             lines.append("\n〈アクション別XP〉")
             for k, v in xp_actions.items():
                 lines.append(f"- {k}: {v} XP")
-            await message.channel.send("\n".join(lines))
+            await send_myu(
+                message,
+                user_id,
+                "\n".join(lines)
+            )
             return
 
         # 好感度アクション設定
         if content.startswith("好感度アクション設定"):
             parts = content.split()
             if len(parts) < 3:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} `好感度アクション設定 アクション名 数値` の形で教えて？\n"
                     "例: `好感度アクション設定 talk 5`"
                 )
@@ -1391,7 +1851,9 @@ async def on_message(message: discord.Message):
             try:
                 xp_val = int(parts[2])
             except ValueError:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} XP は数字でお願いね。"
                 )
                 return
@@ -1400,7 +1862,9 @@ async def on_message(message: discord.Message):
             xp_actions[action_name] = xp_val
             cfg["xp_actions"] = xp_actions
             save_affection_config(cfg)
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} アクション `{action_name}` のXPを **{xp_val}** に設定したわ。"
             )
             return
@@ -1409,7 +1873,9 @@ async def on_message(message: discord.Message):
         if content.startswith("好感度レベル設定"):
             parts = content.split()
             if len(parts) < 3:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} `好感度レベル設定 レベル 数値` の形で教えて？\n"
                     "例: `好感度レベル設定 3 4000`"
                 )
@@ -1418,7 +1884,9 @@ async def on_message(message: discord.Message):
                 lv = int(parts[1])
                 xp_need = int(parts[2])
             except ValueError:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} レベルもXPも数字でお願いね。"
                 )
                 return
@@ -1429,14 +1897,18 @@ async def on_message(message: discord.Message):
             thresholds[lv] = xp_need
             cfg["level_thresholds"] = thresholds
             save_affection_config(cfg)
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} Lv.{lv} に必要なXPを **{xp_need}** に設定したわ。"
             )
             return
 
         # メッセージ制限編集メニュー
         if "メッセージ制限編集" in content:
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} メッセージ制限をどうする？\n"
                 "- `メッセージ制限確認` … 制限が設定されているユーザー一覧\n"
                 "- `メッセージ制限設定 @ユーザー` … その人の1日あたり上限回数を設定\n"
@@ -1451,7 +1923,9 @@ async def on_message(message: discord.Message):
         if content == "メッセージ制限確認":
             limits = load_message_limits()
             if not limits:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} まだメッセージ制限は誰にも設定されていないみたい。"
                 )
                 return
@@ -1468,21 +1942,29 @@ async def on_message(message: discord.Message):
                     lines.append(f"- {member.display_name} (ID: {uid_str}) → {limit} 回/日")
                 else:
                     lines.append(f"- ID: {uid_str} → {limit} 回/日")
-            await message.channel.send("\n".join(lines))
+            await send_myu(
+                message,
+                user_id,
+                "\n".join(lines)
+            )
             return
 
         # メッセージ制限設定
         if content.startswith("メッセージ制限設定"):
             targets = [m for m in message.mentions if m.id != client.user.id]
             if not targets:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} 誰の制限を設定するか、`@ユーザー` を付けて教えて？\n"
                     "例: `メッセージ制限設定 @ユーザー`"
                 )
                 return
             target = targets[0]
             waiting_for_msg_limit[user_id] = target.id
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} {target.display_name} は1日に何回までお話しできるようにする？\n"
                 "数字だけ送ってくれればいいわ♪ `0` 以下なら制限なしに戻すわ。"
             )
@@ -1492,14 +1974,18 @@ async def on_message(message: discord.Message):
         if content.startswith("メッセージ制限削除"):
             targets = [m for m in message.mentions if m.id != client.user.id]
             if not targets:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} 誰の制限を解除するか、`@ユーザー` を付けて教えて？\n"
                     "例: `メッセージ制限削除 @ユーザー`"
                 )
                 return
             target = targets[0]
             delete_message_limit(target.id)
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} {target.display_name} のメッセージ制限を解除したわ。"
             )
             return
@@ -1507,11 +1993,15 @@ async def on_message(message: discord.Message):
         # メッセージ制限bypass系
         if "メッセージ制限bypass編集" in content:
             if user_id != PRIMARY_ADMIN_ID:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} ごめんね、この設定はいちばん上の管理者専用なの。"
                 )
                 return
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} メッセージ制限のbypass設定をどうする？\n"
                 "- `メッセージ制限bypass確認`\n"
                 "- `メッセージ制限bypass全体オン` / `メッセージ制限bypass全体オフ`\n"
@@ -1524,7 +2014,9 @@ async def on_message(message: discord.Message):
 
         if content == "メッセージ制限bypass確認":
             if user_id != PRIMARY_ADMIN_ID:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} ごめんね、この確認もメイン管理者だけができるの。"
                 )
                 return
@@ -1552,87 +2044,115 @@ async def on_message(message: discord.Message):
                         lines.append(f"- {member.display_name} (ID: {uid})")
                     else:
                         lines.append(f"- ID: {uid}")
-            await message.channel.send("\n".join(lines))
+            await send_myu(
+                message,
+                user_id,
+                "\n".join(lines)
+            )
             return
 
         if content == "メッセージ制限bypass全体オン":
             if user_id != PRIMARY_ADMIN_ID:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} これはメイン管理者専用のスイッチなの。"
                 )
                 return
             cfg = load_message_limit_config()
             cfg["bypass_enabled"] = True
             save_message_limit_config(cfg)
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} メッセージ制限bypass機能を **ON** にしたわ。"
             )
             return
 
         if content == "メッセージ制限bypass全体オフ":
             if user_id != PRIMARY_ADMIN_ID:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} これはメイン管理者専用のスイッチなの。"
                 )
                 return
             cfg = load_message_limit_config()
             cfg["bypass_enabled"] = False
             save_message_limit_config(cfg)
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} メッセージ制限bypass機能を **OFF** にしたわ。"
             )
             return
 
         if content == "メッセージ制限bypass付与許可オン":
             if user_id != PRIMARY_ADMIN_ID:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} これを変えられるのはメイン管理者だけよ。"
                 )
                 return
             cfg = load_message_limit_config()
             cfg["allow_bypass_grant"] = True
             save_message_limit_config(cfg)
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} 他の人にbypassを付与できるようにしたわ。"
             )
             return
 
         if content == "メッセージ制限bypass付与許可オフ":
             if user_id != PRIMARY_ADMIN_ID:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} これを変えられるのはメイン管理者だけよ。"
                 )
                 return
             cfg = load_message_limit_config()
             cfg["allow_bypass_grant"] = False
             save_message_limit_config(cfg)
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} これからは新しくbypassを配ることはできなくなるわ。"
             )
             return
 
         if content.startswith("メッセージ制限bypass付与"):
             if user_id != PRIMARY_ADMIN_ID:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} ごめんね、bypassを配れるのはメイン管理者だけなの。"
                 )
                 return
             cfg = load_message_limit_config()
             if not cfg.get("bypass_enabled", False):
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} いまはbypass機能自体がOFFになっているみたい。\n"
                     "`メッセージ制限bypass全体オン` で有効化してから試してね。"
                 )
                 return
             if not cfg.get("allow_bypass_grant", False):
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} いまは「他の人にbypassを付与できない」設定になっているわ。\n"
                     "`メッセージ制限bypass付与許可オン` にしてからやってみて？"
                 )
                 return
             targets = [m for m in message.mentions if m.id != client.user.id]
             if not targets:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} 誰にbypassを付与するか、`@ユーザー` を付けて教えて？\n"
                     "例: `メッセージ制限bypass付与 @ユーザー`"
                 )
@@ -1645,20 +2165,26 @@ async def on_message(message: discord.Message):
                 bypass_users.append(sid)
             cfg["bypass_users"] = bypass_users
             save_message_limit_config(cfg)
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} {target.display_name} にメッセージ制限bypassを付与したわ。"
             )
             return
 
         if content.startswith("メッセージ制限bypass削除"):
             if user_id != PRIMARY_ADMIN_ID:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} ごめんね、bypassの管理はメイン管理者だけなの。"
                 )
                 return
             targets = [m for m in message.mentions if m.id != client.user.id]
             if not targets:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} 誰からbypassを外すか、`@ユーザー` を付けて教えて？\n"
                     "例: `メッセージ制限bypass削除 @ユーザー`"
                 )
@@ -1671,22 +2197,28 @@ async def on_message(message: discord.Message):
                 bypass_users.remove(sid)
             cfg["bypass_users"] = bypass_users
             save_message_limit_config(cfg)
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} {target.display_name} からメッセージ制限bypassを外したわ。"
             )
             return
-        
-                # じゃんけん勝利数を任意回数増やす（管理者用）
+
+        # じゃんけん勝利数を任意回数増やす（管理者用）
         if content.startswith("じゃんけん勝利数追加"):
             if user_id != PRIMARY_ADMIN_ID:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} ごめんね、この操作はメイン管理者だけができるの。"
                 )
                 return
             # 例: 「じゃんけん勝利数追加 @ユーザー 5」
             targets = [m for m in message.mentions if m.id != client.user.id]
             if not targets:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} 誰の勝利数を増やすか、`@ユーザー` を付けて教えて？\n"
                     "例: `じゃんけん勝利数追加 @ユーザー 5`"
                 )
@@ -1698,7 +2230,9 @@ async def on_message(message: discord.Message):
             plain = re.sub(r"<@!?\d+>", "", content)
             nums = re.findall(r"(-?\d+)", plain)
             if not nums:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} いくつ増やすか、最後に数字も書いてほしいな。\n"
                     "例: `じゃんけん勝利数追加 @ユーザー 5`"
                 )
@@ -1706,7 +2240,9 @@ async def on_message(message: discord.Message):
 
             delta = int(nums[-1])
             if delta <= 0:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} ごめんね、0以下は増やせないの。正の数字で教えて？"
                 )
                 return
@@ -1716,16 +2252,20 @@ async def on_message(message: discord.Message):
                 inc_janken_win(target.id)
 
             wins = get_janken_wins(target.id)
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} {target.display_name} のじゃんけん勝利数を **{delta} 回** 増やしたわ。\n"
                 f"いまは合計 **{wins} 回** 勝っていることになっているわよ。"
             )
             return
-        
-                # 好感度XPを直接増減させる（管理者用）
+
+        # 好感度XPを直接増減させる（管理者用）
         if content.startswith("好感度XP追加"):
             if user_id != PRIMARY_ADMIN_ID:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} ごめんね、この操作はメイン管理者だけができるの。"
                 )
                 return
@@ -1733,7 +2273,9 @@ async def on_message(message: discord.Message):
             # 例: 「好感度XP追加 @ユーザー 1000」 / 「好感度XP追加 @ユーザー -500」
             targets = [m for m in message.mentions if m.id != client.user.id]
             if not targets:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} 誰のXPをいじるか、`@ユーザー` を付けて教えて？\n"
                     "例: `好感度XP追加 @ユーザー 1000`"
                 )
@@ -1745,7 +2287,9 @@ async def on_message(message: discord.Message):
             plain = re.sub(r"<@!?\d+>", "", content)
             nums = re.findall(r"(-?\d+)", plain)
             if not nums:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} どれくらい増やす（または減らす）か、数字も書いてほしいな。\n"
                     "例: `好感度XP追加 @ユーザー 1000`"
                 )
@@ -1757,17 +2301,19 @@ async def on_message(message: discord.Message):
             add_affection_xp(target.id, delta, reason="admin_adjust")
 
             xp, level_val = get_user_affection(target.id)
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} {target.display_name} の好感度XPを **{delta}** だけ調整したわ。\n"
                 f"いまの状態は **Lv.{level_val} / {xp} XP** になっているわよ。"
             )
             return
 
-
-
         # 変身管理メニュー
         if "変身管理" in content:
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} 変身の設定をどうする？\n"
                 "- `変身一覧確認` … 誰がどの黄金裔（開拓者）を使っているか一覧表示\n"
                 "- `変身編集一人 @ユーザー コードまたは名前` … その人のフォームを変更\n"
@@ -1782,7 +2328,9 @@ async def on_message(message: discord.Message):
         if content == "変身一覧確認":
             forms = get_all_forms()
             if not forms:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} まだ誰も別の黄金裔には変身していないみたい。\n"
                     "みんな基本はキュレネのままね。"
                 )
@@ -1799,14 +2347,20 @@ async def on_message(message: discord.Message):
                 display_user = member.display_name if member else f"ID: {uid_str}"
                 form_name = get_form_display_name(form_key)
                 lines.append(f"- {display_user} → {form_name}")
-            await message.channel.send("\n".join(lines))
+            await send_myu(
+                message,
+                user_id,
+                "\n".join(lines)
+            )
             return
 
         # 変身編集一人
         if content.startswith("変身編集一人"):
             targets = [m for m in message.mentions if m.id != client.user.id]
             if not targets:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} 誰を変身させるか、`@ユーザー` を付けて教えて？\n"
                     "例: `変身編集一人 @ユーザー KaLos618`"
                 )
@@ -1822,7 +2376,9 @@ async def on_message(message: discord.Message):
                 form_key = resolve_form_spec(form_spec)
 
             if not form_key:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} その黄金裔のコードや名前は知らないみたい…。\n"
                     "もう一度確認して教えてくれる？"
                 )
@@ -1830,7 +2386,9 @@ async def on_message(message: discord.Message):
 
             set_user_form(target.id, form_key)
             form_name = get_form_display_name(form_key)
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} {target.display_name} を **{form_name}** に変身させておいたわ♪"
             )
             return
@@ -1838,7 +2396,9 @@ async def on_message(message: discord.Message):
         # 変身編集全体（メイン管理者限定）
         if content.startswith("変身編集全体"):
             if user_id != PRIMARY_ADMIN_ID:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} ごめんね、全体の変身を変える権限はメイン管理者だけなの。"
                 )
                 return
@@ -1850,7 +2410,9 @@ async def on_message(message: discord.Message):
                 form_key = resolve_form_spec(form_spec)
 
             if not form_key:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} その黄金裔のコードや名前は知らないみたい…。\n"
                     "もう一度確認して教えてくれる？"
                 )
@@ -1858,7 +2420,9 @@ async def on_message(message: discord.Message):
 
             set_all_forms(form_key)
             form_name = get_form_display_name(form_key)
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} 登録されているみんなのフォームを、全部 **{form_name}** に揃えておいたわ♪"
             )
             return
@@ -1866,14 +2430,18 @@ async def on_message(message: discord.Message):
         # 変身解放状況確認（メイン管理者専用）
         if content == "変身解放状況確認":
             if user_id != PRIMARY_ADMIN_ID:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} ごめんね、この確認ができるのは一番上の管理者だけなの。"
                 )
                 return
 
             # /data/special_unlocks.json を読み込み
             if not SPECIAL_UNLOCKS_FILE.exists():
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} まだ特別な解放データは保存されていないみたい。"
                 )
                 return
@@ -1881,13 +2449,17 @@ async def on_message(message: discord.Message):
             try:
                 raw = json.loads(SPECIAL_UNLOCKS_FILE.read_text(encoding="utf-8"))
             except Exception:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} 解放データの読み込みに失敗しちゃったみたい…ごめんね。"
                 )
                 return
 
             if not isinstance(raw, dict) or not raw:
-                await message.channel.send(
+                await send_myu(
+                    message,
+                    user_id,
                     f"{message.author.mention} いまのところ、特別な解放状況は登録されていないみたい。"
                 )
                 return
@@ -1918,12 +2490,18 @@ async def on_message(message: discord.Message):
                     f"  ・丹恒: {danh}"
                 )
 
-            await message.channel.send("\n".join(lines))
+            await send_myu(
+                message,
+                user_id,
+                "\n".join(lines)
+            )
             return
 
         # 管理者編集メニュー（既存）
         if "管理者編集" in content:
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} 管理者をどうしたい？\n"
                 "- `管理者追加`\n"
                 "- `管理者削除`\n"
@@ -1933,20 +2511,26 @@ async def on_message(message: discord.Message):
 
         if "管理者追加" in content:
             waiting_for_admin_add.add(user_id)
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} 誰を管理者として追加する？ `@ユーザー` で教えてね。"
             )
             return
 
         if "管理者削除" in content:
             waiting_for_admin_remove.add(user_id)
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} 誰を管理者から外す？ `@ユーザー` で教えてね。"
             )
             return
 
         # 不明コマンド
-        await message.channel.send(
+        await send_myu(
+            message,
+            user_id,
             f"{message.author.mention} ごめんね、そのコマンドはまだ知らないの…。\n"
             "いま使えるのは\n"
             "- `ニックネーム確認`\n"
@@ -1964,12 +2548,16 @@ async def on_message(message: discord.Message):
 
     if content == "データ管理":
         if not is_admin(user_id):
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} ごめんね、このモードは管理者専用なの。"
             )
             return
         admin_data_mode.add(user_id)
-        await message.channel.send(
+        await send_myu(
+            message,
+            user_id,
             f"{message.author.mention} データ管理モードに入ったわ。\n"
             "何を確認したい？\n"
             "- `ニックネーム確認`\n"
@@ -1985,17 +2573,20 @@ async def on_message(message: discord.Message):
         )
         return
 
-
     # ===== 一般：親衛隊レベル確認 =====
     if content in ["親衛隊レベル", "親衛隊レベル確認"]:
         level_val = get_guardian_level(user_id)
         if level_val is None:
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} まだ親衛隊レベルは登録されていないみたい。\n"
                 "そのうち誰かがレベルを付けてくれるかもね？"
             )
         else:
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} あなたの親衛隊レベルは **Lv.{level_val}** よ♪"
             )
         return
@@ -2017,12 +2608,18 @@ async def on_message(message: discord.Message):
                 f"あなたの好感度は **Lv.{level_val}**（累計 {xp} XP）よ♪\n"
                 "これ以上は数えなくてもいいくらい、十分仲良しってことかしら？"
             )
-        await message.channel.send(f"{message.author.mention} {msg_text}")
+        await send_myu(
+            message,
+            user_id,
+            f"{message.author.mention} {msg_text}"
+        )
         return
 
     # ===== 一般：自分の変身状態確認 =====
     if content in ["変身状態", "今の姿", "今のフォーム"]:
-        await message.channel.send(
+        await send_myu(
+            message,
+            user_id,
             f"{message.author.mention} 今のあたしは **{current_form_name}** としてあなたと話してるわ♪"
         )
         return
@@ -2030,7 +2627,9 @@ async def on_message(message: discord.Message):
     # ===== 一般：変身開始 =====
     if content == "変身":
         waiting_for_transform_code.add(user_id)
-        await message.channel.send(
+        await send_myu(
+            message,
+            user_id,
             f"{message.author.mention} ふふっ、変身したいのね？\n"
             "アグライアなら `KaLos618`、トリスビアスなら `HapLotes405` みたいに、変身コードを教えて？"
         )
@@ -2041,14 +2640,18 @@ async def on_message(message: discord.Message):
     # =====================
     if "なのになってみて" in content:
         if not is_nanoka_unlocked(user_id):
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} ごめんね、その姿になるにはまだ条件が足りないみたい…。\n"
                 "まずは、あたしとのじゃんけんに何度も勝ってみて？ それからもう一度お願いしてくれる？"
             )
             return
 
         set_user_form(user_id, "nanoka")
-        await message.channel.send(
+        await send_myu(
+            message,
+            user_id,
             f"{message.author.mention} 今日から、あたしは「三月なのか / 長夜月」の姿でもあなたと一緒にいられるわ♪"
         )
         return
@@ -2058,14 +2661,18 @@ async def on_message(message: discord.Message):
     # =====================
     if "たんたんになってみて" in content:
         if not is_danheng_unlocked(user_id):
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} その姿になるには、まだ鍵が足りないみたい…。\n"
                 "あの荒笛のことを、もっとよく知ってみて？ きっと道が開けるわ。"
             )
             return
 
         set_user_form(user_id, "danheng")
-        await message.channel.send(
+        await send_myu(
+            message,
+            user_id,
             f"{message.author.mention} …わかった。今日は彼の姿で、あなたと共に歩こう。\n"
             "無茶だけはしないでね。あなたを守る役目は、ちゃんと果たしたいから。"
         )
@@ -2075,12 +2682,16 @@ async def on_message(message: discord.Message):
     if content in ["デイリーを受け取りたい", "デイリー受け取りたい", "デイリー受け取り"]:
         ok, stones, reason = grant_daily_stones(user_id)
         if ok:
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} {reason}\n"
                 f"今の所持石は **{stones} 個** になったわ♪"
             )
         else:
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} {reason}\n"
                 f"今の所持石は **{stones} 個** のままよ。"
             )
@@ -2089,14 +2700,18 @@ async def on_message(message: discord.Message):
     # ===== ガチャメニュー表示 =====
     if content in ["ガチャをしたい", "ガチャしたい", "ガチャメニュー"]:
         status_text = format_gacha_status(user_id)
-        await message.channel.send(
+        await send_myu(
+            message,
+            user_id,
             f"{message.author.mention} {status_text}"
         )
         return
 
     # ===== ガチャ説明（排出率） =====
     if content in ["ガチャ説明", "ガチャ排出確率", "ガチャ確率"]:
-        await message.channel.send(
+        await send_myu(
+            message,
+            user_id,
             f"{message.author.mention} {format_gacha_rates()}"
         )
         return
@@ -2104,7 +2719,9 @@ async def on_message(message: discord.Message):
     # ===== 単発ガチャ =====
     if content in ["単発ガチャ", "単発", "1連ガチャ", "１連ガチャ"]:
         ok, text = perform_gacha_pulls(user_id, 1, use_ticket=False)
-        await message.channel.send(
+        await send_myu(
+            message,
+            user_id,
             f"{message.author.mention} {text}"
         )
         return
@@ -2112,7 +2729,9 @@ async def on_message(message: discord.Message):
     # ===== 10連ガチャ（石消費） =====
     if content in ["１０連ガチャ", "10連ガチャ", "10連", "１０連"]:
         ok, text = perform_gacha_pulls(user_id, 10, use_ticket=False)
-        await message.channel.send(
+        await send_myu(
+            message,
+            user_id,
             f"{message.author.mention} {text}"
         )
         return
@@ -2120,7 +2739,9 @@ async def on_message(message: discord.Message):
     # ===== 10連ガチャ（すり抜けチケット使用） =====
     if content in ["チケット１０連", "チケット10連", "すり抜け１０連", "すり抜け10連"]:
         ok, text = perform_gacha_pulls(user_id, 10, use_ticket=True)
-        await message.channel.send(
+        await send_myu(
+            message,
+            user_id,
             f"{message.author.mention} {text}"
         )
         return
@@ -2130,12 +2751,16 @@ async def on_message(message: discord.Message):
         new_name = content.replace("あだ名登録", "", 1).strip()
         if not new_name:
             waiting_for_nickname.add(user_id)
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} あたし、どう呼べばいいの？"
             )
             return
         set_nickname(user_id, new_name)
-        await message.channel.send(
+        await send_myu(
+            message,
+            user_id,
             f"{message.author.mention} ふふ…これからは「{new_name}」って呼ぶわね♪"
         )
         return
@@ -2144,12 +2769,16 @@ async def on_message(message: discord.Message):
         new_name = content.replace("あだ名変更", "", 1).strip()
         if not new_name:
             waiting_for_rename.add(user_id)
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} 新しい呼び名、教えて？"
             )
             return
         set_nickname(user_id, new_name)
-        await message.channel.send(
+        await send_myu(
+            message,
+            user_id,
             f"{message.author.mention} 了解♪ 今日から「{new_name}」よ。"
         )
         return
@@ -2158,7 +2787,9 @@ async def on_message(message: discord.Message):
         delete_nickname(user_id)
         waiting_for_nickname.discard(user_id)
         waiting_for_rename.discard(user_id)
-        await message.channel.send(
+        await send_myu(
+            message,
+            user_id,
             f"{message.author.mention} わかったわ。元の呼び方に戻すわね。"
         )
         return
@@ -2178,7 +2809,9 @@ async def on_message(message: discord.Message):
             else:
                 wins = get_janken_wins(user_id)
 
-            await message.channel.send(
+            await send_myu(
+                message,
+                user_id,
                 f"{message.author.mention} {name} は **{hand}**、あたしは **{bot_hand}** よ。\n"
                 f"{flavor}\n"
                 f"（これまでに {wins} 回、あたしに勝ってるわ♡）"
@@ -2196,7 +2829,9 @@ async def on_message(message: discord.Message):
             return
 
         waiting_for_rps_choice.add(user_id)
-        await message.channel.send(
+        await send_myu(
+            message,
+            user_id,
             f"{message.author.mention} じゃんけんをしましょう♪ グー / チョキ / パー、どれにするかしら？"
         )
         return
@@ -2205,7 +2840,11 @@ async def on_message(message: discord.Message):
     if content == "":
         xp, level_val = get_user_affection(user_id)
         reply = generate_reply_for_form(current_form, "", level_val)
-        await message.channel.send(f"{message.author.mention} {reply}")
+        await send_myu(
+            message,
+            user_id,
+            f"{message.author.mention} {reply}"
+        )
         cfg = load_affection_config()
         delta = int(cfg.get("xp_actions", {}).get("talk", 0))
         add_affection_xp(user_id, delta, reason="talk")
@@ -2213,10 +2852,10 @@ async def on_message(message: discord.Message):
 
     # =====================
     # 特殊解放トリガー：三月なのか
-    # じゃんけん勝利数 30回以上 ＋ 「記憶は流れ星を待ってる」
+    # じゃんけん勝利数 307回以上 ＋ 「記憶は流れ星を待ってる」
     # =====================
     if "記憶は流れ星を待ってる" in content or "記憶は流れ星を待っている" in content:
-        base_reply = get_cyrene_reply(content)
+        base_reply = generate_reply_for_form(current_form, content, get_user_affection(user_id)[1])
 
         unlocked_now = False
         wins = get_janken_wins(user_id)
@@ -2231,7 +2870,9 @@ async def on_message(message: discord.Message):
                 "『なのになってみて』って言ってみない？"
             )
 
-        await message.channel.send(
+        await send_myu(
+            message,
+            user_id,
             f"{message.author.mention} {name}、{base_reply}{extra}"
         )
         return
@@ -2247,13 +2888,16 @@ async def on_message(message: discord.Message):
     if current_form == "cyrene" and ARAFUE_TRIGGER_LINE in reply:
         mark_danheng_stage1(user_id)
 
-    await message.channel.send(f"{message.author.mention} {name}、{reply}")
+    await send_myu(
+        message,
+        user_id,
+        f"{message.author.mention} {name}、{reply}"
+    )
 
     # 好感度XP加算（会話）
     cfg = load_affection_config()
     delta = int(cfg.get("xp_actions", {}).get("talk", 0))
     add_affection_xp(user_id, delta, reason="talk")
-
 
 
 # 実行
