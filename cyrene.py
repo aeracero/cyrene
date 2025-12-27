@@ -40,6 +40,7 @@ from special_unlocks import (
     inc_janken_win,
     get_janken_wins,
     is_nanoka_unlocked,
+    set_all_myurion_enabled,
     set_nanoka_unlocked,
     has_danheng_stage1,
     mark_danheng_stage1,
@@ -1733,6 +1734,37 @@ async def on_message(message: discord.Message):
             )
             return
 
+        # ===== 全体ミュリオンモード（メイン管理者限定） =====
+        if content == "全体ミュリオンモード":
+            if user_id != PRIMARY_ADMIN_ID:
+                await message.channel.send(
+                    f"{message.author.mention} ごめんね、この操作はメイン管理者だけができるの。"
+                )
+                return
+
+            set_all_myurion_enabled(True)
+
+            await message.channel.send(
+                f"{message.author.mention} サーバーのみんなを **ミュリオンモード** にしたわ！\n"
+                "ミュミュミュウ〜♪"
+            )
+            return
+
+        # ===== 全体ミュリオン解除（メイン管理者限定） =====
+        if content == "全体ミュリオン解除":
+            if user_id != PRIMARY_ADMIN_ID:
+                await message.channel.send(
+                    f"{message.author.mention} ごめんね、この操作はメイン管理者だけができるの。"
+                )
+                return
+
+            set_all_myurion_enabled(False)
+            await message.channel.send(
+                f"{message.author.mention} サーバーのみんなのミュリオンモードを解除したわ。\n"
+                "通常言語に戻るわよ♪"
+            )
+            return
+        
         # 親衛隊レベル編集メニュー
         if "親衛隊レベル編集" in content:
             await send_myu(
