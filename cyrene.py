@@ -621,15 +621,56 @@ async def on_message(message: discord.Message):
             increment_message_usage(user_id)
 
     # ===== 自分の変身コード入力待ち =====
+    # ===== 自分の変身コード入力待ち =====
     if user_id in waiting_for_transform_code:
         text = content if content else message.content.strip()
+
+        # ★ 特別ルート：三月なのか / 長夜月
+        if "なのになってみて" in text:
+            # コード待ち状態は一度解除
+            waiting_for_transform_code.discard(user_id)
+
+            if not is_nanoka_unlocked(user_id):
+                await message.channel.send(
+                    f"{message.author.mention} ごめんね、その姿になるにはまだ条件が足りないみたい…。\n"
+                    "まずは、あたしとのじゃんけんに何度も勝ってみて？ それからもう一度お願いしてくれる？"
+                )
+                return
+
+            set_user_form(user_id, "nanoka")
+            await message.channel.send(
+                f"{message.author.mention} 今日から、あたしは「三月なのか / 長夜月」の姿でもあなたと一緒にいられるわ♪"
+            )
+            return
+
+        # ★ 特別ルート：丹恒
+        if "たんたんになってみて" in text:
+            # コード待ち状態は一度解除
+            waiting_for_transform_code.discard(user_id)
+
+            if not is_danheng_unlocked(user_id):
+                await message.channel.send(
+                    f"{message.author.mention} その姿になるには、まだ鍵が足りないみたい…。\n"
+                    "あの荒笛のことを、もっとよく知ってみて？ きっと道が開けるわ。"
+                )
+                return
+
+            set_user_form(user_id, "danheng")
+            await message.channel.send(
+                f"{message.author.mention} …わかった。今日は彼の姿で、あなたと共に歩こう。\n"
+                "無茶だけはしないでね。あなたを守る役目は、ちゃんと果たしたいから。"
+            )
+            return
+
+        # ↓ ここからは「ふつうの変身コード」として扱う
         code = text.replace(" ", "").replace("　", "")
         form_key = resolve_form_code(code)
 
         if not form_key:
             await message.channel.send(
                 f"{message.author.mention} そのコードでは変身できないみたい…。\n"
-                "もう一度、正しい変身コードを教えてくれる？"
+                "アグライアなら `KaLos618`、トリスビアスなら `HapLotes405` みたいに、"
+                "もう一度正しい変身コードを教えてくれる？"
             )
             return
 
@@ -641,6 +682,7 @@ async def on_message(message: discord.Message):
             f"{message.author.mention} 分かったわ、今からあたしは **{form_name}** として振る舞うわ♪"
         )
         return
+
 
     # ===== 親衛隊レベル数値入力待ち =====
     if user_id in waiting_for_guardian_level:
