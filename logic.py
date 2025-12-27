@@ -71,13 +71,12 @@ def format_all_affection_status(guild) -> str:
         
     return "\n".join(lines)
 
-# ★追加：一般ユーザー用好感度メッセージ生成
+# ★一般ユーザー用好感度メッセージ
 def get_affection_status_message(user_id: int) -> str:
     xp, level = get_user_affection(user_id)
     cfg = db.load_affection_config()
     thresholds = cfg.get("level_thresholds", [0])
     
-    # 次のレベルの閾値を確認
     if level + 1 < len(thresholds):
         next_xp_req = thresholds[level + 1]
         needed = max(0, next_xp_req - xp)
@@ -106,6 +105,37 @@ def apply_myurion_filter(user_id: int, text: str) -> str:
     m = re.match(r"^(<@!?\d+>)(.*)$", text, flags=re.DOTALL)
     if not m: return to_myurion_text(text)
     return m.group(1) + to_myurion_text(m.group(2))
+
+# ★追加: ミュリオンクイズ回答解析
+def parse_myurion_answer(text: str) -> int | None:
+    if any(ch in text for ch in ["1", "１"]): return 1
+    if any(ch in text for ch in ["2", "２"]): return 2
+    if any(ch in text for ch in ["3", "３"]): return 3
+    if any(ch in text for ch in ["4", "４"]): return 4
+    return None
+
+MYURION_QUESTIONS = [
+    {"q": "ミュミュ、ミミュミュミュミュウミュミュウミー", "choices": ["ミュウミーミミュミミュミュ", "ミミュミュウミーミーミュウミュウミミ", "ミュウミみミュみミミュミュミュミュウ", "ミュウミュミュミュミュウ"], "answer_index": 0},
+    {"q": "ミュウミュミュミュウミュミュミュウウミュウ？", "choices": ["ミュウミミミュミュミュミュウミ", "ミュウーミミュミュミュウミュウ", "ミュウミュウミュミュミュミュミュ", "ミミミュミュミュムミュウミミミュ"], "answer_index": 1},
+    {"q": "ミュミュミミュウミュユミミュミュウ？", "choices": ["ミュウミュミュミュミュ、ミーミュユミュミュウ", "ミミュミュミーミーミュ。ミュミュミーミュミュ", "ミュウミュミュミュウ。ミュウミーみミュミュウ", "ミュウ。"], "answer_index": 0},
+    {"q": "ミュミュミュミュミューーミュウミュウミュウミュウミュウ？", "choices": ["ミュウミュユミュミュミューミュウミュウミュウミュウ", "ミュウ。ミミュミュミュミーミミュミュミュミュミュウ", "ミミミュミュミュミュウ", "ミュウミュミュミュミュミュミュミュミュミュミュ"], "answer_index": 1},
+    {"q": "ミュミュミュミュウミュウミュウミュウミュウミュウミュウミュウ？", "choices": ["ミュウ!", "ミュウ?", "ミュウ。", "ミュウ♪"], "answer_index": 0},
+]
+
+async def send_myurion_question(message, user_id, correct_count, state_dict):
+    q = random.choice(MYURION_QUESTIONS)
+    indexed = list(enumerate(q["choices"]))
+    random.shuffle(indexed)
+    correct_index = None
+    for new_idx, (orig_idx, _) in enumerate(indexed):
+        if orig_idx == q["answer_index"]:
+            correct_index = new_idx
+            break
+    options_text = "\n".join([f"{i+1}. {c}" for i, (_, c) in enumerate(indexed)])
+    body = (f"ミュミュミュ…（現在 {correct_count}/3 問正解ミュ）\n{q['q']}\n"
+            f"ミュミュ…好きな番号を選んでミュ（1〜4）\n\n{options_text}")
+    state_dict[user_id] = {"question": q, "options": [c for _, c in indexed], "correct_index": correct_index}
+    await message.channel.send(apply_myurion_filter(user_id, f"{message.author.mention} {body}"))
 
 # --- ガチャロジック ---
 def calc_main_5star_rate(pity_5: int) -> float:
@@ -184,8 +214,37 @@ def grant_daily_stones(user_id: int) -> tuple[bool, int, str]:
     db.save_gacha_state(user_id, state)
     return True, state["stones"], "デイリー報酬 16000個 を付与したわ♪"
 
+# ★追加：ガチャステータス表示
+def format_gacha_status(user_id: int) -> str:
+    state = db.get_gacha_state(user_id)
+    stones = state.get("stones", 0)
+    pity_5 = state.get("pity_5", 0)
+    cyrene_copies = state.get("cyrene_copies", 0)
+    tickets = state.get("offbanner_tickets", 0)
+    guaranteed = state.get("guaranteed_cyrene", False)
+    mult = get_cyrene_affection_multiplier(user_id)
+    
+    next_up = "キュレネ確定" if guaranteed else "50%でキュレネ"
+    
+    return (
+        "【ガチャメニュー】\n"
+        f"・所持石: {stones} 個\n"
+        f"・キュレネ所持: {cyrene_copies} 枚 (好感度倍率 x{mult:.1f})\n"
+        f"・すり抜けチケット: {tickets} 枚\n"
+        f"・天井カウント: {pity_5} 連 (次の★5は {next_up})\n\n"
+        "『単発ガチャ』『10連ガチャ』で引けるわよ♪"
+    )
+
 # --- じゃんけんロジック ---
 JANKEN_HANDS = ["グー", "チョキ", "パー"]
+
+# ★追加：これが抜けていたためエラーになっていました
+def parse_hand(text: str):
+    if "グー" in text: return "グー"
+    if "チョキ" in text: return "チョキ"
+    if "パー" in text: return "パー"
+    return None
+
 def judge_janken(user_hand, bot_hand):
     if user_hand == bot_hand: return "draw"
     if (user_hand=="グー" and bot_hand=="チョキ") or \
