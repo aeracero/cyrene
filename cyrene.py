@@ -902,6 +902,28 @@ def get_myurion_state(user_id: int) -> dict:
         save_myurion_data(data)
     return st
 
+def set_all_myurion_enabled(enabled: bool = True):
+    """
+    全ユーザーのミュリオンモード ON/OFF をまとめて切り替える。
+    - enabled=True なら全員「有効」
+    - enabled=False なら全員「無効」
+    """
+    data = load_myurion_data()
+    for uid, st in data.items():
+        if not isinstance(st, dict):
+            st = {}
+        # まだキーが無い場合も一応補完
+        st.setdefault("unlocked", False)
+
+        st["enabled"] = bool(enabled)
+        # 全体ONのときは、まだ未解放でも強制的に解放扱いにしてあげる
+        if enabled and not st["unlocked"]:
+            st["unlocked"] = True
+
+        data[uid] = st
+
+    save_myurion_data(data)
+
 
 def save_myurion_state(user_id: int, st: dict):
     data = load_myurion_data()
@@ -1245,29 +1267,38 @@ async def on_message(message: discord.Message):
     current_form = get_user_form(user_id)
     current_form_name = get_form_display_name(current_form)
 
-    # ===== メッセージ制限チェック =====
-    if not admin_flag and not can_bypass_message_limit(user_id):
-        # 変身コード入力中は制限チェックをスキップしてもいいかな、と判断
-        if not is_waiting_transform:
-            if is_over_message_limit(user_id):
-                await send_myu(
-                    message,
-                    user_id,
-                    f"{message.author.mention} ごめんね、今日はここまでにしておきましょう？\n"
-                    "また明日、ゆっくりお話ししましょ♪"
-                )
-                return
-            increment_message_usage(user_id)
-    
-    # ===== ミュリオンモード解除 =====
-    if content == "ミュリオンモード解除":
-        set_myurion_enabled(user_id, False)
+    # ===== 全体ミュリオンモード（メイン管理者限定） =====
+    if content == "全体ミュリオンモード":
+        if user_id != PRIMARY_ADMIN_ID:
+            await message.channel.send(
+                f"{message.author.mention} ごめんね、この操作はメイン管理者だけができるの。"
+            )
+            return
+
+        set_all_myurion_enabled(True)
 
         await message.channel.send(
-            f"{message.author.mention} ミュリオンモードを解除したわ。\n"
-            "これで通常言語に戻るわよ♪"
+            f"{message.author.mention} サーバーのみんなを **ミュリオンモード** にしたわ！\n"
+            "ミュミュミュウ〜♪"
         )
         return
+
+    # ===== 全体ミュリオン解除（メイン管理者限定） =====
+    if content == "全体ミュリオン解除":
+        if user_id != PRIMARY_ADMIN_ID:
+            await message.channel.send(
+                f"{message.author.mention} ごめんね、この操作はメイン管理者だけができるの。"
+            )
+            return
+
+        set_all_myurion_enabled(False)
+
+        await message.channel.send(
+            f"{message.author.mention} サーバーのみんなのミュリオンモードを解除したわ。\n"
+            "しばらくは普通の言葉でお話ししましょ♪"
+        )
+        return
+
 
 
     # ===== ミュリオンクイズ回答中 =====
