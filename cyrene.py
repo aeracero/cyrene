@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 import discord
 from dotenv import load_dotenv
 
-from lines import get_cyrene_reply, get_rps_line  # 好感度対応版: 第2引数にレベル
+from lines import get_cyrene_reply, get_rps_line, ARAFUE_TRIGGER_LINE  # 好感度対応版: 第2引数にレベル
 from forms import (
     get_user_form,
     set_user_form,
@@ -32,6 +32,17 @@ from lines_electra import get_reply as get_electra_reply
 from lines_cerydra import get_reply as get_cerydra_reply
 from lines_nanoka import get_reply as get_nanoka_reply
 from lines_danheng import get_reply as get_danheng_reply
+
+from special_unlocks import (
+    inc_janken_win,
+    get_janken_wins,
+    is_nanoka_unlocked,
+    set_nanoka_unlocked,
+    has_danheng_stage1,
+    mark_danheng_stage1,
+    is_danheng_unlocked,
+    set_danheng_unlocked,
+)
 
 
 # =====================
@@ -706,10 +717,18 @@ async def on_message(message: discord.Message):
         result = judge_janken(hand, bot_hand)
         flavor = get_rps_line(result)
 
+        # ★ 勝ったら勝利数カウント
+        if result == "win":
+            wins = inc_janken_win(user_id)
+        else:
+            wins = get_janken_wins(user_id)
+
         waiting_for_rps_choice.discard(user_id)
 
         await message.channel.send(
-            f"{message.author.mention} {name} は **{hand}**、あたしは **{bot_hand}** よ。\n{flavor}"
+            f"{message.author.mention} {name} は **{hand}**、あたしは **{bot_hand}** よ。\n"
+            f"{flavor}\n"
+            f"（これまでに {wins} 回、あたしに勝ってるわ♡）"
         )
 
         cfg = load_affection_config()
@@ -1422,21 +1441,53 @@ async def on_message(message: discord.Message):
         return
 
     # ===== 特別トリガー：開拓者フォーム =====
+    # =====================
+    # 変身コマンド：三月なのか / 長夜月
+    # =====================
     if "なのになってみて" in content:
+        if not is_nanoka_unlocked(user_id):
+            await message.channel.send(
+                f"{message.author.mention} ごめんね、その姿になるにはまだ条件が足りないみたい…。\n"
+                "まずは、あたしとのじゃんけんに何度も勝ってみて？ それからもう一度お願いしてくれる？"
+            )
+            return
+
         set_user_form(user_id, "nanoka")
-        form_name = get_form_display_name("nanoka")
         await message.channel.send(
-            f"{message.author.mention} 分かったわ、しばらくは **{form_name}** の気分で話してみるわ♪"
+            f"{message.author.mention} 今日から、あたしは「三月なのか / 長夜月」の姿でもあなたと一緒にいられるわ♪"
         )
         return
 
+
+    # =====================
+    # 変身コマンド：丹恒
+    # =====================
     if "たんたんになってみて" in content:
+        if not is_danheng_unlocked(user_id):
+            await message.channel.send(
+                f"{message.author.mention} その姿になるには、まだ鍵が足りないみたい…。\n"
+                "あの荒笛のことを、もっとよく知ってみて？ きっと道が開けるわ。"
+            )
+            return
+
         set_user_form(user_id, "danheng")
-        form_name = get_form_display_name("danheng")
         await message.channel.send(
-            f"{message.author.mention} いいわね、じゃあ今からは **{form_name}** を意識して話すわ♪"
+            f"{message.author.mention} …わかった。今日は彼の姿で、あなたと共に歩こう。\n"
+            "無茶だけはしないでね。あなたを守る役目は、ちゃんと果たしたいから。"
         )
         return
+
+    # =====================
+    # 通常応答 + 丹恒解放ステップ1チェック
+    # =====================
+    reply = get_cyrene_reply(content)
+
+    # ★ 荒笛ラインを引き当てたらフラグON（lines.py から import した定数で判定）
+    if ARAFUE_TRIGGER_LINE in reply:
+        mark_danheng_stage1(user_id)
+
+    await message.channel.send(f"{message.author.mention} {name}、{reply}")
+
 
     # ===== あだ名系 =====
     if content.startswith("あだ名登録"):
@@ -1478,14 +1529,25 @@ async def on_message(message: discord.Message):
 
     # ===== じゃんけん開始 =====
     if "じゃんけん" in content:
+        # 一発指定（例: じゃんけん グー）
         hand = parse_hand(content)
         if hand:
             bot_hand = random.choice(JANKEN_HANDS)
             result = judge_janken(hand, bot_hand)
             flavor = get_rps_line(result)
+
+            # ★ 勝利カウント
+            if result == "win":
+                wins = inc_janken_win(user_id)
+            else:
+                wins = get_janken_wins(user_id)
+
             await message.channel.send(
-                f"{message.author.mention} {name} は **{hand}**、あたしは **{bot_hand}** よ。\n{flavor}"
+                f"{message.author.mention} {name} は **{hand}**、あたしは **{bot_hand}** よ。\n"
+                f"{flavor}\n"
+                f"（これまでに {wins} 回、あたしに勝ってるわ♡）"
             )
+
             cfg = load_affection_config()
             xp_actions = cfg.get("xp_actions", {})
             if result == "win":
@@ -1512,6 +1574,55 @@ async def on_message(message: discord.Message):
         delta = int(cfg.get("xp_actions", {}).get("talk", 0))
         add_affection_xp(user_id, delta, reason="talk")
         return
+
+    # =====================
+    # 特殊解放トリガー：三月なのか
+    # じゃんけん勝利数 5回以上 ＋ 「記憶は流れ星を待ってる」
+    # =====================
+    if "記憶は流れ星を待ってる" in content or "記憶は流れ星を待っている" in content:
+        base_reply = get_cyrene_reply(content)
+
+        unlocked_now = False
+        wins = get_janken_wins(user_id)
+        if wins >= 5 and not is_nanoka_unlocked(user_id):
+            set_nanoka_unlocked(user_id, True)
+            unlocked_now = True
+
+        extra = ""
+        if unlocked_now:
+            extra = (
+                "\n\n三月なのかの解放条件を達成したわ！\n"
+                "『なのになってみて』って言ってみない？"
+            )
+
+        await message.channel.send(
+            f"{message.author.mention} {name}、{base_reply}{extra}"
+        )
+        return
+    
+        # =====================
+    # 特殊解放トリガー：丹恒
+    # ステップ1達成 + コード SkoPeo365
+    # =====================
+    if "SkoPeo365" in content:
+        if has_danheng_stage1(user_id) and not is_danheng_unlocked(user_id):
+            set_danheng_unlocked(user_id, True)
+            await message.channel.send(
+                f"{message.author.mention} 丹恒の解放条件を達成したわ！\n"
+                "『たんたんになってみて』って言ってみない？"
+            )
+        elif is_danheng_unlocked(user_id):
+            await message.channel.send(
+                f"{message.author.mention} そのコードはもう使われているわ。\n"
+                "いつでも『たんたんになってみて』って言えば、彼の姿になれるわよ♪"
+            )
+        else:
+            await message.channel.send(
+                f"{message.author.mention} ん…まだ何かが足りないみたい。\n"
+                "まずは『みんなについて教えて』ってお願いして、彼のことをちゃんと知ってみない？"
+            )
+        return
+
 
     # ===== 通常応答 =====
     xp, level_val = get_user_affection(user_id)
