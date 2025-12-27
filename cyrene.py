@@ -1150,8 +1150,8 @@ def get_rps_prompt_for_form(form_key: str, name: str) -> str:
 def get_rps_flavor_for_form(form_key: str, result: str, name: str) -> str:
     """
     勝ち / 負け / あいこ のリアクションをフォーム別に出し分ける。
+    未定義のフォームは従来通り get_rps_line(result) を使う。
     """
-    # ヒアシンシア
     if form_key == "hyacinthia":
         if result == "win":
             return "ふふ、お見事です〜。あなたの勝ちですね。もう一回、いきますか？"
@@ -1160,36 +1160,31 @@ def get_rps_flavor_for_form(form_key: str, result: str, name: str) -> str:
         else:  # draw
             return "おや、あいこですね〜。もう一度、やってみましょうか。"
 
-    # ケリュドラ
     if form_key == "cerydra":
-        import random
+        # ケリュドラ用じゃんけんセリフ（{nickname}→name に差し替え）
         if result == "win":
-            lines = [
-                "どうやら勝利の女神は今回限りは僕に微笑まなかったようだな。だが次こそは勝ってみせるぞ。",
-                "中々運が良いではないか、{nickname}卿。今なら駿足卿との賭けにも勝てるのではないか？",
-                "…運だけというのも面白くないだろう？ どうだ、{nickname}卿。チェスに興味は？",
+            candidates = [
+                f"どうやら勝利の女神は今回限りは僕に微笑まなかったようだな。だが次こそは勝ってみせるぞ。",
+                f"中々運が良いではないか{name}卿。今なら駿足卿との賭けにも勝てるのではないか？",
+                f"…運だけというのも面白くないだろう？どうだ{name}卿、チェスに興味は？",
             ]
         elif result == "lose":
-            lines = [
-                "どうした、{nickname}卿？ まさか僕が運命卿の力を借りたとでも思っているのか？",
+            candidates = [
+                f"どうした{name}卿？まさか僕が運命卿の力を借りたとでも思っているのか？",
                 "やはり勝利の女神は僕に微笑んでいるようだ。過去も今も、未来さえも変わらずな。",
-                "どうだ、{nickname}卿。金織卿ですら、この僕には一回も勝てなかったんだぞ？",
+                f"どうだ{name}卿。金織卿ですら、この僕には一回も勝てなかったんだぞ？",
             ]
         else:  # draw
-            lines = [
+            candidates = [
                 "ほう…白と黒だけでは面白くないが、決着がつかないというのももどかしいものだ。",
-                "僕と同じ考えを持つとは賢いではないか、{nickname}卿。",
+                f"僕と同じ考えを持つとは賢いではないか{name}卿。",
                 "勝敗がつかないか…なら次の戦いに備えるまでだ。",
             ]
-
-        return random.choice(lines).replace("{nickname}", name)
-
-    # ここに他キャラ用の分岐を増やせる
-    # if form_key == "aglaia":
-    #     ...
+        return random.choice(candidates)
 
     # デフォルト（キュレネのじゃんけん用セリフ）
     return get_rps_line(result)
+
 
 
 
@@ -1202,24 +1197,24 @@ def format_rps_result_message(
     flavor: str,
     wins: int,
 ) -> str:
-    """
-    結果表示の文面をフォームごとに調整。
-    """
-    # デフォルトはキュレネの「あたし」
+    # デフォルトはキュレネ
     self_pronoun = "あたし"
+    tail = "わ♡"  # 語尾
 
     if form_key == "hyacinthia":
         self_pronoun = "わたし"
+        tail = "よ♪"
 
-    # 他キャラもここで好きに変えられる
-    # if form_key == "danheng":
-    #     self_pronoun = "俺"
+    if form_key == "cerydra":
+        self_pronoun = "僕"
+        tail = "だな。"
 
     return (
-        f"{name} は **{user_hand}**、{self_pronoun}は **{bot_hand}** ね。\n"
+        f"{name} は **{user_hand}**、{self_pronoun}は **{bot_hand}** だ。\n"
         f"{flavor}\n"
-        f"（これまでに {wins} 回、{self_pronoun}に勝ってるわ♡）"
+        f"（これまでに {wins} 回、{self_pronoun}に勝っている{tail}）"
     )
+
 
 
 
@@ -3054,7 +3049,7 @@ async def on_message(message: discord.Message):
 
         # 手をあとで選ぶパターン
         waiting_for_rps_choice.add(user_id)
-        prompt = get_rps_prompt_for_form(current_form,name)
+        prompt = get_rps_prompt_for_form(current_form, name)
         await send_myu(
             message,
             user_id,
