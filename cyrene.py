@@ -1,4 +1,5 @@
 # cyrene.py
+from email.mime import message
 import os
 import re
 import json
@@ -1256,6 +1257,17 @@ async def on_message(message: discord.Message):
                 )
                 return
             increment_message_usage(user_id)
+    
+    # ===== ミュリオンモード解除 =====
+    if content == "ミュリオンモード解除":
+        set_myurion_enabled(user_id, False)
+
+        await message.channel.send(
+            f"{message.author.mention} ミュリオンモードを解除したわ。\n"
+            "これで通常言語に戻るわよ♪"
+        )
+        return
+
 
     # ===== ミュリオンクイズ回答中 =====
     if is_myurion_quiz:
