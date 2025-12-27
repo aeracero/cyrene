@@ -532,6 +532,41 @@ def judge_janken(user_hand: str, bot_hand: str) -> str:
     )
     return "win" if win else "lose"
 
+async def handle_danheng_special_code(message: discord.Message, user_id: int, content: str):
+    """
+    丹恒の特殊解放コード（SkoPeo365 / skepeo365 系）を処理するハンドラ。
+    - 荒笛ステップ1達成済みなら、丹恒を解放してメッセージ
+    - 既に解放済みなら、その旨を案内
+    - 未達成なら、「みんなについて教えて」を促す
+    - 変身コード入力待ち状態だった場合は一旦解除
+    """
+    # 変身コード入力待ちだったら解除
+    waiting_for_transform_code.discard(user_id)
+
+    # まだ special_unlocks のステップ1を踏んでいないかどうか判定
+    if has_danheng_stage1(user_id) and not is_danheng_unlocked(user_id):
+        # ★ ここで special_unlocks.py 経由で解放状態を書き込み（/data 側にも保存）
+        set_danheng_unlocked(user_id, True)
+        await message.channel.send(
+            f"{message.author.mention} 丹恒の解放条件を達成したわ！\n"
+            "『たんたんになってみて』って言ってみない？"
+        )
+        return
+
+    if is_danheng_unlocked(user_id):
+        # すでに解放済み
+        await message.channel.send(
+            f"{message.author.mention} そのコードはもう使われているわ。\n"
+            "いつでも『たんたんになってみて』って言えば、彼の姿になれるわよ♪"
+        )
+        return
+
+    # まだステップ1を踏んでいない場合
+    await message.channel.send(
+        f"{message.author.mention} ん…まだ何かが足りないみたい。\n"
+        "まずは『みんなについて教えて』ってお願いして、彼のことをちゃんと知ってみない？"
+    )
+
 
 def generate_reply_for_form(form_key: str, message: str, affection_level: int) -> str:
     """
@@ -621,7 +656,15 @@ async def on_message(message: discord.Message):
                 return
             increment_message_usage(user_id)
 
-    # ===== 自分の変身コード入力待ち =====
+    # =====================
+    # 特殊解放トリガー：丹恒（コード SkoPeo365 / skepeo365）
+    # ※ スペース・大文字小文字をゆるく吸収
+    # =====================
+    normalized = re.sub(r"\s+", "", content).lower()
+    if "skopeo365" in normalized or "skepeo365" in normalized:
+        await handle_danheng_special_code(message, user_id, content)
+        return
+
     # ===== 自分の変身コード入力待ち =====
     if user_id in waiting_for_transform_code:
         text = content if content else message.content.strip()
@@ -683,7 +726,6 @@ async def on_message(message: discord.Message):
             f"{message.author.mention} 分かったわ、今からあたしは **{form_name}** として振る舞うわ♪"
         )
         return
-
 
     # ===== 親衛隊レベル数値入力待ち =====
     if user_id in waiting_for_guardian_level:
@@ -1041,7 +1083,9 @@ async def on_message(message: discord.Message):
                 "- `メッセージ制限確認` … 制限が設定されているユーザー一覧\n"
                 "- `メッセージ制限設定 @ユーザー` … その人の1日あたり上限回数を設定\n"
                 "- `メッセージ制限削除 @ユーザー` … その人の制限を解除\n"
-                "- `データ管理終了` … モード終了"
+                "- `メッセージ制限bypass編集`（メイン管理者専用）\n"
+                "- `変身管理`\n"
+                "- `データ管理終了`"
             )
             return
 
@@ -1102,7 +1146,7 @@ async def on_message(message: discord.Message):
             )
             return
 
-        # メッセージ制限bypass系（前回実装ずみ）
+        # メッセージ制限bypass系
         if "メッセージ制限bypass編集" in content:
             if user_id != PRIMARY_ADMIN_ID:
                 await message.channel.send(
@@ -1287,7 +1331,6 @@ async def on_message(message: discord.Message):
             )
             return
 
-
         # 変身一覧確認
         if content == "変身一覧確認":
             forms = get_all_forms()
@@ -1365,8 +1408,15 @@ async def on_message(message: discord.Message):
                     "もう一度確認して教えてくれる？"
                 )
                 return
-                # 変身解放状況確認（メイン管理者専用）
-        
+
+            set_all_forms(form_key)
+            form_name = get_form_display_name(form_key)
+            await message.channel.send(
+                f"{message.author.mention} 登録されているみんなのフォームを、全部 **{form_name}** に揃えておいたわ♪"
+            )
+            return
+
+        # 変身解放状況確認（メイン管理者専用）
         if content == "変身解放状況確認":
             if user_id != PRIMARY_ADMIN_ID:
                 await message.channel.send(
@@ -1424,14 +1474,6 @@ async def on_message(message: discord.Message):
             await message.channel.send("\n".join(lines))
             return
 
-
-            set_all_forms(form_key)
-            form_name = get_form_display_name(form_key)
-            await message.channel.send(
-                f"{message.author.mention} 登録されているみんなのフォームを、全部 **{form_name}** に揃えておいたわ♪"
-            )
-            return
-
         # 管理者編集メニュー（既存）
         if "管理者編集" in content:
             await message.channel.send(
@@ -1467,6 +1509,7 @@ async def on_message(message: discord.Message):
             "- `メッセージ制限編集`\n"
             "- `メッセージ制限bypass編集`（メイン管理者専用）\n"
             "- `変身管理`\n"
+            "- `変身解放状況確認`（メイン管理者専用）\n"
             "- `データ管理終了`\n"
             "あたりね。"
         )
@@ -1490,6 +1533,7 @@ async def on_message(message: discord.Message):
             "- `メッセージ制限編集`\n"
             "- `メッセージ制限bypass編集`（メイン管理者専用）\n"
             "- `変身管理`\n"
+            "- `変身解放状況確認`（メイン管理者専用）\n"
             "- `データ管理終了`"
         )
         return
@@ -1544,7 +1588,6 @@ async def on_message(message: discord.Message):
         )
         return
 
-    # ===== 特別トリガー：開拓者フォーム =====
     # =====================
     # 変身コマンド：三月なのか / 長夜月
     # =====================
@@ -1561,7 +1604,6 @@ async def on_message(message: discord.Message):
             f"{message.author.mention} 今日から、あたしは「三月なのか / 長夜月」の姿でもあなたと一緒にいられるわ♪"
         )
         return
-
 
     # =====================
     # 変身コマンド：丹恒
@@ -1669,7 +1711,7 @@ async def on_message(message: discord.Message):
 
     # =====================
     # 特殊解放トリガー：三月なのか
-    # じゃんけん勝利数 5回以上 ＋ 「記憶は流れ星を待ってる」
+    # じゃんけん勝利数 30回以上 ＋ 「記憶は流れ星を待ってる」
     # =====================
     if "記憶は流れ星を待ってる" in content or "記憶は流れ星を待っている" in content:
         base_reply = get_cyrene_reply(content)
@@ -1691,43 +1733,6 @@ async def on_message(message: discord.Message):
             f"{message.author.mention} {name}、{base_reply}{extra}"
         )
         return
-    
-        # =====================
-    # 特殊解放トリガー：丹恒
-    # ステップ1達成 + コード SkoPeo365
-    # =====================
-    # =====================
-    # 特殊解放トリガー：丹恒（コード SkoPeo365）
-    # =====================
-    if "SkoPeo365" in content:
-        # もし変身コード入力待ち状態だったら、一旦解除しておく
-        waiting_for_transform_code.discard(user_id)
-
-        if has_danheng_stage1(user_id) and not is_danheng_unlocked(user_id):
-            # ★ ここで /data/special_unlocks.json に「解放済み」を保存
-            set_danheng_unlocked(user_id, True)
-            await message.channel.send(
-                f"{message.author.mention} 丹恒の解放条件を達成したわ！\n"
-                "『たんたんになってみて』って言ってみない？"
-            )
-
-        elif is_danheng_unlocked(user_id):
-            # すでに解放済みの場合
-            await message.channel.send(
-                f"{message.author.mention} そのコードはもう使われているわ。\n"
-                "いつでも『たんたんになってみて』って言えば、彼の姿になれるわよ♪"
-            )
-
-        else:
-            # 荒笛ラインをまだ引いていない場合
-            await message.channel.send(
-                f"{message.author.mention} ん…まだ何かが足りないみたい。\n"
-                "まずは『みんなについて教えて』ってお願いして、彼のことをちゃんと知ってみない？"
-            )
-
-        return
-
-
 
     # ===== 通常応答 =====
     xp, level_val = get_user_affection(user_id)
@@ -1746,6 +1751,7 @@ async def on_message(message: discord.Message):
     cfg = load_affection_config()
     delta = int(cfg.get("xp_actions", {}).get("talk", 0))
     add_affection_xp(user_id, delta, reason="talk")
+
 
 
 # 実行
