@@ -25,6 +25,8 @@ FORM_DISPLAY_NAMES = {
     "cerydra": "ケリュドラ",
     "nanoka": "三月なのか / 長夜月",
     "danheng": "丹恒",
+    "furina": "フリーナ",
+    "momo": "モモ",
 }
 
 # 変身コード → フォームキー
@@ -40,7 +42,8 @@ FORM_CODE_MAP = {
     "neikos496": "phainon_kasreina",  # ファイノン・カスライナ
     "aporia432": "electra",           # ヘレクトラ
     "hubris504": "cerydra",           # ケリュドラ
-    "philia093": "cyrene",            #キュレネ
+    "philia093": "cyrene",            # キュレネ
+    "グロシ":"furina",               # フリーナ
     # 必要ならここに追加
 }
 
@@ -61,6 +64,8 @@ FORM_NAME_ALIASES = {
     "なのか": "nanoka",
     "長夜月": "nanoka",
     "丹恒": "danheng",
+    "フリーナ": "furina",
+    "モモ": "momo",
 }
 
 VALID_FORM_KEYS = set(FORM_DISPLAY_NAMES.keys())

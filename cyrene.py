@@ -32,6 +32,8 @@ from lines_electra import get_reply as get_electra_reply
 from lines_cerydra import get_reply as get_cerydra_reply
 from lines_nanoka import get_reply as get_nanoka_reply
 from lines_danheng import get_reply as get_danheng_reply
+from lines_furina import get_reply as get_furina_reply
+from lines_momo import get_reply as get_momo_reply
 
 from special_unlocks import (
     inc_janken_win,
@@ -314,11 +316,240 @@ def get_user_affection(user_id: int):
     level = get_level_from_xp(xp, cfg)
     return xp, level
 
+def get_cyrene_affection_multiplier(user_id: int) -> float:
+    """
+    ガチャで引いたキュレネの枚数に応じて好感度倍率を返す。
+    1体ごとに +0.2倍、最大 2.4倍。
+    （0枚 → 1.0, 1枚 → 1.2, ..., 7枚(=6凸) 以上 → 2.4）
+    """
+    try:
+        state = get_gacha_state(user_id)
+    except Exception:
+        return 1.0
+
+    copies = int(state.get("cyrene_copies", 0))
+    mult = 1.0 + 0.2 * copies
+    if mult > 2.4:
+        mult = 2.4
+    return mult
+
+import math  # ファイルの先頭 import 群にこれが無ければ追加してOK
+
+
+def calc_main_5star_rate(pity_5: int) -> float:
+    """
+    メイン星5（キュレネ or すり抜け）確率。
+    基本 0.06% (=0.0006)、75連付近から徐々に上昇、90連目で確定。
+    pity_5 は「最後にメイン星5を引いてからの回数」。
+    """
+    base = 0.0006  # 0.06%
+    # 0〜73: 固定
+    if pity_5 <= 73:
+        return base
+    # 74〜88: 緩やかに上昇
+    if pity_5 < 89:
+        # 74 〜 88 の 15ステップで base → 1.0 に近づける
+        step = pity_5 - 73  # 1〜15
+        max_step = 15
+        return min(1.0, base + (1.0 - base) * (step / max_step))
+    # 89 以上（=90連目以降）は確定
+    return 1.0
+
+
+def format_gacha_rates() -> str:
+    """ガチャ排出確率説明用テキスト"""
+    lines = [
+        "【ガチャ排出率（概略）】",
+        "・メイン星5（キュレネ or すり抜け）: 基本 0.06%（75連付近から徐々に確率上昇、90連で確定）",
+        "・星4: 基本 24%（10連ごとに少なくとも1回は星4以上が確定）",
+        "・星3: その他",
+        "",
+        "・特別枠 星5『失われた紡がれた物語のページその１（??? その1）』: 常時 0.06%（天井なし・メイン星5の天井には影響しない）",
+        "",
+        "【キュレネのピックアップ】",
+        "・メイン星5取得時、50%でキュレネ、50%ですり抜け。",
+        "・一度すり抜けたあとは、次のメイン星5がキュレネ確定（確定天井）。",
+        "",
+        "【キュレネの凸と好感度】",
+        "・ガチャでキュレネを1体引くごとに、好感度取得XP倍率が +0.2倍。",
+        "・倍率は最大 2.4倍まで上昇するわ♪",
+    ]
+    return "\n".join(lines)
+
+
+def format_gacha_status(user_id: int) -> str:
+    """ガチャメニュー表示用のステータス文字列"""
+    state = get_gacha_state(user_id)
+    stones = int(state.get("stones", 0))
+    pity_5 = int(state.get("pity_5", 0))
+    pity_4 = int(state.get("pity_4", 0))
+    guaranteed = bool(state.get("guaranteed_cyrene", False))
+    cyrene_copies = int(state.get("cyrene_copies", 0))
+    page1_count = int(state.get("page1_count", 0))
+    offbanner_tickets = int(state.get("offbanner_tickets", 0))
+    mult = get_cyrene_affection_multiplier(user_id)
+
+    lines = [
+        "【キュレネガチャメニュー】",
+        f"・現在の所持石: {stones} 個",
+        f"・キュレネの所持枚数: {cyrene_copies} 枚（好感度倍率: x{mult:.1f}）",
+        f"・失われた紡がれた物語のページその１(??? その1): {page1_count} 枚",
+        f"・すり抜け10連交換チケット: {offbanner_tickets} 枚",
+        "",
+        f"・メイン星5天井カウント: {pity_5} 連",
+        f"・星4天井カウント: {pity_4} 連",
+        f"・次のメイン星5: {'キュレネ確定' if guaranteed else '50%でキュレネ'}",
+        "",
+        "【操作方法】",
+        "・`単発ガチャ` … 石160個で1回",
+        "・`１０連ガチャ` または `10連ガチャ` … 石1600個で10回",
+        "・`チケット１０連` … すり抜けチケット1枚で10連（石消費なし）",
+        "・`ガチャ説明` … 排出率や仕様の詳細を見る",
+    ]
+    return "\n".join(lines)
+
+def perform_gacha_pulls(user_id: int, num_pulls: int, use_ticket: bool = False) -> tuple[bool, str]:
+    """
+    実際にガチャを num_pulls 回まわす。
+    use_ticket=True のときは石を消費せず、すり抜けチケットを1枚消費する10連専用。
+    戻り値: (成功したか, メッセージ文字列)
+    """
+    if num_pulls <= 0:
+        return False, "ガチャ回数が変みたい…もう一度お願いして？"
+
+    state = get_gacha_state(user_id)
+
+    # コストチェック
+    if use_ticket:
+        if num_pulls != 10:
+            return False, "チケットは10連専用みたい。"
+        tickets = int(state.get("offbanner_tickets", 0))
+        if tickets <= 0:
+            return False, "すり抜け交換チケットが足りないみたい…。"
+        state["offbanner_tickets"] = tickets - 1
+        cost_str = "（すり抜けチケット1枚消費）"
+    else:
+        cost = 160 * num_pulls if num_pulls == 1 else 1600
+        stones = int(state.get("stones", 0))
+        if stones < cost:
+            return False, f"石が足りないみたい…。必要: {cost}個 / 所持: {stones}個"
+        state["stones"] = stones - cost
+        cost_str = f"（石 {cost} 個消費）"
+
+    pity_5 = int(state.get("pity_5", 0))
+    pity_4 = int(state.get("pity_4", 0))
+    guaranteed = bool(state.get("guaranteed_cyrene", False))
+
+    results = []
+    page_hits = 0
+    cyrene_hit = 0
+    offbanner_hit = 0
+
+    for i in range(num_pulls):
+        # 特別枠：ページその１（天井非対象・確率固定 0.06%）
+        page_got = False
+        if random.random() < 0.0006:  # 0.06%
+            state["page1_count"] = int(state.get("page1_count", 0)) + 1
+            page_hits += 1
+            page_got = True
+
+        # メイン星5 抽選
+        main5_rate = calc_main_5star_rate(pity_5)
+        got_main5 = random.random() < main5_rate
+
+        if got_main5:
+            pity_5 = 0
+            pity_4 = 0
+
+            # キュレネ or すり抜け判定
+            if guaranteed or (random.random() < 0.5):
+                # キュレネ
+                state["cyrene_copies"] = int(state.get("cyrene_copies", 0)) + 1
+                guaranteed = False
+                cyrene_hit += 1
+                pull_text = "★5【キュレネ】"
+            else:
+                # すり抜け → チケット付与
+                state["offbanner_tickets"] = int(state.get("offbanner_tickets", 0)) + 1
+                guaranteed = True
+                offbanner_hit += 1
+                pull_text = "★5【すり抜け（10連チケット獲得）】"
+
+            if page_got:
+                pull_text += " ＋ ★5【??? その1】（失われた紡がれた物語のページその１）"
+        else:
+            # 星5を引けなかった場合 → 星4 or 星3
+            pity_5 += 1
+            # 星4判定（10連天井）
+            got_4 = False
+            if pity_4 >= 9:
+                got_4 = True
+            else:
+                if random.random() < 0.24:  # 24%
+                    got_4 = True
+
+            if got_4:
+                pity_4 = 0
+                pull_text = "★4"
+            else:
+                pity_4 += 1
+                pull_text = "★3"
+
+            if page_got:
+                # メイン結果は★3/★4のまま、ページは「おまけ」として表示
+                pull_text += " ＋ ★5【??? その1】（失われた紡がれた物語のページその１）"
+
+        results.append(pull_text)
+
+    # 状態を保存
+    state["pity_5"] = pity_5
+    state["pity_4"] = pity_4
+    state["guaranteed_cyrene"] = guaranteed
+    save_gacha_state(user_id, state)
+
+    # メッセージ整形
+    header = f"{cost_str}\n今回の結果は……\n"
+    body_lines = []
+    for idx, r in enumerate(results, start=1):
+        body_lines.append(f"{idx}回目: {r}")
+
+    summary = []
+    if cyrene_hit:
+        summary.append(f"★5キュレネ: {cyrene_hit} 枚")
+    if offbanner_hit:
+        summary.append(f"★5すり抜け: {offbanner_hit} 回（チケット {offbanner_hit} 枚獲得）")
+    if page_hits:
+        summary.append(f"★5ページ(??? その1): {page_hits} 枚")
+
+    if not summary:
+        summary_text = "今回は★5は来なかったみたい…。でも、次はもっといい結果になるかもね？"
+    else:
+        summary_text = " / ".join(summary)
+
+    footer = (
+        "\n\n" + summary_text +
+        f"\n\n現在の石: {state['stones']} 個 / すり抜けチケット: {state['offbanner_tickets']} 枚"
+    )
+
+    return True, header + "\n".join(body_lines) + footer
+
+
 
 def add_affection_xp(user_id: int, delta: int, reason: str = ""):
-    """好感度XPを加算（マイナスもOK・0以下は0にクリップ）"""
+    """好感度XPを加算（マイナスもOK・0以下は0にクリップ）
+    キュレネ凸数に応じて、プラスのXPのみ倍率補正をかける。
+    """
     if delta == 0:
         return
+
+    # ★ キュレネ凸による好感度倍率
+    if delta > 0:
+        mult = get_cyrene_affection_multiplier(user_id)
+        if mult != 1.0:
+            delta = int(delta * mult)
+            if delta < 1:
+                delta = 1
+
     data = load_affection_data()
     info = data.get(str(user_id), {})
     xp = int(info.get("xp", 0))
@@ -326,6 +557,7 @@ def add_affection_xp(user_id: int, delta: int, reason: str = ""):
     info["xp"] = xp
     data[str(user_id)] = info
     save_affection_data(data)
+
 
 # =====================
 # メッセージ制限（回数/日）
@@ -487,6 +719,88 @@ def can_bypass_message_limit(user_id: int) -> bool:
     return str(user_id) in bypass_set
 
 # =====================
+# ガチャ用データ保存（永続: /data/gacha.json）
+# =====================
+GACHA_FILE = DATA_DIR / "gacha.json"
+
+
+def load_gacha_data() -> dict:
+    """ガチャ全体データを読み込み {user_id(str): state(dict)}"""
+    if not GACHA_FILE.exists():
+        return {}
+    try:
+        data = json.loads(GACHA_FILE.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {}
+        return data
+    except Exception:
+        return {}
+
+
+def save_gacha_data(data: dict):
+    """ガチャ全体データを保存"""
+    GACHA_FILE.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+
+
+def get_gacha_state(user_id: int) -> dict:
+    """
+    ユーザーごとのガチャ状態を取得/初期化
+    {
+    "stones": int,
+    "pity_5": int,              # メイン星5の天井カウント
+    "pity_4": int,              # 星4天井カウント
+    "guaranteed_cyrene": bool,  # すり抜け後のキュレネ確定フラグ
+    "cyrene_copies": int,       # ガチャから引いたキュレネの枚数
+    "page1_count": int,         # 失われたページその1 の枚数
+    "offbanner_tickets": int,   # すり抜け10連交換チケット枚数
+    "last_daily": str | None,   # "YYYY-MM-DD"
+    }
+    """
+    data = load_gacha_data()
+    state = data.get(str(user_id))
+    if not isinstance(state, dict):
+        state = {
+            "stones": 0,
+            "pity_5": 0,
+            "pity_4": 0,
+            "guaranteed_cyrene": False,
+            "cyrene_copies": 0,
+            "page1_count": 0,
+            "offbanner_tickets": 0,
+            "last_daily": None,
+        }
+        data[str(user_id)] = state
+        save_gacha_data(data)
+    return state
+
+def grant_daily_stones(user_id: int, amount: int = 16000) -> tuple[bool, int, str]:
+    """
+    デイリー石を付与。
+    戻り値: (付与できたか, 現在の石, メッセージ用理由)
+    """
+    state = get_gacha_state(user_id)
+    today = today_str()
+    last = state.get("last_daily")
+
+    if last == today:
+        # すでに受け取り済み
+        return False, state.get("stones", 0), "今日はもうデイリーを受け取っているみたい。"
+
+    state["stones"] = int(state.get("stones", 0)) + amount
+    state["last_daily"] = today
+    save_gacha_state(user_id, state)
+    return True, state["stones"], f"今日のデイリー報酬として {amount} 個の石を用意しておいたわ♪"
+
+
+def save_gacha_state(user_id: int, state: dict):
+    data = load_gacha_data()
+    data[str(user_id)] = state
+    save_gacha_data(data)
+
+# =====================
 # 会話状態管理
 # =====================
 waiting_for_nickname = set()
@@ -620,6 +934,8 @@ def generate_reply_for_form(form_key: str, message: str, affection_level: int) -
         return get_nanoka_reply(message, affection_level)
     if form_key == "danheng":
         return get_danheng_reply(message, affection_level)
+    if form_key == "furina":
+        return get_furina_reply(message, affection_level)
 
     # キュレネ（デフォルト）
     try:
@@ -1752,6 +2068,60 @@ async def on_message(message: discord.Message):
         await message.channel.send(
             f"{message.author.mention} …わかった。今日は彼の姿で、あなたと共に歩こう。\n"
             "無茶だけはしないでね。あなたを守る役目は、ちゃんと果たしたいから。"
+        )
+        return
+
+    # ===== デイリー石受け取り =====
+    if content in ["デイリーを受け取りたい", "デイリー受け取りたい", "デイリー受け取り"]:
+        ok, stones, reason = grant_daily_stones(user_id)
+        if ok:
+            await message.channel.send(
+                f"{message.author.mention} {reason}\n"
+                f"今の所持石は **{stones} 個** になったわ♪"
+            )
+        else:
+            await message.channel.send(
+                f"{message.author.mention} {reason}\n"
+                f"今の所持石は **{stones} 個** のままよ。"
+            )
+        return
+
+    # ===== ガチャメニュー表示 =====
+    if content in ["ガチャをしたい", "ガチャしたい", "ガチャメニュー"]:
+        status_text = format_gacha_status(user_id)
+        await message.channel.send(
+            f"{message.author.mention} {status_text}"
+        )
+        return
+
+    # ===== ガチャ説明（排出率） =====
+    if content in ["ガチャ説明", "ガチャ排出確率", "ガチャ確率"]:
+        await message.channel.send(
+            f"{message.author.mention} {format_gacha_rates()}"
+        )
+        return
+
+    # ===== 単発ガチャ =====
+    if content in ["単発ガチャ", "単発", "1連ガチャ", "１連ガチャ"]:
+        ok, text = perform_gacha_pulls(user_id, 1, use_ticket=False)
+        await message.channel.send(
+            f"{message.author.mention} {text}"
+        )
+        return
+
+    # ===== 10連ガチャ（石消費） =====
+    if content in ["１０連ガチャ", "10連ガチャ", "10連", "１０連"]:
+        ok, text = perform_gacha_pulls(user_id, 10, use_ticket=False)
+        await message.channel.send(
+            f"{message.author.mention} {text}"
+        )
+        return
+
+    # ===== 10連ガチャ（すり抜けチケット使用） =====
+    if content in ["チケット１０連", "チケット10連", "すり抜け１０連", "すり抜け10連"]:
+        ok, text = perform_gacha_pulls(user_id, 10, use_ticket=True)
+        await message.channel.send(
+            f"{message.author.mention} {text}"
         )
         return
 
