@@ -48,6 +48,11 @@ from special_unlocks import (
     set_danheng_unlocked,
 )
 
+from lines_hyacinthia import (
+    get_reply as get_hyacinthia_reply,
+    get_nickname_line as get_hyacinthia_nickname_line
+)
+
 from lines_cerydra import (
     get_reply as get_cerydra_reply,
 )
@@ -1301,8 +1306,6 @@ def generate_reply_for_form(
     """
     
     # ★ キャラクター対応表
-    # key: forms.py の form_key
-    # value: lines_〇〇.py から import した get_reply 関数
     form_handlers = {
         "aglaia": get_aglaia_reply,
         "trisbeas": get_trisbeas_reply,
@@ -1313,7 +1316,7 @@ def generate_reply_for_form(
         "castoris": get_castoris_reply,
         "phainon_kasreina": get_phainon_kasreina_reply,
         "electra": get_electra_reply,
-        "cerydra": get_cerydra_reply,  # ここを修正：引数を統一化してバグ解消
+        "cerydra": get_cerydra_reply,
         "nanoka": get_nanoka_reply,
         "danheng": get_danheng_reply,
         "furina": get_furina_reply,
@@ -1335,15 +1338,40 @@ def generate_reply_for_form(
 
     # 2. あだ名置き換え処理（全キャラ共通）
     if name:
-        # 「あだ名」 形式
         base = base.replace("「あだ名」", f"「{name}」")
-        # あだ名 だけ書いてあるパターン
         base = base.replace("あだ名", name)
-        # {nickname} 形式
         base = base.replace("{nickname}", name)
 
     return base
 
+
+# =========================================================
+# ★ ここが新しく追加される関数です（あだ名セリフ切り替え用）
+# =========================================================
+def get_nickname_message_for_form(form_key: str, action: str, name: str = "") -> str:
+    """
+    action: "ask" (登録開始時) / "confirm" (登録完了時)
+    name: confirmのときに使う新しいあだ名
+    """
+    # 1. ヒアシンシアの場合
+    if form_key == "hyacinthia":
+        try:
+            line = get_hyacinthia_nickname_line(action)
+            return line.replace("{name}", name)
+        except NameError:
+            # インポート忘れなどの保険
+            return "（セリフ取得エラー）"
+
+    # 2. 今後キャラを追加する場合 (例)
+    # if form_key == "aglaia":
+    #     return get_aglaia_nickname_line(action).replace("{name}", name)
+
+    # 3. デフォルト (キュレネ)
+    if action == "ask":
+        return "あたし、どう呼べばいいの？"
+    elif action == "confirm":
+        return f"ふふ…これからは「{name}」って呼ぶわね♪"
+    return ""
 
 
 # =====================
@@ -2949,24 +2977,61 @@ async def on_message(message: discord.Message):
         return
 
     # ===== あだ名系 =====
+# ===== あだ名系 (on_messageの下の方) =====
     if content.startswith("あだ名登録"):
         new_name = content.replace("あだ名登録", "", 1).strip()
         if not new_name:
             waiting_for_nickname.add(user_id)
+            
+            # ★ 変更: キャラごとのセリフで聞く
+            msg_text = get_nickname_message_for_form(current_form, "ask")
+            
             await send_myu(
                 message,
                 user_id,
-                f"{message.author.mention} あたし、どう呼べばいいの？"
+                f"{message.author.mention} {msg_text}"
             )
             return
+        
         set_nickname(user_id, new_name)
+        
+        # ★ 変更: キャラごとのセリフで確認
+        msg_text = get_nickname_message_for_form(current_form, "confirm", new_name)
+        
         await send_myu(
             message,
             user_id,
-            f"{message.author.mention} ふふ…これからは「{new_name}」って呼ぶわね♪"
+            f"{message.author.mention} {msg_text}"
         )
         return
 
+    # (中略: あだ名変更・あだ名削除 はそのままでOK)
+
+    # ===== あだ名入力待ち =====
+    if user_id in waiting_for_nickname:
+        new_name = content if content else message.content.strip()
+        if not new_name:
+            # 入力が空のときの催促も変えたければ get_nickname_message_for_form(current_form, "ask") を使う
+            await send_myu(
+                message,
+                user_id,
+                f"{message.author.mention} もう一度、呼び名を教えて？"
+            )
+            return
+        set_nickname(user_id, new_name)
+        waiting_for_nickname.discard(user_id)
+        
+        # ★ 変更: キャラごとのセリフで確認
+        msg_text = get_nickname_message_for_form(current_form, "confirm", new_name)
+
+        await send_myu(
+            message,
+            user_id,
+            f"{message.author.mention} {msg_text}"
+        )
+        return
+    
+    # ===== あだ名変更 =====
     if content.startswith("あだ名変更"):
         new_name = content.replace("あだ名変更", "", 1).strip()
         if not new_name:
