@@ -48,6 +48,12 @@ from special_unlocks import (
     set_danheng_unlocked,
 )
 
+from lines_cerydra import (
+    get_reply as get_cerydra_reply,
+    get_rps_start_line as get_cerydra_rps_start_line,
+    get_rps_result_line as get_cerydra_rps_result_line,
+)
+
 
 # =====================
 # 環境変数
@@ -1113,14 +1119,24 @@ def parse_hand(text: str):
         return "パー"
     return None
 
-def get_rps_prompt_for_form(form_key: str) -> str:
+def get_rps_prompt_for_form(form_key: str, name: str) -> str:
     """
     フォームごとの「じゃんけんしよ〜」の誘い文句。
     必要に応じて他キャラもここに追加してOK。
     """
+    # ヒアシンシア
     if form_key == "hyacinthia":
-        # ヒアシンシア風
         return "いいですよ〜。では、グー / チョキ / パー、どれにするか選んでください。"
+
+    # ケリュドラ
+    if form_key == "cerydra":
+        base_lines = [
+            "じゃんけんか。{nickname}卿も童心に帰ることがあるのだな。良いだろう、一局付き合おう。",
+            "暇つぶしには悪くないな。{nickname}卿、グー / チョキ / パー、好きな手を選ぶといい。",
+        ]
+        # {nickname} → 実際の呼び名(name) に置き換え
+        import random
+        return random.choice(base_lines).replace("{nickname}", name)
 
     # ここに他キャラ用を足していけばOK
     # if form_key == "aglaia":
@@ -1130,11 +1146,12 @@ def get_rps_prompt_for_form(form_key: str) -> str:
     return "じゃんけんをしましょう♪ グー / チョキ / パー、どれにするかしら？"
 
 
-def get_rps_flavor_for_form(form_key: str, result: str) -> str:
+
+def get_rps_flavor_for_form(form_key: str, result: str, name: str) -> str:
     """
     勝ち / 負け / あいこ のリアクションをフォーム別に出し分ける。
-    未定義のフォームは従来通り get_rps_line(result) を使う。
     """
+    # ヒアシンシア
     if form_key == "hyacinthia":
         if result == "win":
             return "ふふ、お見事です〜。あなたの勝ちですね。もう一回、いきますか？"
@@ -1143,12 +1160,38 @@ def get_rps_flavor_for_form(form_key: str, result: str) -> str:
         else:  # draw
             return "おや、あいこですね〜。もう一度、やってみましょうか。"
 
+    # ケリュドラ
+    if form_key == "cerydra":
+        import random
+        if result == "win":
+            lines = [
+                "どうやら勝利の女神は今回限りは僕に微笑まなかったようだな。だが次こそは勝ってみせるぞ。",
+                "中々運が良いではないか、{nickname}卿。今なら駿足卿との賭けにも勝てるのではないか？",
+                "…運だけというのも面白くないだろう？ どうだ、{nickname}卿。チェスに興味は？",
+            ]
+        elif result == "lose":
+            lines = [
+                "どうした、{nickname}卿？ まさか僕が運命卿の力を借りたとでも思っているのか？",
+                "やはり勝利の女神は僕に微笑んでいるようだ。過去も今も、未来さえも変わらずな。",
+                "どうだ、{nickname}卿。金織卿ですら、この僕には一回も勝てなかったんだぞ？",
+            ]
+        else:  # draw
+            lines = [
+                "ほう…白と黒だけでは面白くないが、決着がつかないというのももどかしいものだ。",
+                "僕と同じ考えを持つとは賢いではないか、{nickname}卿。",
+                "勝敗がつかないか…なら次の戦いに備えるまでだ。",
+            ]
+
+        return random.choice(lines).replace("{nickname}", name)
+
     # ここに他キャラ用の分岐を増やせる
     # if form_key == "aglaia":
     #     ...
 
     # デフォルト（キュレネのじゃんけん用セリフ）
     return get_rps_line(result)
+
+
 
 
 def format_rps_result_message(
@@ -1256,6 +1299,7 @@ def generate_reply_for_form(
     form_key: str,
     message_text: str,
     affection_level: int,
+    user_id: int,
     name: str,
 ) -> str:
     """
@@ -1285,7 +1329,8 @@ def generate_reply_for_form(
     elif form_key == "electra":
         base = get_electra_reply(message_text, affection_level)
     elif form_key == "cerydra":
-        base = get_cerydra_reply(message_text, affection_level)
+        # ★ ケリュドラだけ user_id も渡す
+        base = get_cerydra_reply(message_text, affection_level, user_id)
     elif form_key == "nanoka":
         base = get_nanoka_reply(message_text, affection_level)
     elif form_key == "danheng":
@@ -1697,7 +1742,7 @@ async def on_message(message: discord.Message):
             result = judge_janken(hand, bot_hand)
 
         # フォームに応じたじゃんけんセリフ
-        flavor = get_rps_flavor_for_form(current_form, result)
+        flavor = get_rps_flavor_for_form(current_form, result, name)
 
         # ★ 勝ったら勝利数カウント
         if result == "win":
@@ -2973,7 +3018,7 @@ async def on_message(message: discord.Message):
             result = judge_janken(hand, bot_hand)
 
             # フォームに応じたじゃんけんセリフ（勝ち/負け/あいこ）
-            flavor = get_rps_flavor_for_form(current_form, result)
+            flavor = get_rps_flavor_for_form(current_form, result, name)
 
             # ★ 勝利カウント
             if result == "win":
@@ -3009,7 +3054,7 @@ async def on_message(message: discord.Message):
 
         # 手をあとで選ぶパターン
         waiting_for_rps_choice.add(user_id)
-        prompt = get_rps_prompt_for_form(current_form)
+        prompt = get_rps_prompt_for_form(current_form,name)
         await send_myu(
             message,
             user_id,
@@ -3021,21 +3066,23 @@ async def on_message(message: discord.Message):
     # ===== メンションだけのとき =====
     if content == "":
         xp, level_val = get_user_affection(user_id)
-        reply = generate_reply_for_form(current_form, "", level_val, name)
+        reply = generate_reply_for_form(current_form, "", level_val, user_id, name)
         await send_myu(
             message,
             user_id,
             f"{message.author.mention} {reply}"
         )
-
+        cfg = load_affection_config()
+        delta = int(cfg.get("xp_actions", {}).get("talk", 0))
+        add_affection_xp(user_id, delta, reason="talk")
+        return
     # =====================
     # 特殊解放トリガー：三月なのか
     # じゃんけん勝利数 307回以上 ＋ 「記憶は流れ星を待ってる」
     # =====================
     if "記憶は流れ星を待ってる" in content or "記憶は流れ星を待っている" in content:
         xp, lv = get_user_affection(user_id)
-        base_reply = generate_reply_for_form(current_form, content, lv, name)
-
+        base_reply = generate_reply_for_form(current_form, content, lv, user_id, name)
 
         unlocked_now = False
         wins = get_janken_wins(user_id)
@@ -3049,11 +3096,10 @@ async def on_message(message: discord.Message):
                 "\n\n三月なのかの解放条件を達成したわ！\n"
                 "『なのになってみて』って言ってみない？"
             )
-
         await send_myu(
             message,
             user_id,
-            f"{message.author.mention} {name}、{base_reply}{extra}"
+            f"{message.author.mention} {base_reply}{extra}"
         )
         return
 
@@ -3061,23 +3107,22 @@ async def on_message(message: discord.Message):
     xp, level_val = get_user_affection(user_id)
 
     # 変身状態に応じた返事を生成（キュレネ・黄金裔・開拓者）
-    reply = generate_reply_for_form(current_form, content, level_val,name)
+    reply = generate_reply_for_form(current_form, content, level_val, user_id, name)
 
     # ★ 丹恒解放ステップ1チェック
-    # キュレネとして話していて、なおかつ荒笛トリガー台詞を引き当てたときだけフラグON
     if current_form == "cyrene" and ARAFUE_TRIGGER_LINE in reply:
         mark_danheng_stage1(user_id)
 
     await send_myu(
         message,
         user_id,
-        f"{message.author.mention} {name}、{reply}"
+        f"{message.author.mention} {reply}"
     )
-
     # 好感度XP加算（会話）
     cfg = load_affection_config()
     delta = int(cfg.get("xp_actions", {}).get("talk", 0))
     add_affection_xp(user_id, delta, reason="talk")
+
 
 
 # 実行
