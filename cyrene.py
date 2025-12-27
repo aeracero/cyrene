@@ -1252,46 +1252,66 @@ async def handle_danheng_special_code(message: discord.Message, user_id: int, co
     )
 
 
-def generate_reply_for_form(form_key: str, message_text: str, affection_level: int) -> str:
+def generate_reply_for_form(
+    form_key: str,
+    message_text: str,
+    affection_level: int,
+    name: str,
+) -> str:
     """
     変身状態（黄金裔/開拓者）に応じて返答を切り替える。
     - 各フォームは lines_◯◯.py の get_reply を使う
     - 未定義 or 不明なフォームキーの場合はキュレネにフォールバック
+    - セリフ中の「プレースホルダ（あだ名など）」を name で置き換える
     """
-    if form_key == "aglaia":
-        return get_aglaia_reply(message_text, affection_level)
-    if form_key == "trisbeas":
-        return get_trisbeas_reply(message_text, affection_level)
-    if form_key == "anaxagoras":
-        return get_anaxagoras_reply(message_text, affection_level)
-    if form_key == "hyacinthia":
-        return get_hyacinthia_reply(message_text, affection_level)
-    if form_key == "medimos":
-        return get_medimos_reply(message_text, affection_level)
-    if form_key == "sepharia":
-        return get_sepharia_reply(message_text, affection_level)
-    if form_key == "castoris":
-        return get_castoris_reply(message_text, affection_level)
-    if form_key == "phainon_kasreina":
-        return get_phainon_kasreina_reply(message_text, affection_level)
-    if form_key == "electra":
-        return get_electra_reply(message_text, affection_level)
-    if form_key == "cerydra":
-        return get_cerydra_reply(message_text, affection_level)
-    if form_key == "nanoka":
-        return get_nanoka_reply(message_text, affection_level)
-    if form_key == "danheng":
-        return get_danheng_reply(message_text, affection_level)
-    if form_key == "furina":
-        return get_furina_reply(message_text, affection_level)
 
-    # キュレネ（デフォルト）
-    try:
-        # 好感度対応版（message, affection_level 両方取る版）に対応
-        return get_cyrene_reply(message_text, affection_level)
-    except TypeError:
-        # 古い lines.py（message だけ取る版）の場合でも落ちないようフォールバック
-        return get_cyrene_reply(message_text)
+    # まずは各キャラのセリフ生成
+    if form_key == "aglaia":
+        base = get_aglaia_reply(message_text, affection_level)
+    elif form_key == "trisbeas":
+        base = get_trisbeas_reply(message_text, affection_level)
+    elif form_key == "anaxagoras":
+        base = get_anaxagoras_reply(message_text, affection_level)
+    elif form_key == "hyacinthia":
+        base = get_hyacinthia_reply(message_text, affection_level)
+    elif form_key == "medimos":
+        base = get_medimos_reply(message_text, affection_level)
+    elif form_key == "sepharia":
+        base = get_sepharia_reply(message_text, affection_level)
+    elif form_key == "castoris":
+        base = get_castoris_reply(message_text, affection_level)
+    elif form_key == "phainon_kasreina":
+        base = get_phainon_kasreina_reply(message_text, affection_level)
+    elif form_key == "electra":
+        base = get_electra_reply(message_text, affection_level)
+    elif form_key == "cerydra":
+        base = get_cerydra_reply(message_text, affection_level)
+    elif form_key == "nanoka":
+        base = get_nanoka_reply(message_text, affection_level)
+    elif form_key == "danheng":
+        base = get_danheng_reply(message_text, affection_level)
+    elif form_key == "furina":
+        base = get_furina_reply(message_text, affection_level)
+    else:
+        # キュレネ（デフォルト）
+        try:
+            base = get_cyrene_reply(message_text, affection_level)
+        except TypeError:
+            base = get_cyrene_reply(message_text)
+
+    # ─────────────────────
+    # ここで「あだ名」置き換え
+    # ─────────────────────
+    if name:
+        # 「あだ名」 形式
+        base = base.replace("「あだ名」", f"「{name}」")
+        # あだ名 だけ書いてあるパターン
+        base = base.replace("あだ名", name)
+        # もし {nickname} を使っているキャラがいればそっちも対応
+        base = base.replace("{nickname}", name)
+
+    return base
+
 
 
 # =====================
