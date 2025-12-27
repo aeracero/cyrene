@@ -1288,7 +1288,6 @@ async def handle_danheng_special_code(message: discord.Message, user_id: int, co
         "まずは『みんなについて教えて』ってお願いして、彼のことをちゃんと知ってみない？"
     )
 
-
 def generate_reply_for_form(
     form_key: str,
     message_text: str,
@@ -1298,55 +1297,49 @@ def generate_reply_for_form(
 ) -> str:
     """
     変身状態（黄金裔/開拓者）に応じて返答を切り替える。
-    - 各フォームは lines_◯◯.py の get_reply を使う
-    - 未定義 or 不明なフォームキーの場合はキュレネにフォールバック
-    - セリフ中の「プレースホルダ（あだ名など）」を name で置き換える
+    今後キャラを追加する場合は、下の form_handlers 辞書に行を追加するだけでOKです。
     """
+    
+    # ★ キャラクター対応表
+    # key: forms.py の form_key
+    # value: lines_〇〇.py から import した get_reply 関数
+    form_handlers = {
+        "aglaia": get_aglaia_reply,
+        "trisbeas": get_trisbeas_reply,
+        "anaxagoras": get_anaxagoras_reply,
+        "hyacinthia": get_hyacinthia_reply,
+        "medimos": get_medimos_reply,
+        "sepharia": get_sepharia_reply,
+        "castoris": get_castoris_reply,
+        "phainon_kasreina": get_phainon_kasreina_reply,
+        "electra": get_electra_reply,
+        "cerydra": get_cerydra_reply,  # ここを修正：引数を統一化してバグ解消
+        "nanoka": get_nanoka_reply,
+        "danheng": get_danheng_reply,
+        "furina": get_furina_reply,
+        "momo": get_momo_reply,
+    }
 
-    # まずは各キャラのセリフ生成
-    if form_key == "aglaia":
-        base = get_aglaia_reply(message_text, affection_level)
-    elif form_key == "trisbeas":
-        base = get_trisbeas_reply(message_text, affection_level)
-    elif form_key == "anaxagoras":
-        base = get_anaxagoras_reply(message_text, affection_level)
-    elif form_key == "hyacinthia":
-        base = get_hyacinthia_reply(message_text, affection_level)
-    elif form_key == "medimos":
-        base = get_medimos_reply(message_text, affection_level)
-    elif form_key == "sepharia":
-        base = get_sepharia_reply(message_text, affection_level)
-    elif form_key == "castoris":
-        base = get_castoris_reply(message_text, affection_level)
-    elif form_key == "phainon_kasreina":
-        base = get_phainon_kasreina_reply(message_text, affection_level)
-    elif form_key == "electra":
-        base = get_electra_reply(message_text, affection_level)
-    elif form_key == "cerydra":
-        # ★ ケリュドラだけ user_id も渡す
-        base = get_cerydra_reply(message_text, affection_level, user_id)
-    elif form_key == "nanoka":
-        base = get_nanoka_reply(message_text, affection_level)
-    elif form_key == "danheng":
-        base = get_danheng_reply(message_text, affection_level)
-    elif form_key == "furina":
-        base = get_furina_reply(message_text, affection_level)
+    # 1. 各キャラのセリフ生成
+    handler = form_handlers.get(form_key)
+    
+    if handler:
+        # 全キャラ共通で (メッセージ, 好感度) の2つだけを渡すように統一
+        base = handler(message_text, affection_level)
     else:
-        # キュレネ（デフォルト）
+        # 定義がない、または "cyrene" の場合はデフォルト（キュレネ）
         try:
             base = get_cyrene_reply(message_text, affection_level)
         except TypeError:
             base = get_cyrene_reply(message_text)
 
-    # ─────────────────────
-    # ここで「あだ名」置き換え
-    # ─────────────────────
+    # 2. あだ名置き換え処理（全キャラ共通）
     if name:
         # 「あだ名」 形式
         base = base.replace("「あだ名」", f"「{name}」")
         # あだ名 だけ書いてあるパターン
         base = base.replace("あだ名", name)
-        # もし {nickname} を使っているキャラがいればそっちも対応
+        # {nickname} 形式
         base = base.replace("{nickname}", name)
 
     return base
