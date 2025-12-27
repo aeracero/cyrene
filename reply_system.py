@@ -31,21 +31,35 @@ def generate_reply_for_form(form_key: str, message_text: str, affection_level: i
     
     if hasattr(module, "get_reply"):
         try:
-            base = module.get_reply(message_text, affection_level)
+            # ★優先1: 最新の形式（本文, 好感度, 名前）で呼び出す
+            # ヒアシンシア、ケリュドラなどはこっち
+            base = module.get_reply(message_text, affection_level, name)
         except TypeError:
-            base = module.get_reply(message_text)
+            try:
+                # ★優先2: 従来の形式（本文, 好感度）で呼び出す
+                # まだ修正していない他のキャラはこっち
+                base = module.get_reply(message_text, affection_level)
+            except TypeError:
+                # ★優先3: さらに古い形式（本文のみ）
+                base = module.get_reply(message_text)
     else:
         base = lines_cyrene.get_cyrene_reply(message_text, affection_level)
 
     if name:
-        base = base.replace("「あだ名」", f"「{name}」").replace("あだ名", name).replace("{nickname}", name)
+        # モジュール側で対応していても、念のためここでも置換を実行しておく（安全策）
+        base = base.replace("「あだ名」", f"「{name}」").replace("あだ名", name).replace("{nickname}", name).replace("{name}", name)
     return base
 
 def get_nickname_message_for_form(form_key: str, action: str, name: str = "") -> str:
     module = MODULE_MAP.get(form_key, lines_cyrene)
     
     if hasattr(module, "get_nickname_line"):
-        line = module.get_nickname_line(action)
+        try:
+            # ★修正: 名前引数ありを優先
+            line = module.get_nickname_line(action, name)
+        except TypeError:
+            # 引数なしの旧バージョン
+            line = module.get_nickname_line(action)
         return line.replace("{name}", name)
     
     if action == "ask": return "あたし、どう呼べばいいの？"
@@ -55,6 +69,13 @@ def get_nickname_message_for_form(form_key: str, action: str, name: str = "") ->
 def get_rps_flavor(form_key: str, result: str, name: str) -> str:
     module = MODULE_MAP.get(form_key, lines_cyrene)
     
+    # もしモジュールに専用の関数があれば、そちらを優先的に試す（新しい形式への対応）
+    if hasattr(module, "get_rps_flavor"):
+        try:
+            return module.get_rps_flavor(result, name)
+        except TypeError:
+            pass # 引数が合わなければ下のLINES取得処理へ進む
+
     if hasattr(module, "LINES"):
         lines_dict = module.LINES
         key = f"rps_{result}"
@@ -84,7 +105,11 @@ def format_rps_result(form_key: str, name: str, user_hand: str, bot_hand: str, f
     pronoun = "あたし"
     tail = "わ♡"
     
-    if hasattr(module, "CHAR_PROFILE"):
+    if hasattr(module, "PROFILE"): # CHAR_PROFILE -> PROFILE に統一されている場合が多いので変更を推奨
+        profile = module.PROFILE
+        pronoun = profile.get("first_person", pronoun) # "pronoun" or "first_person"
+        tail = profile.get("rps_tail", tail)
+    elif hasattr(module, "CHAR_PROFILE"):
         profile = module.CHAR_PROFILE
         pronoun = profile.get("pronoun", pronoun)
         tail = profile.get("rps_tail", tail)
