@@ -69,6 +69,7 @@ client = discord.Client(intents=intents)
 # =====================
 DATA_DIR = Path("/data")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+SPECIAL_UNLOCKS_FILE = DATA_DIR / "special_unlocks.json"
 
 JST = timezone(timedelta(hours=9))
 
@@ -1280,10 +1281,12 @@ async def on_message(message: discord.Message):
                 "- `変身一覧確認` … 誰がどの黄金裔（開拓者）を使っているか一覧表示\n"
                 "- `変身編集一人 @ユーザー コードまたは名前` … その人のフォームを変更\n"
                 "- `変身編集全体 コードまたは名前` … 全員のフォームを一括変更（メイン管理者のみ）\n"
+                "- `変身解放状況確認` … 三月なのか／丹恒の解放状況を一覧表示（メイン管理者専用）\n"
                 "- `データ管理終了` … モード終了\n"
                 "※ コードは KaLos618, HapLotes405 などの変身コードよ。"
             )
             return
+
 
         # 変身一覧確認
         if content == "変身一覧確認":
@@ -1362,6 +1365,65 @@ async def on_message(message: discord.Message):
                     "もう一度確認して教えてくれる？"
                 )
                 return
+                # 変身解放状況確認（メイン管理者専用）
+        
+        if content == "変身解放状況確認":
+            if user_id != PRIMARY_ADMIN_ID:
+                await message.channel.send(
+                    f"{message.author.mention} ごめんね、この確認ができるのは一番上の管理者だけなの。"
+                )
+                return
+
+            # /data/special_unlocks.json を読み込み
+            if not SPECIAL_UNLOCKS_FILE.exists():
+                await message.channel.send(
+                    f"{message.author.mention} まだ特別な解放データは保存されていないみたい。"
+                )
+                return
+
+            try:
+                raw = json.loads(SPECIAL_UNLOCKS_FILE.read_text(encoding="utf-8"))
+            except Exception:
+                await message.channel.send(
+                    f"{message.author.mention} 解放データの読み込みに失敗しちゃったみたい…ごめんね。"
+                )
+                return
+
+            if not isinstance(raw, dict) or not raw:
+                await message.channel.send(
+                    f"{message.author.mention} いまのところ、特別な解放状況は登録されていないみたい。"
+                )
+                return
+
+            lines = ["【変身解放状況】"]
+            for uid_str, state in raw.items():
+                try:
+                    uid_int = int(uid_str)
+                except Exception:
+                    uid_int = None
+
+                member = None
+                if message.guild and uid_int is not None:
+                    member = message.guild.get_member(uid_int)
+
+                user_display = member.display_name if member else f"ID: {uid_str}"
+
+                jwins = int(state.get("janken_wins", 0))
+                nanoka = "解放済み" if state.get("nanoka_unlocked") else "未解放"
+                d_stage1 = "達成済み" if state.get("danheng_stage1") else "未達成"
+                danh = "解放済み" if state.get("danheng_unlocked") else "未解放"
+
+                lines.append(
+                    f"- {user_display}\n"
+                    f"  ・じゃんけん勝利数: {jwins}\n"
+                    f"  ・三月なのか: {nanoka}\n"
+                    f"  ・丹恒ステップ1(荒笛): {d_stage1}\n"
+                    f"  ・丹恒: {danh}"
+                )
+
+            await message.channel.send("\n".join(lines))
+            return
+
 
             set_all_forms(form_key)
             form_name = get_form_display_name(form_key)
@@ -1634,24 +1696,37 @@ async def on_message(message: discord.Message):
     # 特殊解放トリガー：丹恒
     # ステップ1達成 + コード SkoPeo365
     # =====================
+    # =====================
+    # 特殊解放トリガー：丹恒（コード SkoPeo365）
+    # =====================
     if "SkoPeo365" in content:
+        # もし変身コード入力待ち状態だったら、一旦解除しておく
+        waiting_for_transform_code.discard(user_id)
+
         if has_danheng_stage1(user_id) and not is_danheng_unlocked(user_id):
+            # ★ ここで /data/special_unlocks.json に「解放済み」を保存
             set_danheng_unlocked(user_id, True)
             await message.channel.send(
                 f"{message.author.mention} 丹恒の解放条件を達成したわ！\n"
                 "『たんたんになってみて』って言ってみない？"
             )
+
         elif is_danheng_unlocked(user_id):
+            # すでに解放済みの場合
             await message.channel.send(
                 f"{message.author.mention} そのコードはもう使われているわ。\n"
                 "いつでも『たんたんになってみて』って言えば、彼の姿になれるわよ♪"
             )
+
         else:
+            # 荒笛ラインをまだ引いていない場合
             await message.channel.send(
                 f"{message.author.mention} ん…まだ何かが足りないみたい。\n"
                 "まずは『みんなについて教えて』ってお願いして、彼のことをちゃんと知ってみない？"
             )
+
         return
+
 
 
     # ===== 通常応答 =====
