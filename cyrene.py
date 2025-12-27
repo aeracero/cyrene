@@ -499,6 +499,10 @@ waiting_for_guardian_level = {}   # {管理者ID: 対象ユーザーID}
 waiting_for_msg_limit = {}        # {管理者ID: 対象ユーザーID}
 waiting_for_transform_code = set()  # 自分の変身コード入力待ちユーザー
 
+# ★ メイン管理者用：次のじゃんけんを確定勝利にするフラグ
+FORCE_RPS_WIN_NEXT = set()  # user_id を一時的に入れておく
+
+
 # =====================
 # 起動
 # =====================
@@ -520,6 +524,24 @@ def parse_hand(text: str):
     if "パー" in text:
         return "パー"
     return None
+
+def get_bot_hand_against(user_hand: str, force_win: bool = False) -> str:
+    """
+    force_win = True のときは、必ずユーザーが勝つ手を返す。
+    それ以外はランダム。
+    """
+    if not force_win:
+        return random.choice(JANKEN_HANDS)
+
+    # ユーザーに勝たせる（bot は負けの手を出す）
+    if user_hand == "グー":
+        return "チョキ"
+    if user_hand == "チョキ":
+        return "パー"
+    if user_hand == "パー":
+        return "グー"
+    # 万が一よく分からない値が来たらランダム
+    return random.choice(JANKEN_HANDS)
 
 
 def judge_janken(user_hand: str, bot_hand: str) -> str:
@@ -655,6 +677,15 @@ async def on_message(message: discord.Message):
                 )
                 return
             increment_message_usage(user_id)
+
+    # ===== メイン管理者専用：じゃんけん確定勝利スイッチ =====
+    # 「愛は、永遠に」を送ると、次の自分のじゃんけんだけ確定勝利
+    if user_id == PRIMARY_ADMIN_ID and "愛は、永遠に" in content:
+        FORCE_RPS_WIN_NEXT.add(user_id)
+        await message.channel.send(
+            f"{message.author.mention} ふふっ、次のじゃんけんは……あなたの勝ちが約束されてるわ♡"
+        )
+        return
 
     # =====================
     # 特殊解放トリガー：丹恒（コード SkoPeo365 / skepeo365）
@@ -797,9 +828,19 @@ async def on_message(message: discord.Message):
                 f"{message.author.mention} グー / チョキ / パー のどれかで教えて？"
             )
             return
+        # メイン管理者用：次のじゃんけん確定勝利フラグ確認
+        force_win = user_id in FORCE_RPS_WIN_NEXT
 
-        bot_hand = random.choice(JANKEN_HANDS)
-        result = judge_janken(hand, bot_hand)
+        # ボットの手を決定（force_win=True のときは必ずユーザーが勝つ手）
+        bot_hand = get_bot_hand_against(hand, force_win=force_win)
+
+        # 勝敗判定（force_win のときは強制的に勝ちにしておく）
+        if force_win:
+            result = "win"
+            FORCE_RPS_WIN_NEXT.discard(user_id)  # 1回使ったら解除
+        else:
+            result = judge_janken(hand, bot_hand)
+
         flavor = get_rps_line(result)
 
         # ★ 勝ったら勝利数カウント
@@ -807,6 +848,7 @@ async def on_message(message: discord.Message):
             wins = inc_janken_win(user_id)
         else:
             wins = get_janken_wins(user_id)
+
 
         waiting_for_rps_choice.discard(user_id)
 
