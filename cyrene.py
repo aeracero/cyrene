@@ -3021,23 +3021,21 @@ async def on_message(message: discord.Message):
     # ===== メンションだけのとき =====
     if content == "":
         xp, level_val = get_user_affection(user_id)
-        reply = generate_reply_for_form(current_form, "", level_val)
+        reply = generate_reply_for_form(current_form, "", level_val, name)
         await send_myu(
             message,
             user_id,
             f"{message.author.mention} {reply}"
         )
-        cfg = load_affection_config()
-        delta = int(cfg.get("xp_actions", {}).get("talk", 0))
-        add_affection_xp(user_id, delta, reason="talk")
-        return
 
     # =====================
     # 特殊解放トリガー：三月なのか
     # じゃんけん勝利数 307回以上 ＋ 「記憶は流れ星を待ってる」
     # =====================
     if "記憶は流れ星を待ってる" in content or "記憶は流れ星を待っている" in content:
-        base_reply = generate_reply_for_form(current_form, content, get_user_affection(user_id)[1])
+        xp, lv = get_user_affection(user_id)
+        base_reply = generate_reply_for_form(current_form, content, lv, name)
+
 
         unlocked_now = False
         wins = get_janken_wins(user_id)
@@ -3063,7 +3061,7 @@ async def on_message(message: discord.Message):
     xp, level_val = get_user_affection(user_id)
 
     # 変身状態に応じた返事を生成（キュレネ・黄金裔・開拓者）
-    reply = generate_reply_for_form(current_form, content, level_val)
+    reply = generate_reply_for_form(current_form, content, level_val,name)
 
     # ★ 丹恒解放ステップ1チェック
     # キュレネとして話していて、なおかつ荒笛トリガー台詞を引き当てたときだけフラグON

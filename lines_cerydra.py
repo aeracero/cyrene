@@ -1,6 +1,5 @@
 # lines_cerydra.py
 import random
-from nicknames import get_nickname   # ★ 追加
 
 CHAR_NAME = "ケリュドラ"
 
@@ -78,28 +77,21 @@ def _pick_high_bucket(level: int) -> str | None:
     return None
 
 
-def _apply_nickname(user_id: int, text: str) -> str:
-    """{nickname} を実際のあだ名に置き換える"""
-    nickname = get_nickname(user_id) or ""
-    if nickname == "":
-        nickname = ""  # 卿 だけになる
-    return text.replace("{nickname}", nickname)
-
-
-def get_reply(message: str, affection_level: int, user_id: int) -> str:
+def get_reply(message: str, affection_level: int) -> str:
     """
-    通常の返答用
+    ケリュドラ用のセリフ生成。
+    {nickname} は cyrene.py 側で実際の名前に置き換えられる。
     """
     high_prob_table = {1: 0.15, 2: 0.25, 3: 0.35, 4: 0.5, 5: 0.7, 6: 0.9}
     bucket = _pick_high_bucket(affection_level)
     high_prob = high_prob_table.get(affection_level, 0.0)
 
+    # 高好感度バケット優先
     if bucket and LINES.get(bucket) and random.random() < high_prob:
-        line = random.choice(LINES[bucket])
-        return _apply_nickname(user_id, line)
+        return random.choice(LINES[bucket])
 
+    # 通常バケット
     if LINES["normal"]:
-        line = random.choice(LINES["normal"])
-        return _apply_nickname(user_id, line)
+        return random.choice(LINES["normal"])
 
     return f"{CHAR_NAME}のセリフがまだ設定されていないみたい…（lines_cerydra.py を編集してね）"
