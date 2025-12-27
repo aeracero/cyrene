@@ -50,9 +50,8 @@ from special_unlocks import (
 
 from lines_cerydra import (
     get_reply as get_cerydra_reply,
-    get_rps_start_line as get_cerydra_rps_start_line,
-    get_rps_result_line as get_cerydra_rps_result_line,
 )
+
 
 
 # =====================
