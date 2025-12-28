@@ -9,7 +9,7 @@ import reply_system as rs
 from lines import ARAFUE_TRIGGER_LINE
 from forms import get_user_form, set_user_form, resolve_form_code, get_form_display_name, get_all_forms
 from special_unlocks import inc_janken_win, get_janken_wins, is_nanoka_unlocked, set_nanoka_unlocked, has_danheng_stage1, mark_danheng_stage1, is_danheng_unlocked, set_danheng_unlocked
-import kimera_game
+import kimera_game  # キメラゲーム読み込み
 
 # --- Discord Setup ---
 intents = discord.Intents.default()
@@ -27,7 +27,7 @@ waiting_for_guardian_level = {}
 waiting_for_msg_limit = {}
 waiting_for_bypass_edit = set()
 waiting_for_transform_code = set()
-waiting_for_title_change = set() # 新規: 二つ名変更待ち
+waiting_for_title_change = set()
 FORCE_RPS_WIN_NEXT = set()
 MYURION_QUIZ_STATE = {}
 
@@ -72,7 +72,9 @@ GENERAL_COMMANDS_LIST_JP = (
     "- `ガチャメニュー`: 石やチケットの確認よ\n"
     "- `単発ガチャ` / `10連ガチャ`: 運試し、してみない？\n"
     "- `チケット10連`: すり抜けチケットを使って回すわ\n"
-    "- `デイリー受け取り`: 1日1回、石をプレゼントするわ♪"
+    "- `デイリー受け取り`: 1日1回、石をプレゼントするわ♪\n\n"
+    "**★ キメラ**\n"
+    "- `キメラと遊びたい`: ミニゲームを始めるわ♪"
 )
 
 GENERAL_COMMANDS_LIST_EN = (
@@ -95,7 +97,9 @@ GENERAL_COMMANDS_LIST_EN = (
     "- `Gacha`: Check gems and tickets\n"
     "- `Pull 1` / `Pull 10`: Try your luck?\n"
     "- `Ticket 10`: Use an off-banner ticket for 10 pulls\n"
-    "- `Daily`: Get your daily gems♪"
+    "- `Daily`: Get your daily gems♪\n\n"
+    "**★ Kimera**\n"
+    "- `Play with Kimera`: Start the minigame♪"
 )
 
 async def send_myu(message, user_id, text):
@@ -195,7 +199,8 @@ async def on_message(message):
             list_text = GENERAL_COMMANDS_LIST_EN if lang == "en" else GENERAL_COMMANDS_LIST_JP
             await send_myu(message, user_id, f"{message.author.mention} {list_text}")
         return
-    
+
+    # --- データ管理モード開始 ---
     if content_body == "データ管理":
         if db.is_admin(user_id):
             admin_data_mode.add(user_id)
@@ -709,12 +714,15 @@ async def on_message(message):
         await send_myu(message, user_id, f"{message.author.mention} {msg}")
         return
 
+    # --- キメラミニゲーム ---
+    # 通常会話より優先して判定
     kimera_reply = kimera_game.process_kimera_command(user_id, content_body)
     if kimera_reply:
         await send_myu(message, user_id, f"{message.author.mention} {kimera_reply}")
         return
     
-    if content_body == "死ぬ":
+    # --- 隠しコマンド: 死ぬ ---
+    if content_body in ["死ぬ", "しぬ", "死にます", "しにます"]:
         await message.channel.send(f"# {message.author.mention} が死ぬらしいわ♪慰めてあげて")
         return
 
