@@ -48,7 +48,8 @@ ADMIN_COMMANDS_LIST = (
     "- `好感度XP追加 @ユーザー 数値`\n"
     "- `じゃんけん勝利数追加 @ユーザー 数値`\n"
     "- `メッセージ制限bypass編集`\n"
-    "- `変身解放状況確認`"
+    "- `変身解放状況確認`\n"
+    "- `データ移行実行`: 旧データを新形式へ移行"
 )
 
 GENERAL_COMMANDS_LIST_JP = (
@@ -160,6 +161,9 @@ async def on_message(message):
         user_id in waiting_for_title_change or user_id in MYURION_QUIZ_STATE
     )
     
+    # キメラゲーム中かチェック
+    is_playing_kimera = kimera_game.get_session(user_id) is not None
+
     # キーワードトリガー (EN/JP対応)
     CMD_KEYWORDS = ["コマンド", "ヘルプ", "command", "help"]
     RPS_KEYWORDS = ["じゃんけん", "rps", "rock paper scissors"]
@@ -183,19 +187,13 @@ async def on_message(message):
     is_mentioned = client.user in message.mentions
     reply_mode = db.get_reply_mode(user_id)
     is_auto_reply = (reply_mode == "auto")
-    should_reply = (is_mentioned or is_active_mode or is_auto_reply)
+    
+    # ゲーム中はメンションなしでも反応させる
+    should_reply = (is_mentioned or is_active_mode or is_auto_reply or is_playing_kimera)
 
-    # ★★★ ここに移動: 隠しコマンド「死ぬ」（メンション・モード関係なく反応） ★★★
-    if content_body in ["死ぬ", "しぬ", "死にます", "しにます", "ﾀﾋぬ","しにそう","死にそう","しぬ…","死ぬ…","しにます…","死にます…","死んじゃう","しんじゃう","しんじゃう…","死んじゃう…","死ぬかも","しぬかも","しぬかも…","死ぬかも…","くたばる","死","墓","DEATH","death","Die","die","DIE","ﾀﾋ","ﾀﾋ…","ﾀﾋかも","ﾀﾋかも…","くたばる…","タヒます","タヒます…","タヒる","タヒる…","タヒ","タヒ…","タヒかも","タヒかも…","亡","亡…","亡かも","亡かも…","逝","逝…","逝かも","逝かも…"]:
+    # ★★★ 隠しコマンド「死ぬ」（メンション・モード関係なく反応） ★★★
+    if content_body in ["死ぬ", "しぬ", "死にます", "しにます"]:
         await message.channel.send(f"# {message.author.mention} が死ぬらしいわ♪慰めてあげて")
-        return
-    
-    if content_body in["おやすみ"]:
-        await message.channel.send(f"# {message.author.mention} が寝るらしいわ♪永眠しないようにしてちょうだいね♪")
-        return
-    
-    if content_body in["キュレネさん"]:
-        await message.channel.send(f"# {message.author.mention} ハーイ♪あたしのこと呼んだ？ミュミュ〜♪")
         return
 
     # 他の機能は返信対象のときのみ実行
@@ -221,6 +219,13 @@ async def on_message(message):
             await send_myu(message, user_id, ADMIN_COMMANDS_LIST)
         else:
             await send_myu(message, user_id, "ごめんなさい、そのコマンドは管理者専用よ。")
+        return
+    
+    # --- データ移行実行 ---
+    if content_body == "データ移行実行" and db.is_admin(user_id):
+        import kimera_core
+        msg = kimera_core.migrate_old_data()
+        await send_myu(message, user_id, msg)
         return
 
     # --- ミュリオン設定 ---
@@ -730,11 +735,27 @@ async def on_message(message):
 
     # --- キメラミニゲーム ---
     # 通常会話より優先して判定
-    kimera_reply = kimera_game.process_kimera_command(user_id, content_body)
-    if kimera_reply:
-        await send_myu(message, user_id, f"{message.author.mention} {kimera_reply}")
-        return
+    kimera_result = kimera_game.process_kimera_command(user_id, content_body)
     
+    if kimera_result:
+        # process_kimera_command が (msg, extra_msgs) を返す場合と、msg だけ返す場合に対応
+        if isinstance(kimera_result, tuple):
+            reply_msg, extra_messages = kimera_result
+        else:
+            reply_msg, extra_messages = kimera_result, []
+
+        if reply_msg:
+            await send_myu(message, user_id, f"{message.author.mention} {reply_msg}")
+        
+        # PvPなどで相手に送るメッセージがある場合
+        for target_uid, target_msg in extra_messages:
+            try:
+                # 同じチャンネルに送信（相手が同じチャンネルを見ている前提）
+                await message.channel.send(f"<@{target_uid}> {target_msg}")
+            except:
+                pass
+        return
+
     # --- 通常会話 ---
     xp, lv = logic.get_user_affection(user_id)
     reply = rs.generate_reply_for_form(current_form, content_body, lv, user_id, name)
