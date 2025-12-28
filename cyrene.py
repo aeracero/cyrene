@@ -87,6 +87,9 @@ async def on_message(message):
     user_id = message.author.id
     content = message.content.strip() # 原文
     
+    # ★修正: メンション除去後のテキストを先に取得（判定に使うため）
+    content_body = re.sub(rf"<@!?{client.user.id}>", "", content).strip()
+
     is_main_admin = (user_id == PRIMARY_ADMIN_ID)
     nickname = db.get_nickname(user_id)
     name = nickname if nickname else message.author.display_name
@@ -112,25 +115,20 @@ async def on_message(message):
         user_id in MYURION_QUIZ_STATE
     )
     
-    # コマンド確認キーワード
-    is_command_query = content in ["コマンド", "コマンド教えて", "コマンドを教えて", "ヘルプ"]
+    # コマンド確認キーワード (★修正: content_body で判定するように変更し、"コマンド確認"を追加)
+    is_command_query = content_body in ["コマンド", "コマンド教えて", "コマンドを教えて", "ヘルプ", "コマンド確認"]
     
-    # ★返信判定ロジック（修正済み）★
+    # 返信判定
     is_mentioned = client.user in message.mentions
     reply_mode = db.get_reply_mode(user_id)
     is_auto_reply = (reply_mode == "auto")
     
-    # 【変更点】
-    # 「メンションされた」か「入力待ち(Active)」か「Autoモード」の時だけ反応する。
-    # キーワードが含まれていても、Autoモードじゃなければ無視する。
+    # 反応するかどうかの決定
     should_reply = (is_mentioned or is_active_mode or is_auto_reply)
     
     if not should_reply:
         return
 
-    # メンション除去後のテキスト
-    content_body = re.sub(rf"<@!?{client.user.id}>", "", content).strip()
-    
     # 空メッセージ判定（メンションがあれば空でも通す）
     if not content_body and not message.attachments and not is_active_mode and not is_mentioned:
         return
