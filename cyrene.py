@@ -9,7 +9,7 @@ import reply_system as rs
 from lines import ARAFUE_TRIGGER_LINE
 from forms import get_user_form, set_user_form, resolve_form_code, get_form_display_name, get_all_forms
 from special_unlocks import inc_janken_win, get_janken_wins, is_nanoka_unlocked, set_nanoka_unlocked, has_danheng_stage1, mark_danheng_stage1, is_danheng_unlocked, set_danheng_unlocked
-import kimera_game  # キメラゲーム読み込み
+import kimera_game
 
 # --- Discord Setup ---
 intents = discord.Intents.default()
@@ -183,8 +183,14 @@ async def on_message(message):
     is_mentioned = client.user in message.mentions
     reply_mode = db.get_reply_mode(user_id)
     is_auto_reply = (reply_mode == "auto")
-    
     should_reply = (is_mentioned or is_active_mode or is_auto_reply)
+
+    # ★★★ ここに移動: 隠しコマンド「死ぬ」（メンション・モード関係なく反応） ★★★
+    if content_body in ["死ぬ", "しぬ", "死にます", "しにます"]:
+        await message.channel.send(f"# {message.author.mention} が死ぬらしいわ♪慰めてあげて")
+        return
+
+    # 他の機能は返信対象のときのみ実行
     if not should_reply: return
 
     # 空メッセージ判定
@@ -721,11 +727,6 @@ async def on_message(message):
         await send_myu(message, user_id, f"{message.author.mention} {kimera_reply}")
         return
     
-    # --- 隠しコマンド: 死ぬ ---
-    if content_body in ["死ぬ", "しぬ", "死にます", "しにます"]:
-        await message.channel.send(f"# {message.author.mention} が死ぬらしいわ♪慰めてあげて")
-        return
-
     # --- 通常会話 ---
     xp, lv = logic.get_user_affection(user_id)
     reply = rs.generate_reply_for_form(current_form, content_body, lv, user_id, name)
