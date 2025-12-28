@@ -7,10 +7,9 @@ from config import (
     PRIMARY_ADMIN_ID, today_str
 )
 
-# 言語設定用ファイル
 LANGUAGE_FILE = Path("data/language.json")
-# 返信モード保存用ファイル
 REPLY_MODE_FILE = Path("data/reply_mode.json")
+ACHIEVEMENTS_FILE = Path("data/achievements.json")
 
 # --- 共通ユーティリティ ---
 def _load_json(path: Path, default=None):
@@ -31,14 +30,8 @@ def _save_json(path: Path, data):
 
 # --- 言語設定 (JP/EN) ---
 def load_languages(): return _load_json(LANGUAGE_FILE, {})
-
-def get_user_lang(user_id):
-    """ユーザーの言語を取得 ('jp' or 'en')。デフォルトは 'jp'"""
-    data = load_languages()
-    return data.get(str(user_id), "jp")
-
+def get_user_lang(user_id): return load_languages().get(str(user_id), "jp")
 def set_user_lang(user_id, lang):
-    """言語を設定 ('jp' or 'en')"""
     data = load_languages()
     data[str(user_id)] = lang
     _save_json(LANGUAGE_FILE, data)
@@ -235,3 +228,54 @@ def get_all_special_status():
         if wins > 0 or nano == "済" or dan == "済":
             results.append(f"<@{uid}>: 勝{wins}/な{nano}/丹{dan}")
     return results
+
+# --- ★アチーブメント管理 (二つ名対応) ---
+def load_achievements(): return _load_json(ACHIEVEMENTS_FILE, {})
+def save_achievements(data): _save_json(ACHIEVEMENTS_FILE, data)
+
+def get_user_achievements(user_id: int):
+    data = load_achievements()
+    user_data = data.get(str(user_id))
+    # 構造: unlocked(IDリスト), stats(累計データ), equipped_title(装備中の二つ名ID)
+    if not isinstance(user_data, dict):
+        user_data = {"unlocked": [], "stats": {}, "equipped_title": None}
+        data[str(user_id)] = user_data
+        _save_json(ACHIEVEMENTS_FILE, data)
+    return user_data
+
+def unlock_achievement(user_id: int, achievement_id: str):
+    data = load_achievements()
+    user_key = str(user_id)
+    if user_key not in data:
+        data[user_key] = {"unlocked": [], "stats": {}, "equipped_title": None}
+    
+    if achievement_id not in data[user_key]["unlocked"]:
+        data[user_key]["unlocked"].append(achievement_id)
+        _save_json(ACHIEVEMENTS_FILE, data)
+        return True # 新規解除
+    return False
+
+def increment_achievement_stat(user_id: int, stat_key: str, value: int = 1):
+    data = load_achievements()
+    user_key = str(user_id)
+    if user_key not in data:
+        data[user_key] = {"unlocked": [], "stats": {}, "equipped_title": None}
+    
+    stats = data[user_key].get("stats", {})
+    stats[stat_key] = stats.get(stat_key, 0) + value
+    data[user_key]["stats"] = stats
+    _save_json(ACHIEVEMENTS_FILE, data)
+    return stats[stat_key]
+
+def set_equipped_title(user_id: int, achievement_id: str | None):
+    data = load_achievements()
+    user_key = str(user_id)
+    if user_key not in data:
+        data[user_key] = {"unlocked": [], "stats": {}, "equipped_title": None}
+    
+    data[user_key]["equipped_title"] = achievement_id
+    _save_json(ACHIEVEMENTS_FILE, data)
+
+def get_equipped_title_id(user_id: int):
+    data = get_user_achievements(user_id)
+    return data.get("equipped_title")
