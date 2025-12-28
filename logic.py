@@ -1,4 +1,3 @@
-# logic.py
 import random
 import re
 from config import today_str
@@ -43,14 +42,13 @@ def add_affection_xp(user_id: int, delta: int, reason: str = ""):
     data[str(user_id)] = info
     db.save_affection_data(data)
 
-# ★管理者用：全員のリスト
+# 管理者用: 全員のリスト
 def format_all_affection_status(guild) -> str:
     data = db.load_affection_data()
     if not data:
         return "まだ好感度データは誰も登録されていないみたい。"
     
     cfg = db.load_affection_config()
-    
     user_list = []
     for uid_str, info in data.items():
         xp = int(info.get("xp", 0))
@@ -58,7 +56,6 @@ def format_all_affection_status(guild) -> str:
         user_list.append((uid_str, xp, level))
     
     user_list.sort(key=lambda x: x[1], reverse=True)
-    
     lines = ["【みんなの好感度・経験値一覧】"]
     for uid_str, xp, level in user_list:
         name = f"ID: {uid_str}"
@@ -68,11 +65,11 @@ def format_all_affection_status(guild) -> str:
                 if member: name = member.display_name
             except: pass
         lines.append(f"- **{name}**: Lv.{level} ({xp} XP)")
-        
     return "\n".join(lines)
 
-# ★一般ユーザー用好感度メッセージ
+# ★ 英語対応: 好感度ステータス
 def get_affection_status_message(user_id: int) -> str:
+    lang = db.get_user_lang(user_id)
     xp, level = get_user_affection(user_id)
     cfg = db.load_affection_config()
     thresholds = cfg.get("level_thresholds", [0])
@@ -80,11 +77,19 @@ def get_affection_status_message(user_id: int) -> str:
     if level + 1 < len(thresholds):
         next_xp_req = thresholds[level + 1]
         needed = max(0, next_xp_req - xp)
-        return (f"あなたの好感度は **Lv.{level}** (累計 {xp} XP) よ♪\n"
-                f"次の Lv.{level + 1} までは、あと **{needed} XP** 必要ね。")
+        if lang == "en":
+            return (f"Your affection is **Lv.{level}** (Total {xp} XP)♪\n"
+                    f"To reach Lv.{level + 1}, you need **{needed} more XP**.")
+        else:
+            return (f"あなたの好感度は **Lv.{level}** (累計 {xp} XP) よ♪\n"
+                    f"次の Lv.{level + 1} までは、あと **{needed} XP** 必要ね。")
     else:
-        return (f"あなたの好感度は **Lv.{level}** (累計 {xp} XP) よ♪\n"
-                "もう十分すぎるくらい仲良しね！これ以上は数え切れないわ♪")
+        if lang == "en":
+            return (f"Your affection is **Lv.{level}** (Total {xp} XP)♪\n"
+                    "We are already super close! I can't even count it anymore♪")
+        else:
+            return (f"あなたの好感度は **Lv.{level}** (累計 {xp} XP) よ♪\n"
+                    "もう十分すぎるくらい仲良しね！これ以上は数え切れないわ♪")
 
 # --- ミュリオンロジック ---
 MYURION_SYLLABLES = ["ミュ", "ミュウ", "ミュミュ", "ミュイー"]
@@ -106,7 +111,6 @@ def apply_myurion_filter(user_id: int, text: str) -> str:
     if not m: return to_myurion_text(text)
     return m.group(1) + to_myurion_text(m.group(2))
 
-# ★追加: ミュリオンクイズ回答解析
 def parse_myurion_answer(text: str) -> int | None:
     if any(ch in text for ch in ["1", "１"]): return 1
     if any(ch in text for ch in ["2", "２"]): return 2
@@ -137,7 +141,7 @@ async def send_myurion_question(message, user_id, correct_count, state_dict):
     state_dict[user_id] = {"question": q, "options": [c for _, c in indexed], "correct_index": correct_index}
     await message.channel.send(apply_myurion_filter(user_id, f"{message.author.mention} {body}"))
 
-# --- ガチャロジック ---
+# --- ガチャロジック (英語対応) ---
 def calc_main_5star_rate(pity_5: int) -> float:
     base = 0.0006
     if pity_5 <= 73: return base
@@ -147,21 +151,34 @@ def calc_main_5star_rate(pity_5: int) -> float:
 
 def perform_gacha_pulls(user_id: int, num_pulls: int, use_ticket: bool = False) -> tuple[bool, str]:
     state = db.get_gacha_state(user_id)
+    lang = db.get_user_lang(user_id)
+
+    # メッセージ定義
+    msg_ticket_10only = "Tickets are for 10-pulls only." if lang == "en" else "チケットは10連専用みたい。"
+    msg_ticket_lack = "Not enough tickets." if lang == "en" else "チケットが足りないみたい。"
+    msg_stone_lack = "Not enough stones (Need: {cost})" if lang == "en" else "石が足りないみたい（必要: {cost}）"
+    cost_ticket_str = "(1 Ticket consumed)" if lang == "en" else "（チケット1枚消費）"
+    
     if use_ticket:
-        if num_pulls != 10: return False, "チケットは10連専用みたい。"
-        if state.get("offbanner_tickets", 0) <= 0: return False, "チケットが足りないみたい。"
+        if num_pulls != 10: return False, msg_ticket_10only
+        if state.get("offbanner_tickets", 0) <= 0: return False, msg_ticket_lack
         state["offbanner_tickets"] -= 1
-        cost_str = "（チケット1枚消費）"
+        cost_str = cost_ticket_str
     else:
         cost = 160 * num_pulls if num_pulls == 1 else 1600
-        if state.get("stones", 0) < cost: return False, f"石が足りないみたい（必要: {cost}）"
+        if state.get("stones", 0) < cost: return False, msg_stone_lack.format(cost=cost)
         state["stones"] -= cost
-        cost_str = f"（石 {cost} 個消費）"
+        cost_str = f"({cost} stones consumed)" if lang == "en" else f"（石 {cost} 個消費）"
 
     pity_5 = state.get("pity_5", 0)
     pity_4 = state.get("pity_4", 0)
     guaranteed = state.get("guaranteed_cyrene", False)
     results, cyrene_hit, off_hit, page_hits = [], 0, 0, 0
+
+    # 結果テキスト
+    txt_cyrene = "★5 [Cyrene]" if lang == "en" else "★5【キュレネ】"
+    txt_off = "★5 [Off-Banner (Ticket)]" if lang == "en" else "★5【すり抜け（チケット獲得）】"
+    txt_page = " + ★5 [Page: Part 1]" if lang == "en" else " ＋ ★5【??? その1】"
 
     for _ in range(num_pulls):
         page_got = False
@@ -176,12 +193,12 @@ def perform_gacha_pulls(user_id: int, num_pulls: int, use_ticket: bool = False) 
             if guaranteed or random.random() < 0.5:
                 state["cyrene_copies"] = state.get("cyrene_copies", 0) + 1
                 guaranteed, cyrene_hit = False, cyrene_hit + 1
-                txt = "★5【キュレネ】"
+                txt = txt_cyrene
             else:
                 state["offbanner_tickets"] = state.get("offbanner_tickets", 0) + 1
                 guaranteed, off_hit = True, off_hit + 1
-                txt = "★5【すり抜け（チケット獲得）】"
-            if page_got: txt += " ＋ ★5【??? その1】"
+                txt = txt_off
+            if page_got: txt += txt_page
         else:
             pity_5 += 1
             if pity_4 >= 9 or random.random() < 0.24:
@@ -190,33 +207,42 @@ def perform_gacha_pulls(user_id: int, num_pulls: int, use_ticket: bool = False) 
             else:
                 pity_4 += 1
                 txt = "★3"
-            if page_got: txt += " ＋ ★5【??? その1】"
+            if page_got: txt += txt_page
         results.append(txt)
 
     state["pity_5"], state["pity_4"], state["guaranteed_cyrene"] = pity_5, pity_4, guaranteed
     db.save_gacha_state(user_id, state)
 
     summary = []
-    if cyrene_hit: summary.append(f"★5キュレネ: {cyrene_hit}")
-    if off_hit: summary.append(f"★5すり抜け: {off_hit}")
-    if page_hits: summary.append(f"★5ページ: {page_hits}")
-    sum_text = " / ".join(summary) if summary else "★5なし"
+    if cyrene_hit: summary.append(f"★5 Cyrene: {cyrene_hit}" if lang=="en" else f"★5キュレネ: {cyrene_hit}")
+    if off_hit: summary.append(f"★5 Off-Banner: {off_hit}" if lang=="en" else f"★5すり抜け: {off_hit}")
+    if page_hits: summary.append(f"★5 Page: {page_hits}" if lang=="en" else f"★5ページ: {page_hits}")
+    sum_text = " / ".join(summary) if summary else ("No ★5" if lang=="en" else "★5なし")
     
     body = "\n".join([f"{i+1}: {r}" for i, r in enumerate(results)])
-    return True, f"{cost_str}\n{body}\n\n{sum_text}\n現在の石: {state['stones']} / チケット: {state['offbanner_tickets']}"
+    
+    footer = f"Stones: {state['stones']} / Tickets: {state['offbanner_tickets']}" if lang == "en" else f"現在の石: {state['stones']} / チケット: {state['offbanner_tickets']}"
+    return True, f"{cost_str}\n{body}\n\n{sum_text}\n{footer}"
 
 def grant_daily_stones(user_id: int) -> tuple[bool, int, str]:
     state = db.get_gacha_state(user_id)
+    lang = db.get_user_lang(user_id)
+    
     if state.get("last_daily") == today_str():
-        return False, state["stones"], "今日はもう受け取っているみたい。"
+        msg = "You already received today's reward." if lang == "en" else "今日はもう受け取っているみたい。"
+        return False, state["stones"], msg
+    
     state["stones"] = state.get("stones", 0) + 16000
     state["last_daily"] = today_str()
     db.save_gacha_state(user_id, state)
-    return True, state["stones"], "デイリー報酬 16000個 を付与したわ♪"
+    
+    msg = "Daily Reward: 16000 stones granted♪" if lang == "en" else "デイリー報酬 16000個 を付与したわ♪"
+    return True, state["stones"], msg
 
-# ★追加：ガチャステータス表示
 def format_gacha_status(user_id: int) -> str:
     state = db.get_gacha_state(user_id)
+    lang = db.get_user_lang(user_id)
+    
     stones = state.get("stones", 0)
     pity_5 = state.get("pity_5", 0)
     cyrene_copies = state.get("cyrene_copies", 0)
@@ -224,25 +250,35 @@ def format_gacha_status(user_id: int) -> str:
     guaranteed = state.get("guaranteed_cyrene", False)
     mult = get_cyrene_affection_multiplier(user_id)
     
-    next_up = "キュレネ確定" if guaranteed else "50%でキュレネ"
-    
-    return (
-        "【ガチャメニュー】\n"
-        f"・所持石: {stones} 個\n"
-        f"・キュレネ所持: {cyrene_copies} 枚 (好感度倍率 x{mult:.1f})\n"
-        f"・すり抜けチケット: {tickets} 枚\n"
-        f"・天井カウント: {pity_5} 連 (次の★5は {next_up})\n\n"
-        "『単発ガチャ』『10連ガチャ』で引けるわよ♪"
-    )
+    if lang == "en":
+        next_up = "Guaranteed Cyrene" if guaranteed else "50/50 Chance"
+        return (
+            "【Gacha Menu】\n"
+            f"- Stones: {stones}\n"
+            f"- Cyrene Copies: {cyrene_copies} (Affection x{mult:.1f})\n"
+            f"- Tickets: {tickets}\n"
+            f"- Pity Count: {pity_5} (Next ★5 is {next_up})\n\n"
+            "Use `Pull 1` or `Pull 10` to play♪"
+        )
+    else:
+        next_up = "キュレネ確定" if guaranteed else "50%でキュレネ"
+        return (
+            "【ガチャメニュー】\n"
+            f"・所持石: {stones} 個\n"
+            f"・キュレネ所持: {cyrene_copies} 枚 (好感度倍率 x{mult:.1f})\n"
+            f"・すり抜けチケット: {tickets} 枚\n"
+            f"・天井カウント: {pity_5} 連 (次の★5は {next_up})\n\n"
+            "『単発ガチャ』『10連ガチャ』で引けるわよ♪"
+        )
 
-# --- じゃんけんロジック ---
+# --- じゃんけんロジック (英語入力対応) ---
 JANKEN_HANDS = ["グー", "チョキ", "パー"]
 
-# ★追加：これが抜けていたためエラーになっていました
 def parse_hand(text: str):
-    if "グー" in text: return "グー"
-    if "チョキ" in text: return "チョキ"
-    if "パー" in text: return "パー"
+    t = text.lower()
+    if "グー" in t or "rock" in t: return "グー"
+    if "チョキ" in t or "scissors" in t: return "チョキ"
+    if "パー" in t or "paper" in t: return "パー"
     return None
 
 def judge_janken(user_hand, bot_hand):

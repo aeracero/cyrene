@@ -49,11 +49,12 @@ ADMIN_COMMANDS_LIST = (
     "- `変身解放状況確認`"
 )
 
-GENERAL_COMMANDS_LIST = (
+GENERAL_COMMANDS_LIST_JP = (
     "【あたしとできること一覧よ♪】\n\n"
     "**★ お話ししましょう♪**\n"
     "- `!mode auto`: メンションなしでもお話しするようになるわ\n"
     "- `!mode mention`: メンションした時だけお話しするわ\n"
+    "- `!lang en`: 英語モードに切り替えるわ\n"
     "- `こんにちは` / `おやすみ`: 挨拶は大事よね♪\n"
     "- `みんなについて教えて`: 他の人のこと、こっそり教えるわ\n"
     "- `甘えていいんだよ`: …ふふっ、遠慮なく甘えちゃうかも？\n"
@@ -74,6 +75,27 @@ GENERAL_COMMANDS_LIST = (
     "- `コマンドを教えて`: このリストを見せるわ"
 )
 
+GENERAL_COMMANDS_LIST_EN = (
+    "【Available Commands】\n\n"
+    "**★ Talk with me**\n"
+    "- `!mode auto`: I will reply without mentions\n"
+    "- `!mode mention`: I will only reply to mentions\n"
+    "- `!lang jp`: Switch to Japanese mode\n"
+    "- `Hello` / `Good night`: Greetings are important♪\n"
+    "- `Tell me about everyone`: I'll tell you about my friends\n"
+    "- `RPS` / `Rock Paper Scissors`: Let's play a game!\n"
+    "- `Set nickname [name]`: Tell me what to call you\n"
+    "- `Affection`: Check our bond level\n"
+    "- `Guardian`: Check your Guardian level\n\n"
+    "**★ Transformation**\n"
+    "- `Transform`: Tell me a code to change my form\n"
+    "- `Current form`: Who am I right now?\n\n"
+    "**★ Gacha**\n"
+    "- `Gacha`: Check gems and tickets\n"
+    "- `Pull 1` / `Pull 10`: Try your luck?\n"
+    "- `Daily`: Get your daily gems♪"
+)
+
 async def send_myu(message, user_id, text):
     await message.channel.send(logic.apply_myurion_filter(user_id, text))
 
@@ -86,23 +108,36 @@ async def on_message(message):
     if message.author.bot: return
     user_id = message.author.id
     content = message.content.strip() # 原文
+    content_lower = content.lower()
     
-    # ★修正: メンション除去後のテキストを先に取得（判定に使うため）
+    # メンション除去後のテキスト
     content_body = re.sub(rf"<@!?{client.user.id}>", "", content).strip()
+    content_body_lower = content_body.lower()
 
     is_main_admin = (user_id == PRIMARY_ADMIN_ID)
     nickname = db.get_nickname(user_id)
     name = nickname if nickname else message.author.display_name
     current_form = get_user_form(user_id)
+    lang = db.get_user_lang(user_id) # 現在の言語
     
-    # --- モード切替コマンド (最優先・メンション不要) ---
-    if content == "!mode auto":
+    # --- モード/言語切替コマンド (最優先・メンション不要) ---
+    if content_lower == "!mode auto":
         db.set_reply_mode(user_id, "auto")
-        await message.channel.send(f"了解です♪ これからはメンションなしでもお話しますね、{name}さん！")
+        msg = f"Got it! I'll reply even without mentions now, {name}!" if lang=="en" else f"了解です♪ これからはメンションなしでもお話しますね、{name}さん！"
+        await message.channel.send(msg)
         return
-    if content == "!mode mention":
+    if content_lower == "!mode mention":
         db.set_reply_mode(user_id, "mention")
-        await message.channel.send(f"わかりました。これからは呼んでくれた時（メンション）だけお返事しますね。")
+        msg = f"Okay. I'll only reply when you mention me." if lang=="en" else f"わかりました。これからは呼んでくれた時（メンション）だけお返事しますね。"
+        await message.channel.send(msg)
+        return
+    if content_lower == "!lang en":
+        db.set_user_lang(user_id, "en")
+        await message.channel.send(f"Okay, {name}! I'll speak in English from now on♪")
+        return
+    if content_lower == "!lang jp":
+        db.set_user_lang(user_id, "jp")
+        await message.channel.send(f"わかりました、{name}さん！これからは日本語でお話ししますね♪")
         return
 
     # 状態チェック
@@ -115,19 +150,30 @@ async def on_message(message):
         user_id in MYURION_QUIZ_STATE
     )
     
-    # コマンド確認キーワード (★修正: content_body で判定するように変更し、"コマンド確認"を追加)
-    is_command_query = content_body in ["コマンド", "コマンド教えて", "コマンドを教えて", "ヘルプ", "コマンド確認"]
+    # キーワードトリガー (EN/JP対応)
+    CMD_KEYWORDS = ["コマンド", "ヘルプ", "command", "help"]
+    RPS_KEYWORDS = ["じゃんけん", "rps", "rock paper scissors"]
+    TRANS_KEYWORDS = ["変身", "transform"]
+    GACHA_KEYWORDS = ["ガチャ", "gacha"]
+    DAILY_KEYWORDS = ["デイリー", "daily"]
+    NICK_KEYWORDS = ["あだ名", "nickname"]
+    MYU_KEYWORDS = ["ミュリオン", "myurion"]
+    AFF_KEYWORDS = ["好感度", "affection"]
+    
+    is_command_query = any(k in content_body_lower for k in CMD_KEYWORDS)
+    is_keyword_trigger = any(k in content_body_lower for k in (
+        RPS_KEYWORDS + TRANS_KEYWORDS + GACHA_KEYWORDS + DAILY_KEYWORDS + 
+        NICK_KEYWORDS + MYU_KEYWORDS + AFF_KEYWORDS + 
+        ["親衛隊レベル", "guardian", "skopeo", "skepeo", "今の姿", "current form", "記憶は流れ星"]
+    ))
     
     # 返信判定
     is_mentioned = client.user in message.mentions
     reply_mode = db.get_reply_mode(user_id)
     is_auto_reply = (reply_mode == "auto")
     
-    # 反応するかどうかの決定
     should_reply = (is_mentioned or is_active_mode or is_auto_reply)
-    
-    if not should_reply:
-        return
+    if not should_reply: return
 
     # 空メッセージ判定（メンションがあれば空でも通す）
     if not content_body and not message.attachments and not is_active_mode and not is_mentioned:
@@ -138,27 +184,21 @@ async def on_message(message):
         if user_id in admin_data_mode:
             await send_myu(message, user_id, ADMIN_COMMANDS_LIST)
         else:
-            await send_myu(message, user_id, f"{message.author.mention} {GENERAL_COMMANDS_LIST}")
+            list_text = GENERAL_COMMANDS_LIST_EN if lang == "en" else GENERAL_COMMANDS_LIST_JP
+            await send_myu(message, user_id, f"{message.author.mention} {list_text}")
         return
 
-    # --- メイン管理者限定：全体ミュリオン設定 ---
-    if content_body == "全体ミュリオンモード":
-        if is_main_admin:
-            db.set_all_myurion_enabled(True)
-            await message.channel.send(f"{message.author.mention} 全員ミュリオンモードON！ ミュミュ〜♪")
-        else:
-            await send_myu(message, user_id, "それはメイン管理者の {name} さんだけの秘密の魔法よ。")
+    # --- ミュリオン設定 ---
+    if content_body == "全体ミュリオンモード" and db.is_admin(user_id):
+        db.set_all_myurion_enabled(True)
+        await message.channel.send(f"{message.author.mention} 全員ミュリオンモードON！ ミュミュ〜♪")
         return
-        
-    if content_body == "全体ミュリオン解除":
-        if is_main_admin:
-            db.set_all_myurion_enabled(False)
-            await message.channel.send(f"{message.author.mention} 全員ミュリオンモード解除。普通の言葉に戻るわね。")
-        else:
-            await send_myu(message, user_id, "それはメイン管理者の {name} さんだけの秘密の魔法よ。")
+    if content_body == "全体ミュリオン解除" and db.is_admin(user_id):
+        db.set_all_myurion_enabled(False)
+        await message.channel.send(f"{message.author.mention} 全員ミュリオンモード解除。普通の言葉に戻るわね。")
         return
 
-    # --- ミュリオンクイズ ---
+    # --- ミュリオンクイズ (既存ロジック・日本語のみ) ---
     if user_id in MYURION_QUIZ_STATE:
         ans = logic.parse_myurion_answer(content_body)
         if not ans:
@@ -191,32 +231,32 @@ async def on_message(message):
             await logic.send_myurion_question(message, user_id, st.get("quiz_correct", 0), MYURION_QUIZ_STATE)
         return
 
-    if content_body in ["ミュリオンモードオン", "ミュリオンオン"]:
+    if any(k in content_body_lower for k in ["ミュリオンモードオン", "myurion on"]):
         st = db.get_myurion_state(user_id)
         if st.get("unlocked"):
             st["enabled"] = True
             db.save_myurion_state(user_id, st)
-            await send_myu(message, user_id, "ミュリオンモードONミュ！ いっぱいお話ししよミュ♪")
+            await send_myu(message, user_id, "Myurion Mode ON Myu!" if lang=="en" else "ミュリオンモードONミュ！ いっぱいお話ししよミュ♪")
         else:
-            await send_myu(message, user_id, "まだその扉は開いてないみたい…。クイズに挑戦してみて？")
+            await send_myu(message, user_id, "Locked..." if lang=="en" else "まだその扉は開いてないみたい…。クイズに挑戦してみて？")
         return
     
-    if content_body in ["ミュリオンモードオフ", "ミュリオンオフ"]:
+    if any(k in content_body_lower for k in ["ミュリオンモードオフ", "myurion off"]):
         st = db.get_myurion_state(user_id)
         st["enabled"] = False
         db.save_myurion_state(user_id, st)
-        await message.channel.send("わかったわ、通常言語に戻るわね。")
+        await message.channel.send("Back to normal language." if lang=="en" else "わかったわ、通常言語に戻るわね。")
         return
 
     # --- 丹恒解放コード ---
     if "skopeo365" in re.sub(r"\s+", "", content_body).lower():
         if has_danheng_stage1(user_id) and not is_danheng_unlocked(user_id):
             set_danheng_unlocked(user_id, True)
-            await send_myu(message, user_id, "丹恒の記憶が…蘇ったみたい♪ 『たんたんになってみて』と言ってみて？")
+            await send_myu(message, user_id, "Danheng's memory awakened..." if lang=="en" else "丹恒の記憶が…蘇ったみたい♪")
         elif is_danheng_unlocked(user_id):
-            await send_myu(message, user_id, "ふふっ、その姿ならもう解放されているわよ♪")
+            await send_myu(message, user_id, "Already unlocked." if lang=="en" else "ふふっ、その姿ならもう解放されているわよ♪")
         else:
-            await send_myu(message, user_id, "ん〜…まだ何かが足りないみたいね。")
+            await send_myu(message, user_id, "Something is missing..." if lang=="en" else "ん〜…まだ何かが足りないみたいね。")
         waiting_for_transform_code.discard(user_id)
         return
 
@@ -225,29 +265,33 @@ async def on_message(message):
         t_text = content_body
         waiting_for_transform_code.discard(user_id)
         
+        # 特殊変身
         if "なのになってみて" in t_text:
             if is_nanoka_unlocked(user_id):
                 set_user_form(user_id, "nanoka")
-                await send_myu(message, user_id, "今日から三月なのか/長夜月の姿になるわ♪ よろしくねっ！")
+                await send_myu(message, user_id, "Transformed into March 7th!" if lang=="en" else "今日から三月なのか/長夜月の姿になるわ♪")
             else:
-                await send_myu(message, user_id, "まだ条件が足りないみたい…。じゃんけんにいっぱい勝ってみて？")
+                await send_myu(message, user_id, "Locked." if lang=="en" else "まだ条件が足りないみたい…。")
             return
         if "たんたんになってみて" in t_text:
             if is_danheng_unlocked(user_id):
                 set_user_form(user_id, "danheng")
-                await send_myu(message, user_id, "…わかった。丹恒の姿になろう。")
+                await send_myu(message, user_id, "Transformed into Dan Heng." if lang=="en" else "…わかった。丹恒の姿になろう。")
             else:
-                await send_myu(message, user_id, "鍵が足りないみたい。")
+                await send_myu(message, user_id, "Locked." if lang=="en" else "鍵が足りないみたい。")
             return
         
         fk = resolve_form_code(t_text)
         if fk:
             set_user_form(user_id, fk)
-            await send_myu(message, user_id, f"**{get_form_display_name(fk)}** に変身したわ♪ どう？似合う？")
+            dname = get_form_display_name(fk)
+            msg = f"Transformed into **{dname}**!" if lang=="en" else f"**{dname}** に変身したわ♪ どう？似合う？"
+            await send_myu(message, user_id, msg)
         else:
-            await send_myu(message, user_id, "そのコードは知らないみたい…。もう一度確認してくれる？")
+            msg = "Unknown code. Try again?" if lang=="en" else "そのコードは知らないみたい…。もう一度確認してくれる？"
+            await send_myu(message, user_id, msg)
         return
-    
+
     # --- データ管理モード ---
     if user_id in admin_data_mode:
         
@@ -485,62 +529,64 @@ async def on_message(message):
         await send_myu(message, user_id, f"データ管理モードに入ったわ。\n{ADMIN_COMMANDS_LIST}")
         return
 
-    # --- あだ名系 ---
-    if content_body.startswith("あだ名登録"):
-        new = content_body.replace("あだ名登録", "", 1).strip()
+    # --- あだ名系 (EN/JP) ---
+    if any(content_body_lower.startswith(k) for k in ["あだ名登録", "set nickname"]):
+        # "あだ名登録" または "set nickname" を削除
+        new = re.sub(r"^(あだ名登録|set nickname)\s*", "", content_body, flags=re.IGNORECASE).strip()
         if not new:
             waiting_for_nickname.add(user_id)
-            await send_myu(message, user_id, rs.get_nickname_message_for_form(current_form, "ask"))
+            await send_myu(message, user_id, rs.get_nickname_message_for_form(current_form, "ask", name, user_id))
         else:
             db.set_nickname(user_id, new)
-            await send_myu(message, user_id, rs.get_nickname_message_for_form(current_form, "confirm", new))
+            await send_myu(message, user_id, rs.get_nickname_message_for_form(current_form, "confirm", new, user_id))
         return
 
     if user_id in waiting_for_nickname:
         if content_body:
             db.set_nickname(user_id, content_body)
             waiting_for_nickname.discard(user_id)
-            await send_myu(message, user_id, rs.get_nickname_message_for_form(current_form, "confirm", content_body))
+            await send_myu(message, user_id, rs.get_nickname_message_for_form(current_form, "confirm", content_body, user_id))
         else:
-            await send_myu(message, user_id, "聞こえなかったわ、もう一度教えてくれる？")
+            msg = "I couldn't hear you." if lang=="en" else "聞こえなかったわ、もう一度教えてくれる？"
+            await send_myu(message, user_id, msg)
         return
 
-    # --- ガチャ ---
-    if "ガチャ" in content_body:
-        if "単発" in content_body:
+    # --- ガチャ (EN/JP) ---
+    if any(k in content_body_lower for k in GACHA_KEYWORDS):
+        if any(k in content_body_lower for k in ["単発", "pull 1"]) and "10" not in content_body_lower:
             ok, res = logic.perform_gacha_pulls(user_id, 1)
             await send_myu(message, user_id, res)
-        elif "10連" in content_body or "１０連" in content_body:
-            use_ticket = "チケット" in content_body
+        elif any(k in content_body_lower for k in ["10連", "pull 10"]):
+            use_ticket = "ticket" in content_body_lower or "チケット" in content_body_lower
             ok, res = logic.perform_gacha_pulls(user_id, 10, use_ticket)
             await send_myu(message, user_id, res)
         else:
             await send_myu(message, user_id, logic.format_gacha_status(user_id)) 
         return
 
-    if "デイリー" in content_body:
+    if any(k in content_body_lower for k in DAILY_KEYWORDS):
         ok, stones, reason = logic.grant_daily_stones(user_id)
-        await send_myu(message, user_id, f"{reason}\n所持石: {stones}")
+        await send_myu(message, user_id, f"{reason}\nStones: {stones}" if lang=="en" else f"{reason}\n所持石: {stones}")
         return
 
     # --- 変身開始 ---
-    if content_body == "変身":
+    if any(k in content_body_lower for k in TRANS_KEYWORDS) and "state" not in content_body_lower and "状態" not in content_body_lower:
         waiting_for_transform_code.add(user_id)
-        await send_myu(message, user_id, "ふふっ、別の姿になりたいの？ 変身コードを教えてくれるかしら♪")
+        msg = "Tell me the transformation code." if lang=="en" else "ふふっ、別の姿になりたいの？ 変身コードを教えてくれるかしら♪"
+        await send_myu(message, user_id, msg)
         return
 
-    # --- じゃんけん ---
-    if "じゃんけん" in content_body or user_id in waiting_for_rps_choice:
+    # --- じゃんけん (EN/JP) ---
+    is_rps_msg = any(k in content_body_lower for k in RPS_KEYWORDS)
+    if is_rps_msg or user_id in waiting_for_rps_choice:
         hand = logic.parse_hand(content_body)
         
-        # 手が入力されていない場合 -> 開始
-        if not hand and "じゃんけん" in content_body:
+        if not hand and is_rps_msg:
             waiting_for_rps_choice.add(user_id)
-            prompt = rs.get_rps_prompt_for_form(current_form, name)
+            prompt = rs.get_rps_prompt_for_form(current_form, name, user_id)
             await send_myu(message, user_id, prompt)
             return
         
-        # 手が入力された場合
         if hand:
             force = user_id in FORCE_RPS_WIN_NEXT
             bot_hand = logic.get_bot_hand(hand, force)
@@ -549,7 +595,7 @@ async def on_message(message):
             
             wins = inc_janken_win(user_id) if res == "win" else get_janken_wins(user_id)
             
-            result_msg = rs.format_rps_result(current_form, name, hand, bot_hand, rs.get_rps_flavor(current_form, res, name), wins)
+            result_msg = rs.format_rps_result(current_form, name, hand, bot_hand, rs.get_rps_flavor(current_form, res, name, user_id), wins, user_id)
             
             await send_myu(message, user_id, result_msg)
             
@@ -559,22 +605,26 @@ async def on_message(message):
             return
 
     # --- 親衛隊レベル確認 ---
-    if content_body in ["親衛隊レベル", "親衛隊レベル確認"]:
+    if any(k in content_body_lower for k in ["親衛隊レベル", "guardian"]):
         lv = db.get_guardian_level(user_id)
-        msg = f"あなたの親衛隊レベルは Lv.{lv} よ♪" if lv else "まだ親衛隊レベルは登録されてないみたいね。"
+        if lang == "en":
+            msg = f"Your Guardian Level is Lv.{lv}." if lv else "No Guardian Level registered."
+        else:
+            msg = f"あなたの親衛隊レベルは Lv.{lv} よ♪" if lv else "まだ親衛隊レベルは登録されてないみたいね。"
         await send_myu(message, user_id, msg)
         return
 
     # --- 好感度チェック ---
-    if content_body in ["好感度", "好感度チェック", "キュレネ好感度"]:
+    if any(k in content_body_lower for k in AFF_KEYWORDS):
         msg = logic.get_affection_status_message(user_id)
         await send_myu(message, user_id, f"{message.author.mention} {msg}")
         return
 
     # --- 変身状態確認 ---
-    if content_body in ["変身状態", "今の姿", "今のフォーム"]:
+    if any(k in content_body_lower for k in ["変身状態", "今の姿", "current form"]):
         fname = get_form_display_name(current_form)
-        await send_myu(message, user_id, f"{message.author.mention} 今のあたしは **{fname}** よ♪")
+        msg = f"I am currently **{fname}**." if lang=="en" else f"今のあたしは **{fname}** よ♪"
+        await send_myu(message, user_id, f"{message.author.mention} {msg}")
         return
 
     # --- 通常会話 ---

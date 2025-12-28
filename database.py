@@ -1,4 +1,3 @@
-# database.py
 import json
 from pathlib import Path
 from config import (
@@ -8,7 +7,9 @@ from config import (
     PRIMARY_ADMIN_ID, today_str
 )
 
-# 新規追加: 返信モード保存用ファイル
+# 言語設定用ファイル
+LANGUAGE_FILE = Path("data/language.json")
+# 返信モード保存用ファイル
 REPLY_MODE_FILE = Path("data/reply_mode.json")
 
 # --- 共通ユーティリティ ---
@@ -27,6 +28,20 @@ def _save_json(path: Path, data):
     if not path.parent.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+# --- 言語設定 (JP/EN) ---
+def load_languages(): return _load_json(LANGUAGE_FILE, {})
+
+def get_user_lang(user_id):
+    """ユーザーの言語を取得 ('jp' or 'en')。デフォルトは 'jp'"""
+    data = load_languages()
+    return data.get(str(user_id), "jp")
+
+def set_user_lang(user_id, lang):
+    """言語を設定 ('jp' or 'en')"""
+    data = load_languages()
+    data[str(user_id)] = lang
+    _save_json(LANGUAGE_FILE, data)
 
 # --- 返信モード ---
 def load_reply_modes(): return _load_json(REPLY_MODE_FILE, {})
@@ -96,7 +111,7 @@ def load_affection_config():
     return base
 def save_affection_config(cfg): _save_json(AFFECTION_CONFIG_FILE, cfg)
 
-# --- メッセージ制限 & Bypass (機能拡張) ---
+# --- メッセージ制限 & Bypass ---
 DEFAULT_MSG_LIMIT_CONFIG = {"bypass_enabled": False, "bypass_users": []}
 def load_message_limits(): return _load_json(MESSAGE_LIMIT_FILE, {})
 def set_message_limit(user_id, limit):
@@ -136,7 +151,6 @@ def can_bypass_message_limit(user_id):
     if not cfg.get("bypass_enabled", False): return False
     return str(user_id) in cfg.get("bypass_users", [])
 
-# ★追加: Bypassユーザー操作
 def add_bypass_user(user_id):
     cfg = load_message_limit_config()
     users = set(cfg.get("bypass_users", []))
@@ -200,13 +214,11 @@ def set_all_myurion_enabled(enabled: bool):
         data[uid] = st
     _save_json(MYURION_FILE, data)
 
-# --- ★追加: 特殊アンロック/じゃんけん勝利数管理 ---
-# special_unlocks.py のデータをここで扱えるようにして、コマンドを確実に動作させます
+# --- 特殊アンロック/じゃんけん勝利数管理 ---
 def load_special_unlocks(): return _load_json(SPECIAL_UNLOCKS_FILE, {})
 def save_special_unlocks(data): _save_json(SPECIAL_UNLOCKS_FILE, data)
 
 def set_janken_wins_direct(user_id: int, wins: int):
-    """管理者用: 勝利数を直接設定"""
     data = load_special_unlocks()
     info = data.get(str(user_id), {})
     info["janken_wins"] = max(0, int(wins))
@@ -214,7 +226,6 @@ def set_janken_wins_direct(user_id: int, wins: int):
     save_special_unlocks(data)
 
 def get_all_special_status():
-    """管理者用: 全員の解放状況を取得"""
     data = load_special_unlocks()
     results = []
     for uid, info in data.items():

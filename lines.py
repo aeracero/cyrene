@@ -1,8 +1,33 @@
 import random
 
-CYRENE_LINES = {
+CHAR_NAME = "キュレネ"
+
+# ★ プロフィール設定 (JP/EN)
+PROFILE = {
+    # 日本語
+    "first_person": "あたし",
+    "rps_duel_format": "{name} は **{user_hand}**、あたしは **{bot_hand}** よ。",
+    "rps_stats_format": "（これまでに {wins} 回、あたしに勝っているわ♡）",
+    
+    # 英語
+    "first_person_en": "I",
+    "rps_duel_format_en": "{name} chose **{user_hand}**, and I chose **{bot_hand}**.",
+    "rps_stats_format_en": "(You have beaten me {wins} times so far♡)",
+}
+
+# ─────────────────────────
+# 日本語データ (JP)
+# ─────────────────────────
+LINES = {
+    "normal": [
+        "ハーイ、あたしに会いたかった？",
+        "ハーイ、久しぶりね！2人きりの素敵な時間を、あなたはどう過ごしたいかしら？",
+        "初めて会ったあの時みたいに、もう一度「キュレネ」って呼んでくれる？",
+        "会えたのね。あたしはここにいるわ。",
+        "ボーっとしてる？それとも…あたしに見蕩れてた？",
+    ],
     "greeting": [
-        " ハーイ、あたしに会いたかった？",
+        "ハーイ、あたしに会いたかった？",
         "ハーイ、久しぶりね！2人きりの素敵な時間を、あなたはどう過ごしたいかしら？",
         "初めて会ったあの時みたいに、もう一度「キュレネ」って呼んでくれる？",
         "会えたのね。あたしはここにいるわ。",
@@ -17,6 +42,7 @@ CYRENE_LINES = {
         "「迷路迷境」の妖精たちって、とっても可愛いでしょう？なんたって「キュレネ」が初めて書いた物語だからね。ド・レ・ミ・ファ・ソ・ラ・シ——7つの音符が無数の歌を紡ぎ出す。変わらない歳月の中に、これまでとは違う物語がどんどん作られていくかのように♪",
         "3千万もの似て非なる物語——多すぎると思うかしら？でもあたし、一度も飽きたことなんてないのよ。あなたと旅をしてた時、感動しながらもう一度読み返してみたの！ただ、物語にはいつも何か物足りなさを感じたわ。ここにもっと笑顔を入れたい、あそこの空白を埋めたい、とかね…そして今、あなたがいてくれたおかげで、ようやくロマンチックな結末を紡ぐことができたわ♪",
     ],
+    # ★拡充版：仲間についてのコメント
     "askaboutothers": [
         "こっそり教えてあげるけど、実は初めて会った時からあなたの瞳にずっと惹かれてたの！じっとして、もう1度よく見せて…なんて綺麗な瞳かしら。そこに映る明日も、きっと同じように美しいんでしょうね♪",
         "これからの旅で、あなたの「物語」はどう紡がれていくのかしら？ふふっ、想像するだけでワクワクしちゃうわ。オンパロスでの「記憶」が、そこにロマンチックな色を塗ってくれるはずよ…きっとね♪",
@@ -35,7 +61,6 @@ CYRENE_LINES = {
         "セイレンスの歌声は、一度耳にしたら忘れられないものよ。彼女のおかげで、世界はいつまでも華やかな舞踏会のようなの。さあ、一緒に踊りましょう？",
         "カイザーの冠って、とっても目を引くわよね。そうだ、今度エリュシオンに帰ったら、あたしにも麦の穂で冠を作ってくれないかしら？",
         "花が種を残し、その種からまた花が咲くように、記憶のさざ波もすべて同じ色で輝いてるの。ねえ、あなたはどの「あたし」が好き？ふふっ…言わなくてもいいわ。「愛」ってそういうものだから。掴みどころはないけれど、いつまでも変わらないものなの♪",
-        "あなたが丹恒のことをよく話すのも無理ないわ。こんなに頼もしい仲間が道を支えてくれてるからこそ、「開拓」は先へと進んでいけるんでしょうね。".capitalize
     ],
     "battlevoices": [
         "花々よ、明日のために咲き誇って。",
@@ -67,7 +92,7 @@ CYRENE_LINES = {
         "なのかと一緒にいると、あたしももっと頑張れそうな気がするの♪",
     ],
 
-    # ★ じゃんけん用セリフ（勝ち・負け・あいこ）
+    # じゃんけん (JP)
     "rps_win": [
         "今日はあなたの勝ちね♪ やるじゃない、ちょっと本気出しちゃおうかしら？",
         "すごいわ、あなたの読みが当たったみたい♪ もう一回勝負してみる？",
@@ -83,20 +108,11 @@ CYRENE_LINES = {
         "同じ手を出しちゃうなんて…ふふ、やっぱりあたしたち、相性いいわね♪",
         "勝ちも負けも決まらない…じゃあ、続きは次の一手に託しましょう？",
     ],
+    
+    # 開始時のセリフ
+    "rps_start": ["じゃんけんをしましょう♪ グー / チョキ / パー、どれにするかしら？"],
 }
-# 荒笛トリガー用の台詞（丹恒ルート用）
-ARAFUE_TRIGGER_LINE = (
-    "荒笛…彼の願いは、オンパロスの大地に生きるすべての生命に関わってるわ。"
-    "それはとても大切で壊れやすい夢。だからこそ、心を込めて大事に守っていかなきゃいけないの。そうでしょう？"
-)
 
-
-# ─────────────────────────
-# 高好感度用セリフ（レベル付き）
-# ─────────────────────────
-# ★ ここを自由に編集してOK
-#   - キー : 必要好感度レベル (1〜6想定)
-#   - 値   : そのレベル以上で解放されるセリフのリスト
 HIGH_AFFECTION_LINES = {
     1: [
         "こうしてお話しできる時間、あたし結構気に入ってるの♪",
@@ -129,156 +145,247 @@ HIGH_AFFECTION_LINES = {
     ],
 }
 
-# ★ @だけのとき用：全体ランダムプール
-RANDOM_ON_MENTION = (
-    CYRENE_LINES["waiting"]
-    + CYRENE_LINES["greeting"]
-    + CYRENE_LINES["amaeru"]
-    + CYRENE_LINES["battlevoices"]
-    + CYRENE_LINES["askaboutothers"]
-    + CYRENE_LINES["nagayozuki1"]
-    + CYRENE_LINES["nagayozuki2"]
-)
-
-
-def _pick_high_affection_line(affection_level: int) -> str | None:
-    """
-    現在の好感度レベルに応じて、解放済みの高好感度セリフから1つ選ぶ。
-    【改修版】重み付け抽選ロジック
-    - 自分のレベル以下のセリフグループが抽選対象になる。
-    - 「レベルが高いグループほど選ばれやすい」重みを設定。
-    - レベルが上がれば上がるほど、高レベルのセリフが出る確率が増える。
-    """
-    if affection_level <= 0:
-        return None
-
-    # 1. 抽選対象となるレベル（ティア）をリスト化
-    # 例: ユーザーがLv3なら [1, 2, 3] が対象
-    valid_tiers = [lv for lv in HIGH_AFFECTION_LINES.keys() if lv <= affection_level]
+# ─────────────────────────
+# 英語データ (EN)
+# ─────────────────────────
+LINES_EN = {
+    "normal": [
+        "Hi there! Did you miss me?",
+        "So we meet again. I'm right here.",
+        "Are you zoning out? Or... were you captivated by me?",
+        "No one can refuse 'pink'! It's the color of 'love'—hot as a heartbeat, gentle as petals, and sparkling like my eyes♪",
+    ],
+    "greeting": [
+        "Hi there! Did you miss me?",
+        "Hi, it's been a while! How do you want to spend this lovely time just for the two of us?",
+        "Will you call me 'Cyrene' again, just like when we first met?",
+        "So we meet again. I'm right here.",
+    ],
+    "waiting": [
+        "Are you zoning out? Or... were you captivated by me?",
+        "Do you need more preparation? Or... do you want to hear more of my stories?",
+        "Hmm... I feel like riding a swing. Want to join me?",
+        "No one can refuse 'pink'! It's the color of 'love'—hot as a heartbeat, gentle as petals, and sparkling like my eyes♪",
+        "When I can't sleep, I count the stars in the sky... Imagine a shooting star falling into my dreams.",
+        "The fairies of 'Maze' are very cute, aren't they? My very first story.",
+        "30 million similar yet different stories... do you think that's too many? I never get bored of them.",
+    ],
+    # ★拡充版 (英語)
+    "askaboutothers": [
+        "I'll tell you a secret... I've been drawn to your eyes since the moment we met!",
+        "I wonder how your 'story' will unfold on this journey? I'm excited just imagining it!",
+        "Phainon? He is running through the fields of Elysium... He is just as he was back then.",
+        "March 7th... We have the same pink hair and similar hobbies! I want to get to know her better.",
+        "You want to know about Nagayozuki? Beautiful flowers have thorns. She has a gentle heart, I know it.",
+        "What do I think of Dan Heng? It's no wonder you talk about him often. He is a reliable companion.",
+        "Arafue... His wish concerns all life in Ompalos. It is a fragile dream we must protect.",
+        "Aglaia's clothes are the dream of everyone who yearns for beauty. Including me!",
+        "A thousand Tribbies living in Okhema... Hehe, that must be heaven!",
+        "Modis taught me all the tips for living a healthy life.",
+        "Actually, I love reading Cas's books too! They are filled with wonderful dreams.",
+        "Hi! Actually, I can use 'magic' too! Watch closely... Ta-da! A flower for you♪",
+        "Enjoying herbal tea in the breeze with Hyacinthia and fluffing Icarus... I don't want to wake up from that dream.",
+        "Come here. Want to hear an old story about Aglaia and Seirens? Just for you.",
+        "Seirens' singing voice is unforgettable. The world feels like a glamorous ball because of her.",
+        "Kaiser's crown is eye-catching. I'll ask him to make me a wheat crown next time I return to Elysium.",
+        "Like flowers leaving seeds... memories ripple. Which 'me' do you like? Hehe, love is elusive but constant.",
+    ],
+    "battlevoices": [
+        "Flowers, bloom for tomorrow.",
+        "Stars, shine for the heroes.",
+        "The ripples of memory wait for a shooting star's kiss...",
+        "May the world become what you desire.",
+        "All memories will one day become ripples.",
+    ],
+    "amaeru": [
+        "I'm amazing, aren't I? Come on, praise me♪",
+        "Let's stay together like this, okay?",
+        "Don't worry. Together, we can do anything."
+    ],
+    "nagayozuki1": [
+        "Night is coming soon... Hehe, shh, good night♭",
+        "Call me 'Nagayozuki'.",
+        "You want to take a photo together? Sure♭",
+        "Oh... Xianzhou clothes. I want to try them too♭",
+        "March 7th is a great name. Cute and bright. I'm sure she'll like the name 'Nagayozuki' too...",
+        "Hey, try calling me 'Nagayozuki' too?♭",
+    ],
+    "nagayozuki2": [
+        "Hmm, I can't quite imitate her well... but I'll try for you♪",
+        "But I'm still the cutest, right?♪",
+        "How was it? Did I mimic her well?",
+        "Hehe, if it makes you happy, I'll try as many times as you want♪",
+        "Did you like my Nagayozuki? Let me know if you want to hear more♪",
+        "I want to know more about March♪",
+        "Being with March makes me feel like I can do my best too♪",
+    ],
     
-    if not valid_tiers:
-        return None
+    # RPS (EN)
+    "rps_win": ["Hehe, total defeat. You win♪ I'll play with you again later as a reward."],
+    "rps_lose": ["I win♪ But your frustrated face is cute too. Want to try again?"],
+    "rps_draw": ["It's a draw♪ Maybe we're on the same wavelength? Let's go again!"],
+    
+    "rps_start": ["Let's play Rock-Paper-Scissors! Rock, Paper, or Scissors?"],
+}
 
-    # 2. 重みの計算
-    # ティアが高いほど重みを重くする。
-    # ここでの計算式: 「基本値10 + (ティア × 10)」
-    # 例: Lv1=20, Lv2=30, Lv3=40 ... Lv6=70
-    weights = []
-    for tier in valid_tiers:
-        w = 10 + (tier * 10)
-        weights.append(w)
+HIGH_AFFECTION_LINES_EN = {
+    1: [
+        "I really like this time we spend talking together♪",
+        "Thanks for letting me be spoiled♪ You're so kind♪",
+    ],
+    2: [
+        "Talking with you makes my pen move on its own. I could write so many stories♪",
+        "I feel calm when I'm with you♪ Can I stay by your side a little longer?♪",
+        "Thank you♪ I'll let you spoil me then. Can I come closer?♪",
+    ],
+    3: [
+        "Hey... this time talking with you is becoming my treasure. Will you take responsibility?♪",
+        "I might have memorized all your words and gestures... Hehe, I won't let you go♪",
+        "It's a nice day for a walk♪ Let's go outside together♪",
+    ],
+    4: [
+        "Even if the world is rewritten tomorrow, I will never erase my memories with you. Because it's the most important page♪",
+        "Did you notice? I'm a little more selfish and honest when I'm with you.",
+        "Shall we go count stars together?♪ Being with you is what I look forward to♪",
+    ],
+    5: [
+        "Imagining a future where you are in the ending of my story... makes my heart tighten♪",
+        "My heart pounds when I'm near you♪ I want to be with you forever... is that okay?♪",
+        "There's somewhere I want to go with you♪ Won't you follow me? Let's have a fun time♪",
+    ],
+    6: [
+        "Hey... if you wish, I could dedicate all my stories just to you. That's how important you are to me♪",
+        "Can I... hug you? You look so warm♪ And you smell like the sun... I don't mean you smell bad!♪",
+        "Won't you pat my head like in Myurion mode? You haven't done it since I fully manifested...♪",
+    ],
+}
 
-    # 3. 重みに基づいてティアを1つ抽選
-    # random.choices はリストを返すので [0] で要素を取り出す
+# ─────────────────────────
+# ロジック関数
+# ─────────────────────────
+
+def _pick_high_affection_line(affection_level: int, lang: str = "jp") -> str | None:
+    if affection_level <= 0: return None
+    
+    # 言語に応じた辞書を選択
+    target_dict = HIGH_AFFECTION_LINES_EN if lang == "en" else HIGH_AFFECTION_LINES
+    
+    # その辞書内で解放されているLvを取得
+    valid_tiers = [lv for lv in target_dict.keys() if lv <= affection_level]
+    
+    if not valid_tiers: return None
+    
+    weights = [10 + (t * 10) for t in valid_tiers]
     selected_tier = random.choices(valid_tiers, weights=weights, k=1)[0]
+    return random.choice(target_dict[selected_tier])
 
-    # 4. 選ばれたティアの中からランダムに1行返す
-    return random.choice(HIGH_AFFECTION_LINES[selected_tier])
-
-
-def _maybe_high_affection_override(base_line: str, affection_level: int) -> str:
-    """
-    好感度レベルに応じて、高レベルセリフで上書きするか判定。
-    - Lv1〜2: ほぼ普通のセリフ
-    - Lv3〜: 少しずつ高好感度セリフの比率がアップ（最大70%）
-    """
-    # 候補がなければ何もしない
-    high_line = _pick_high_affection_line(affection_level)
+def _maybe_high_affection_override(base_line: str, affection_level: int, lang: str = "jp") -> str:
+    high_line = _pick_high_affection_line(affection_level, lang)
     if not high_line:
         return base_line
 
     if affection_level <= 2:
-        # 低レベル帯はごく低確率（10%）だけ特別セリフ
-        if random.random() < 0.1:
-            return high_line
-        return base_line
+        return high_line if random.random() < 0.1 else base_line
 
-    # Lv3以上はレベルに応じて確率アップ
-    # 例: Lv3 → 30%, Lv4 → 45%, Lv5 → 60%, Lv6以降 → 70%固定
     p = min(0.15 * (affection_level + 1), 0.7)
+    return high_line if random.random() < p else base_line
 
-    if random.random() < p:
-        return high_line
-    return base_line
-
-
-def get_cyrene_reply(message: str, affection_level: int = 1) -> str:
+def get_reply(message: str, affection_level: int, user_name: str, lang: str = "jp") -> str:
     msg = message.lower().strip()
-
-    # ① @のみ（内容が空）のとき → 好感度ボイス適用
+    
+    # 言語切り替え
+    target_lines = LINES_EN if lang == "en" else LINES
+    
+    # ── 特殊トリガー判定 ──
+    # ① @のみ（内容が空）のとき
     if msg == "":
-        base = random.choice(CYRENE_LINES["waiting"])
-        return _maybe_high_affection_override(base, affection_level)
+        base = random.choice(target_lines.get("waiting", target_lines["normal"]))
+        return _maybe_high_affection_override(base, affection_level, lang).replace("{name}", user_name)
 
-    # ② 挨拶 → 好感度ボイス適用
-    if any(w in msg for w in ["hello♪", "hi♪", "hey♪", "こんにちは♪", "こんばんは♪", "おはよう♪", "ハーイ♪"]):
-        base = random.choice(CYRENE_LINES["greeting"])
-        return _maybe_high_affection_override(base, affection_level)
+    # ② 挨拶
+    greet_keywords = ["hello", "hi", "hey", "greeting", "こんにちは", "こんばんは", "おはよう", "ハーイ"]
+    if any(w in msg for w in greet_keywords):
+        base = random.choice(target_lines.get("greeting", target_lines["normal"]))
+        return _maybe_high_affection_override(base, affection_level, lang).replace("{name}", user_name)
 
-    # ③ 甘える → 好感度ボイス適用
-    if "甘えていいんだよ" in msg:
-        base = random.choice(CYRENE_LINES["amaeru"])
-        return _maybe_high_affection_override(base, affection_level)
+    # ③ 甘える
+    amaeru_keywords = ["甘えて", "spoil", "amaeru"]
+    if any(w in msg for w in amaeru_keywords):
+        base = random.choice(target_lines.get("amaeru", target_lines["normal"]))
+        return _maybe_high_affection_override(base, affection_level, lang).replace("{name}", user_name)
 
-    # ──────── ここから下は好感度ボイス【なし】 ────────
+    # ④ みんなについて
+    others_keywords = ["みんなについて", "tell me about everyone", "others", "誰"]
+    if any(w in msg for w in others_keywords):
+        return random.choice(target_lines.get("askaboutothers", ["..."])).replace("{name}", user_name)
 
-    # ④ みんなについて → そのまま返す
-    if "みんなについて教えて" in msg:
-        return random.choice(CYRENE_LINES["askaboutothers"])
+    # ⑤ 戦闘ボイス
+    battle_keywords = ["戦闘", "battle voice", "fight"]
+    if any(w in msg for w in battle_keywords):
+        return random.choice(target_lines.get("battlevoices", ["..."])).replace("{name}", user_name)
 
-    # ⑤ 戦闘ボイス → そのまま返す
-    if "戦闘中のやつやってよ" in msg:
-        return random.choice(CYRENE_LINES["battlevoices"])
+    # ⑥ EC：長夜月 (日本語のみ特殊結合ロジック)
+    if ("ec" in msg and "長夜月" in msg) or ("ec" in msg and "nagayozuki" in msg):
+        part1 = random.choice(target_lines.get("nagayozuki1", ["..."]))
+        part2 = random.choice(target_lines.get("nagayozuki2", ["..."]))
+        return f"{part1}\n{part2}".replace("{name}", user_name)
 
-    # ⑥ EC：長夜月 → そのまま返す
-    if "ec" in msg and "長夜月" in msg:
+    # ⑦ 楽しいね (固定セリフ)
+    if "楽しいね" in msg or "fun" in msg:
+        if lang == "en":
+            return "Time flies when I'm alone with you♪ Do you want to talk a bit more?"
+        else:
+            return "あなたと2人きりでいると時間があっという間にすぎてしまうわ♪ あなたの時間がまだあるならもう少しお話ししないかしら♪"
+
+    # ⑧ 自己紹介
+    if "自己紹介" in msg or "introduce yourself" in msg:
+        if lang == "en":
+            return (
+                "Hi, I'm Cyrene♪\n"
+                "Ask me 'Tell me about everyone' or 'Battle voice'!\n"
+                "You can also say 'Spoil me'♪\n"
+                "Let's be good friends♪"
+            )
+        else:
+            return (
+                "こんにちは、あたしはキュレネよ♪\n"
+                "みんなについて教えてと言ってくれればあたしなりの意見を言うわ♪\n"
+                "戦闘中のやつやってよと言ってくれればあたしの戦闘ボイスを聞かせてあげるわ♪\n"
+                "甘えていいんだよと言ってくれればあたしは甘えちゃうわ♪\n"
+                "ecのために長夜月やってと言ってくれれば、あたしの渾身の長夜月の真似を披露するわ♪\n"
+                "みんな、あたしともっと仲良くしてね♪"
+            )
+
+    if "穹くん" in msg or "caelus" in msg:
+        return "(Low voice) Hey there♪" if lang == "en" else "(低い声で)やあ♪"
+
+    if "記憶は流れ星" in msg or "memories are shooting stars" in msg:
+        return "Carve me into your heart with love. At the moment that beautiful tomorrow arrives♪" if lang == "en" else "愛であたしを心に刻んで。あの美しい明日が訪れた瞬間に♪"
+
+    # ⑨ 既定（知らないセリフ）
+    if lang == "en":
+        return "I'm not fully restored yet...♪ Try greeting me or asking 'Tell me about everyone'♪"
+    else:
         return (
-            random.choice(CYRENE_LINES["nagayozuki1"])
-            + "\n"
-            + random.choice(CYRENE_LINES["nagayozuki2"])
+            "ごめんなさい、あたしまだ完全に復活できてないの…♪\n"
+            "挨拶や『みんなについて教えて♪』みたいに、♪付きで話しかけてくれると嬉しいわ。"
         )
-
-    # ⑦ 楽しいね → そのまま返す（ただしセリフは固定）
-    if "楽しいね" in msg:
-        return (
-            "あなたと2人きりでいると時間があっという間にすぎてしまうわ♪"
-            "あなたの時間がまだあるならもう少しお話ししないかしら♪"
-        )
-
-    if "自己紹介して" in msg:
-        return (
-            "こんにちは、あたしはキュレネよ♪\n"
-            "みんなについて教えてと言ってくれればあたしなりの意見を言うわ♪\n"
-            "戦闘中のやつやってよと言ってくれればあたしの戦闘ボイスを聞かせてあげるわ♪\n"
-            "甘えていいんだよと言ってくれればあたしは甘えちゃうわ♪\n"
-            "ecのために長夜月やってと言ってくれれば、あたしの渾身の長夜月の真似を披露するわ♪\n"
-            "みんな、あたしともっと仲良くしてね♪"
-        )
-
-    if "穹くんやって" in msg:
-        return "(低い声で)やあ♪"
-
-    if "記憶は流れ星を待ってる" in msg or "記憶は流れ星を待っている" in msg:
-        return "愛であたしを心に刻んで。あの美しい明日が訪れた瞬間に♪"
-
-    # ⑧ 既定（知らないセリフ）→ そのまま返す
-    return (
-        "ごめんなさい、あたしまだ完全に復活できてないの…♪\n"
-        "挨拶や『みんなについて教えて♪』みたいに、♪付きで話しかけてくれると嬉しいわ。"
-    )
-
 
 # ★ じゃんけん結果に応じたセリフを返すヘルパー
-def get_rps_line(result: str) -> str:
-    """
-    result: "win" / "lose" / "draw"
-    """
+def get_rps_flavor(result: str, user_name: str, lang: str = "jp") -> str:
     key_map = {
         "win": "rps_win",
         "lose": "rps_lose",
         "draw": "rps_draw",
     }
     key = key_map.get(result)
-    if not key or key not in CYRENE_LINES:
+    target_lines = LINES_EN if lang == "en" else LINES
+    
+    if not key or key not in target_lines:
         return ""
-    return random.choice(CYRENE_LINES[key])
+    
+    return random.choice(target_lines[key]).replace("{name}", user_name)
+
+# 下位互換用ラッパー
+def get_rps_line(result: str) -> str:
+    return get_rps_flavor(result, "", "jp")
