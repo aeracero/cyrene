@@ -1,43 +1,50 @@
-# lines_electra.py
 import random
 
-CHAR_NAME = "ヘレクトラ"
+CHAR_NAME = "セイレンス" # 画面表示名をセイレンスにする場合はここを変更
 
-LINES = {
-    "normal": [f"{CHAR_NAME}のセリフ１（ここを書き換えてね）"],
-    "high_l1": [f"{CHAR_NAME}の高好感度Lv1セリフ（ここを書き換えてね）"],
-    "high_l2": [f"{CHAR_NAME}の高好感度Lv2セリフ（ここを書き換えてね）"],
-    "high_l3": [f"{CHAR_NAME}の高好感度Lv3セリフ（ここを書き換えてね）"],
-    "high_l4": [f"{CHAR_NAME}の高好感度Lv4セリフ（ここを書き換えてね）"],
-    "high_l5": [f"{CHAR_NAME}の高好感度Lv5セリフ（ここを書き換えてね）"],
-    "high_l6": [f"{CHAR_NAME}の高好感度Lv6セリフ（ここを書き換えてね）"],
+PROFILE = {
+    "first_person": "ワタシ",
+    "rps_duel_format": "キミは **{user_hand}**、ワタシは **{bot_hand}** だな。",
+    "rps_stats_format": "（これまでに {wins} 回、ワタシに勝ったのか。）",
 }
 
+LINES = {
+    "normal": [
+        "いい朝だな。せっかくだ、共に1曲奏でてくれないか？",
+        "そう落ち込むことはない、深海のメーレを飲むか？元気が出るぞ。",
+        "静かな時間だ…キミとなら、言葉を交わさずとも通じ合える気がするな。",
+    ],
 
-def _pick_high_bucket(level: int) -> str | None:
-    if level >= 6:
-        return "high_l6"
-    if level == 5:
-        return "high_l5"
-    if level == 4:
-        return "high_l4"
-    if level == 3:
-        return "high_l3"
-    if level == 2:
-        return "high_l2"
-    if level == 1:
-        return "high_l1"
-    return None
+    "greeting_morning": [
+        "いい朝だな。せっかくだ、共に1曲奏でてくれないか？"
+    ],
+    "greeting_day": [
+        "こんにちは。調子はどうだ？\nまたワタシの歌を聞きに来てくれたのか？"
+    ],
+    "greeting_night": [
+        "こんばんは。夜の静寂は、音楽を奏でるのに最適だ。\nキミもそう思うだろう？"
+    ],
 
+    "nickname_ask": ["キミをこれからどう呼べばいいんだ？教えてくれ。"],
+    "nickname_confirm": ["わかった。これからキミのことは「{name}」と呼ぶことにしよう。"],
 
-def get_reply(message: str, affection_level: int) -> str:
-    high_prob_table = {1: 0.15, 2: 0.25, 3: 0.35, 4: 0.5, 5: 0.7, 6: 0.9}
-    bucket = _pick_high_bucket(affection_level)
-    high_prob = high_prob_table.get(affection_level, 0.0)
+    "rps_start": ["ワタシと遊びたいのか？ならじゃんけんというものをしよう。\nグー／チョキ／パー、どの手を出すかえらんでくれ。"],
+    "rps_win": ["見事だ。キミの勝ちだ。\n勝利の音色が聞こえてくるようだな。"], 
+    "rps_lose": ["今回はワタシの勝ちだな。\nそう落ち込むことはない深海のメーレを飲むか？元気が出るぞ。"],
+    "rps_draw": ["あいこだな。\n波長が合っている証拠かもしれないな。"], 
+}
 
-    if bucket and LINES.get(bucket) and random.random() < high_prob:
-        return random.choice(LINES[bucket])
+def get_reply(message: str, affection_level: int, user_name: str) -> str:
+    msg = message.strip()
+    if "おはよう" in msg: return random.choice(LINES["greeting_morning"]).replace("{name}", user_name)
+    if any(x in msg for x in ["こんにちは", "やあ"]): return random.choice(LINES["greeting_day"]).replace("{name}", user_name)
+    if any(x in msg for x in ["こんばんは", "おやすみ"]): return random.choice(LINES["greeting_night"]).replace("{name}", user_name)
+    return random.choice(LINES["normal"]).replace("{name}", user_name)
 
-    if LINES["normal"]:
-        return random.choice(LINES["normal"])
-    return f"{CHAR_NAME}のセリフがまだ設定されていないみたい…（lines_electra.py を編集してね）"
+def get_nickname_line(action: str, user_name: str) -> str:
+    key = "nickname_ask" if action == "ask" else "nickname_confirm"
+    return random.choice(LINES.get(key, ["..."])).replace("{name}", user_name)
+
+def get_rps_flavor(result: str, user_name: str) -> str:
+    key = f"rps_{result}"
+    return random.choice(LINES.get(key, ["..."])).replace("{name}", user_name)

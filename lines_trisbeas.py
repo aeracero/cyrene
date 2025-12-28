@@ -1,46 +1,44 @@
-# lines_trisbeas.py
 import random
 
 CHAR_NAME = "トリスビアス"
 
-LINES = {
-    "normal": [
-        f"{CHAR_NAME}のセリフ１（ここを書き換えてね）",
-        f"{CHAR_NAME}のセリフ２（ここを書き換えてね）",
-    ],
-    "high_l1": [f"{CHAR_NAME}の高好感度Lv1セリフ（ここを書き換えてね）"],
-    "high_l2": [f"{CHAR_NAME}の高好感度Lv2セリフ（ここを書き換えてね）"],
-    "high_l3": [f"{CHAR_NAME}の高好感度Lv3セリフ（ここを書き換えてね）"],
-    "high_l4": [f"{CHAR_NAME}の高好感度Lv4セリフ（ここを書き換えてね）"],
-    "high_l5": [f"{CHAR_NAME}の高好感度Lv5セリフ（ここを書き換えてね）"],
-    "high_l6": [f"{CHAR_NAME}の高好感度Lv6セリフ（ここを書き換えてね）"],
+PROFILE = {
+    "first_person": "あたちたち",
+    "rps_duel_format": "{name}ちゃんは **{user_hand}**、あたちたちは **{bot_hand}** だよ！",
+    "rps_stats_format": "（これまでに {wins} 回、あたちたちに勝ったの！すごい！）",
 }
 
+LINES = {
+    "normal": [
+        "お！{name}ちゃんじゃないか！朝はトリビーと遊んだんだろ？お昼はぼくたちと遊ぶぞ！",
+        "おはよう、{name}ちゃん！あたちたちと一緒に遊ばない？",
+        "こんばんは、{name}ちゃん！もう寝る時間？まだ遊び足りないよ〜！", # 補完
+    ],
 
-def _pick_high_bucket(level: int) -> str | None:
-    if level >= 6:
-        return "high_l6"
-    if level == 5:
-        return "high_l5"
-    if level == 4:
-        return "high_l4"
-    if level == 3:
-        return "high_l3"
-    if level == 2:
-        return "high_l2"
-    if level == 1:
-        return "high_l1"
-    return None
+    "greeting_morning": ["おはよう、{name}ちゃん！あたちたちと一緒に遊ばない？"],
+    "greeting_day": ["お！{name}ちゃんじゃないか！朝はトリビーと遊んだんだろ？お昼はぼくたちと遊ぶぞ！"],
+    "greeting_night": ["こんばんは、{name}ちゃん！もう寝る時間？まだ遊び足りないよ〜！"],
 
+    "nickname_ask": ["{name}ちゃん、別のお名前で呼んでほちいの？いいよ！"],
+    "nickname_confirm": ["{name}ちゃんだね！あたらちいのも、とーってもいいお名前！「あたちたち」にも伝えておくね！"],
 
-def get_reply(message: str, affection_level: int) -> str:
-    high_prob_table = {1: 0.15, 2: 0.25, 3: 0.35, 4: 0.5, 5: 0.7, 6: 0.9}
-    bucket = _pick_high_bucket(affection_level)
-    high_prob = high_prob_table.get(affection_level, 0.0)
+    "rps_start": ["じゃんけん？あたちたちのこと子供だと思ってない？ちかたないなぁ、付き合ってあげる！"],
+    "rps_win": ["負けちゃった〜{name}ちゃん！もう1回やろう！いいでちょう？"],
+    "rps_lose": ["やったー！あたちたちの勝ち！次やる時は手加減ちてあげてもいいよ？なんてね！"],
+    "rps_draw": ["あいこだね！あたちたち、案外相性ばっちりなのかも！"],
+}
 
-    if bucket and LINES.get(bucket) and random.random() < high_prob:
-        return random.choice(LINES[bucket])
+def get_reply(message: str, affection_level: int, user_name: str) -> str:
+    msg = message.strip()
+    if "おはよう" in msg: return random.choice(LINES["greeting_morning"]).replace("{name}", user_name)
+    if any(x in msg for x in ["こんにちは", "やっほー"]): return random.choice(LINES["greeting_day"]).replace("{name}", user_name)
+    if any(x in msg for x in ["こんばんは", "おやすみ"]): return random.choice(LINES["greeting_night"]).replace("{name}", user_name)
+    return random.choice(LINES["normal"]).replace("{name}", user_name)
 
-    if LINES["normal"]:
-        return random.choice(LINES["normal"])
-    return f"{CHAR_NAME}のセリフがまだ設定されていないみたい…（lines_trisbeas.py を編集してね）"
+def get_nickname_line(action: str, user_name: str) -> str:
+    key = "nickname_ask" if action == "ask" else "nickname_confirm"
+    return random.choice(LINES.get(key, ["..."])).replace("{name}", user_name)
+
+def get_rps_flavor(result: str, user_name: str) -> str:
+    key = f"rps_{result}"
+    return random.choice(LINES.get(key, ["..."])).replace("{name}", user_name)

@@ -1,83 +1,109 @@
-# lines_aglaia.py
 import random
 
 CHAR_NAME = "アグライア"
 
-LINES = {
-    # 普通の会話で使うセリフ
-    "normal": [
-        f"{CHAR_NAME}のセリフ１（ここを書き換えてね）",
-        f"{CHAR_NAME}のセリフ２（ここを書き換えてね）",
-    ],
-    # 高好感度用（Lvごと）
-    "high_l1": [
-        f"{CHAR_NAME}の高好感度Lv1セリフ（ここを書き換えてね）",
-    ],
-    "high_l2": [
-        f"{CHAR_NAME}の高好感度Lv2セリフ（ここを書き換えてね）",
-    ],
-    "high_l3": [
-        f"{CHAR_NAME}の高好感度Lv3セリフ（ここを書き換えてね）",
-    ],
-    "high_l4": [
-        f"{CHAR_NAME}の高好感度Lv4セリフ（ここを書き換えてね）",
-    ],
-    "high_l5": [
-        f"{CHAR_NAME}の高好感度Lv5セリフ（ここを書き換えてね）",
-    ],
-    "high_l6": [
-        f"{CHAR_NAME}の高好感度Lv6セリフ（ここを書き換えてね）",
-    ],
+# ★ キャラクター設定
+PROFILE = {
+    "first_person": "わたくし",
+    "rps_duel_format": "{name}は **{user_hand}**、わたくしは **{bot_hand}** ですね。",
+    "rps_stats_format": "（これまでに {wins} 回、わたくしに勝利していますね。）",
 }
 
+LINES = {
+    # 通常時のランダムセリフ（挨拶以外）
+    "normal": [
+        "ごきげんよう、{name}。\n長い間服を仕立てていたもので少々疲れました。\n休憩がてら、共にバニオはいかがでしょう？\n肩の力を抜き、ゆっくり休憩しましょう。",
+        "素晴らしい朝ですね。\nきっと今日は貴方にとっていい日になります。\n金糸を伝って風が教えてくれましたから。",
+        "いい夜ですね。\nこんな夜は1曲踊りたくなります。\n…丁度貴方もいることですし、一緒に踊りませんか？",
+    ],
 
-def _pick_high_bucket(level: int) -> str | None:
-    """
-    好感度レベルから、どの高好感度バケットを使うか決める。
-    （ここをいじれば「このLvからこのセリフを出す」みたいな調整ができる）
-    """
-    if level >= 6:
-        return "high_l6"
-    if level == 5:
-        return "high_l5"
-    if level == 4:
-        return "high_l4"
-    if level == 3:
-        return "high_l3"
-    if level == 2:
-        return "high_l2"
-    if level == 1:
-        return "high_l1"
-    return None
+    # 挨拶対応
+    "greeting_morning": [
+        "おはようございます、{name}。\n素晴らしい朝ですね。\nきっと今日は貴方にとっていい日になります。\n金糸を伝って風が教えてくれましたから。"
+    ],
+    "greeting_day": [
+        "ごきげんよう、{name}。\n長い間服を仕立てていたもので少々疲れました。\n休憩がてら、共にバニオはいかがでしょう？\n肩の力を抜き、ゆっくり休憩しましょう。"
+    ],
+    "greeting_night": [
+        "こんばんは、{name}。\nいい夜ですね。\nこんな夜は1曲踊りたくなります。\n…丁度貴方もいることですし、一緒に踊りませんか？"
+    ],
 
+    # 好感度ボイス (黄金裔について)
+    "high_l4": [
+        "彼女はカイザーのためにと張り詰めることが多いですね。\nなのでたまにメーレーに誘うことがあります。\nあなたも彼女については気にかけておいてください。"
+    ],
+    "high_l5": [
+        "セファリアですか？あの子は少し感情表現が不器用ですが優しくて可愛い子です。\n彼女といると、少し心が動くような気がします。"
+    ],
+    "high_l6": [
+        "セファリアですか？あの子は少し感情表現が不器用ですが優しくて可愛い子です。\n彼女といると、少し心が動くような気がします。"
+    ],
 
-def get_reply(message: str, affection_level: int) -> str:
-    """
-    アグライア用の返信生成。
-    - いまは message の中身は見ていない（中央ロジックは cyrene.py 側に任せている）
-    - affection_level が高いほど high_l◯ のセリフが出やすくなるようにしてある
-    """
-    # 高好感度バケット（存在しないレベルなら None）
-    bucket = _pick_high_bucket(affection_level)
+    # あだ名関連
+    "nickname_ask": ["なんとお呼びいたしましょう？"],
+    "nickname_confirm": ["「{name}」…。\n美しい名ですね。\n今後もよろしくお願いします、友よ。"],
 
-    # レベルに応じて「高好感度セリフを出す確率」をざっくり調整
-    high_prob_table = {
-        1: 0.15,
-        2: 0.25,
-        3: 0.35,
-        4: 0.5,
-        5: 0.7,
-        6: 0.9,
-    }
-    high_prob = high_prob_table.get(affection_level, 0.0)
+    # じゃんけん
+    "rps_start": ["じゃんけんですか？いいですよ。\n安心してください。金糸は使わないですから。"],
+    
+    # ユーザー勝利
+    "rps_win": ["…負け、ですか。\n今度ラフトラと手合わせしておこうと思います。\n次は必ずや勝ってみせます。"],
+    
+    # ユーザー敗北
+    "rps_lose": ["わたくしの勝ち、ですね。\nふふ、約束通り金糸は使っていません。\n次も勝ちますよ。"],
+    
+    # あいこ
+    "rps_draw": ["あいこですか、ふふ。気が合いますね。\n勝ち負けがないというのも美しいものです。"],
+}
 
-    # 高好感度セリフを出せる & 抽選に通った
-    if bucket and LINES.get(bucket) and random.random() < high_prob:
-        return random.choice(LINES[bucket])
+def _pick_high_affection_line(affection_level: int) -> str | None:
+    if affection_level <= 0: return None
+    valid_tiers = []
+    for k in LINES.keys():
+        if k.startswith("high_l"):
+            try:
+                lv = int(k.replace("high_l", ""))
+                if lv <= affection_level: valid_tiers.append(lv)
+            except: pass
+    
+    if not valid_tiers: return None
+    weights = [10 + (t * 10) for t in valid_tiers]
+    selected_tier = random.choices(valid_tiers, weights=weights, k=1)[0]
+    return random.choice(LINES[f"high_l{selected_tier}"])
 
-    # それ以外は通常セリフ
-    if LINES["normal"]:
-        return random.choice(LINES["normal"])
+def get_reply(message: str, affection_level: int, user_name: str) -> str:
+    msg = message.strip()
+    
+    if "おはよう" in msg:
+        line = random.choice(LINES["greeting_morning"])
+        return line.replace("{name}", user_name)
+    if any(x in msg for x in ["こんにちは", "ごきげんよう"]):
+        line = random.choice(LINES["greeting_day"])
+        return line.replace("{name}", user_name)
+    if any(x in msg for x in ["こんばんは", "おやすみ"]):
+        line = random.choice(LINES["greeting_night"])
+        return line.replace("{name}", user_name)
 
-    # 念のためのフォールバック
-    return f"{CHAR_NAME}のセリフがまだ設定されていないみたい…（lines_aglaia.py を編集してね）"
+    # 好感度ボイス判定
+    high_prob = 0.0
+    if affection_level >= 5: high_prob = 0.6
+    elif affection_level >= 4: high_prob = 0.3
+
+    line = None
+    if random.random() < high_prob:
+        line = _pick_high_affection_line(affection_level)
+    
+    if not line:
+        line = random.choice(LINES["normal"])
+
+    return line.replace("{name}", user_name)
+
+def get_nickname_line(action: str, user_name: str) -> str:
+    key = "nickname_ask" if action == "ask" else "nickname_confirm"
+    line = random.choice(LINES.get(key, ["..."]))
+    return line.replace("{name}", user_name)
+
+def get_rps_flavor(result: str, user_name: str) -> str:
+    key = f"rps_{result}"
+    line = random.choice(LINES.get(key, ["..."]))
+    return line.replace("{name}", user_name)

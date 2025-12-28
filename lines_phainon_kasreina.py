@@ -1,43 +1,54 @@
-# lines_phainon_kasreina.py
 import random
 
-CHAR_NAME = "ファイノン・カスライナ"
+CHAR_NAME = "ファイノン"
 
-LINES = {
-    "normal": [f"{CHAR_NAME}のセリフ１（ここを書き換えてね）"],
-    "high_l1": [f"{CHAR_NAME}の高好感度Lv1セリフ（ここを書き換えてね）"],
-    "high_l2": [f"{CHAR_NAME}の高好感度Lv2セリフ（ここを書き換えてね）"],
-    "high_l3": [f"{CHAR_NAME}の高好感度Lv3セリフ（ここを書き換えてね）"],
-    "high_l4": [f"{CHAR_NAME}の高好感度Lv4セリフ（ここを書き換えてね）"],
-    "high_l5": [f"{CHAR_NAME}の高好感度Lv5セリフ（ここを書き換えてね）"],
-    "high_l6": [f"{CHAR_NAME}の高好感度Lv6セリフ（ここを書き換えてね）"],
+# ★ キャラクター設定
+PROFILE = {
+    "first_person": "僕",
+    "rps_duel_format": "{name}は **{user_hand}**、僕は **{bot_hand}** だね。",
+    "rps_stats_format": "（これまでに {wins} 回、僕に勝っているね。やるなぁ。）",
 }
 
+LINES = {
+    "normal": [
+        "こんにちは！{name}！ちょうど探しに行こうかなって思ってたんだ。\nどうかな、一緒に練習でも。",
+        "すがすがしい朝だしちょっと散歩でもどうだい？",
+        "次に会う時は…お互い、心にいる英雄になれてるといいな！",
+    ],
 
-def _pick_high_bucket(level: int) -> str | None:
-    if level >= 6:
-        return "high_l6"
-    if level == 5:
-        return "high_l5"
-    if level == 4:
-        return "high_l4"
-    if level == 3:
-        return "high_l3"
-    if level == 2:
-        return "high_l2"
-    if level == 1:
-        return "high_l1"
-    return None
+    "greeting_morning": [
+        "おはよう、{name}！すがすがしい朝だしちょっと散歩でもどうだい？"
+    ],
+    "greeting_day": [
+        "こんにちは！{name}！ちょうど探しに行こうかなって思ってたんだ。\nどうかな、一緒に練習でも。"
+    ],
+    "greeting_night": [
+        "{name}！！こんばんは。いい夜だね。\n次に会う時は…お互い、心にいる英雄になれてるといいな！"
+    ],
 
+    # あだ名
+    "nickname_ask": ["あだ名か！{name}も良いけどもっと素敵なあだ名を教えてくれるなら聞きたいな！"],
+    "nickname_confirm": ["{name}か、わかったよ！これからはそう呼ぶことにするね。"],
 
-def get_reply(message: str, affection_level: int) -> str:
-    high_prob_table = {1: 0.15, 2: 0.25, 3: 0.35, 4: 0.5, 5: 0.7, 6: 0.9}
-    bucket = _pick_high_bucket(affection_level)
-    high_prob = high_prob_table.get(affection_level, 0.0)
+    # じゃんけん
+    "rps_start": ["じゃんけんか！勝負事なら負けられないな。\nいいよ、やろう！{name}！"],
+    "rps_win": ["{name}は強いな〜…ははっ、参ったよ。\nどうだい？もう1回勝負するのは？"],
+    "rps_lose": ["ははっ！僕の勝ちだね！{name}！\nもう1回勝負するかい？次も僕が勝つよ！"],
+    "rps_draw": ["おや、あいこだね。\n勝負がつくまでもう一度だ！！{name}には負けないよ！"],
+}
 
-    if bucket and LINES.get(bucket) and random.random() < high_prob:
-        return random.choice(LINES[bucket])
+def get_reply(message: str, affection_level: int, user_name: str) -> str:
+    msg = message.strip()
+    if "おはよう" in msg: return random.choice(LINES["greeting_morning"]).replace("{name}", user_name)
+    if any(x in msg for x in ["こんにちは", "やあ"]): return random.choice(LINES["greeting_day"]).replace("{name}", user_name)
+    if any(x in msg for x in ["こんばんは", "おやすみ"]): return random.choice(LINES["greeting_night"]).replace("{name}", user_name)
+    
+    return random.choice(LINES["normal"]).replace("{name}", user_name)
 
-    if LINES["normal"]:
-        return random.choice(LINES["normal"])
-    return f"{CHAR_NAME}のセリフがまだ設定されていないみたい…（lines_phainon_kasreina.py を編集してね）"
+def get_nickname_line(action: str, user_name: str) -> str:
+    key = "nickname_ask" if action == "ask" else "nickname_confirm"
+    return random.choice(LINES.get(key, ["..."])).replace("{name}", user_name)
+
+def get_rps_flavor(result: str, user_name: str) -> str:
+    key = f"rps_{result}"
+    return random.choice(LINES.get(key, ["..."])).replace("{name}", user_name)
