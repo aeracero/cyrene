@@ -5,7 +5,7 @@ import kimera_data as data
 
 # --- 状態定義 ---
 STATE_MENU = "menu"
-STATE_SHOP = "shop" # 追加
+STATE_SHOP = "shop"
 STATE_BATTLE_SELECT = "battle_select"
 STATE_BATTLE_WILD = "battle_wild"
 STATE_BATTLE_TRAINER = "battle_trainer"
@@ -90,8 +90,11 @@ def handle_shop(user_id, content):
         ud = core.get_user_data(user_id)
         
         if ud["money"] >= price:
-            core.spend_money(user_id, price)
-            core.add_item(user_id, target_key, 1)
+            # ここでも直接 ud を操作して保存する形に統一
+            ud["money"] -= price
+            ud["items"][target_key] = ud["items"].get(target_key, 0) + 1
+            core.save_user_data(user_id, ud)
+            
             return f"**{item['name']}** を購入したわ♪ (残金: {ud['money']}G)\n他には？"
         else:
             return f"お金が足りないみたい… (所持金: {ud['money']}G, 必要: {price}G)"
@@ -267,9 +270,9 @@ def execute_turn(user_id, session, player, enemy, move_id, ud):
         if player["xp"] >= player["next_xp"]:
             msg += core.level_up_chimera(player)
             
-        # お金
+        # お金 (修正箇所: 直接 ud を操作する)
         money_gain = enemy["level"] * 50
-        core.add_money(user_id, money_gain)
+        ud["money"] += money_gain
         msg += f"\n賞金 {money_gain}G を手に入れたわ。"
 
         core.save_user_data(user_id, ud)
@@ -324,8 +327,10 @@ def use_item_in_battle(user_id, session, item_key, ud, player, enemy):
         if session["state"] != STATE_BATTLE_WILD:
             return "人のキメラにボールを投げるのは泥棒よ！"
         
-        # 消費
-        core.remove_item(user_id, item_key, 1)
+        # 消費 (修正: 直接操作)
+        ud["items"][item_key] -= 1
+        if ud["items"][item_key] <= 0:
+            del ud["items"][item_key]
         
         # 捕獲計算 (HPが減っているほど確率アップ)
         hp_rate = enemy["current_hp"] / enemy["stats"]["max_hp"]
@@ -354,7 +359,11 @@ def use_item_in_battle(user_id, session, item_key, ud, player, enemy):
         if player["current_hp"] >= player["stats"]["max_hp"]:
             return "その子はもう元気いっぱいよ。"
         
-        core.remove_item(user_id, item_key, 1)
+        # 消費 (修正: 直接操作)
+        ud["items"][item_key] -= 1
+        if ud["items"][item_key] <= 0:
+            del ud["items"][item_key]
+
         heal_val = item_data["value"]
         player["current_hp"] += heal_val
         if player["current_hp"] > player["stats"]["max_hp"]:
