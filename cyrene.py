@@ -60,19 +60,15 @@ GENERAL_COMMANDS_LIST_JP = (
     "- `甘えていいんだよ`: …ふふっ、遠慮なく甘えちゃうかも？\n"
     "- `じゃんけん`: あたしに勝てるかしら？\n"
     "- `あだ名登録 [名前]`: あなただけの呼び方を教えて？\n"
-    "- `好感度`: わたしたちの仲良し度、チェックしましょ♪\n"
-    "- `親衛隊レベル`: あなたのレベル、教えてあげる\n\n"
+    "- `好感度`: わたしたちの仲良し度、チェックしましょ♪\n\n"
     "**★ 別の姿へ…**\n"
     "- `変身`: 別の姿に変身するためのコードを教えて？\n"
-    "- `変身状態` / `今の姿`: 今のあたしが誰かわかる？\n"
-    "- `[特定の合言葉]`: 隠されたヒントで、新しい姿になれるかも…？\n\n"
+    "- `変身状態` / `今の姿`: 今のあたしが誰かわかる？\n\n"
     "**★ ガチャ**\n"
     "- `ガチャメニュー`: 石やチケットの確認よ\n"
     "- `単発ガチャ` / `10連ガチャ`: 運試し、してみない？\n"
-    "- `デイリー受け取り`: 1日1回、石をプレゼントするわ♪\n\n"
-    "**★ その他**\n"
-    "- `ミュリオンモードオン`: ミュミュ語でお話しするわ～！\n"
-    "- `コマンドを教えて`: このリストを見せるわ"
+    "- `チケット10連`: すり抜けチケットを使って回すわ\n"
+    "- `デイリー受け取り`: 1日1回、石をプレゼントするわ♪"
 )
 
 GENERAL_COMMANDS_LIST_EN = (
@@ -93,6 +89,7 @@ GENERAL_COMMANDS_LIST_EN = (
     "**★ Gacha**\n"
     "- `Gacha`: Check gems and tickets\n"
     "- `Pull 1` / `Pull 10`: Try your luck?\n"
+    "- `Ticket 10`: Use an off-banner ticket for 10 pulls\n"
     "- `Daily`: Get your daily gems♪"
 )
 
@@ -118,7 +115,7 @@ async def on_message(message):
     nickname = db.get_nickname(user_id)
     name = nickname if nickname else message.author.display_name
     current_form = get_user_form(user_id)
-    lang = db.get_user_lang(user_id) # 現在の言語
+    lang = db.get_user_lang(user_id)
     
     # --- モード/言語切替コマンド (最優先・メンション不要) ---
     if content_lower == "!mode auto":
@@ -175,7 +172,7 @@ async def on_message(message):
     should_reply = (is_mentioned or is_active_mode or is_auto_reply)
     if not should_reply: return
 
-    # 空メッセージ判定（メンションがあれば空でも通す）
+    # 空メッセージ判定
     if not content_body and not message.attachments and not is_active_mode and not is_mentioned:
         return
     
@@ -198,7 +195,7 @@ async def on_message(message):
         await message.channel.send(f"{message.author.mention} 全員ミュリオンモード解除。普通の言葉に戻るわね。")
         return
 
-    # --- ミュリオンクイズ (既存ロジック・日本語のみ) ---
+    # --- ミュリオンクイズ ---
     if user_id in MYURION_QUIZ_STATE:
         ans = logic.parse_myurion_answer(content_body)
         if not ans:
@@ -265,7 +262,6 @@ async def on_message(message):
         t_text = content_body
         waiting_for_transform_code.discard(user_id)
         
-        # 特殊変身
         if "なのになってみて" in t_text:
             if is_nanoka_unlocked(user_id):
                 set_user_form(user_id, "nanoka")
@@ -291,24 +287,18 @@ async def on_message(message):
             msg = "Unknown code. Try again?" if lang=="en" else "そのコードは知らないみたい…。もう一度確認してくれる？"
             await send_myu(message, user_id, msg)
         return
-
-    # --- データ管理モード ---
+    
+    # --- データ管理モード (完全版) ---
     if user_id in admin_data_mode:
-        
         if content_body == "データ管理終了":
             admin_data_mode.discard(user_id)
-            await send_myu(message, user_id, "データ管理モード、終了ね。また必要になったら呼んでちょうだい♪")
+            await send_myu(message, user_id, "データ管理モード、終了ね。")
             return
 
         if content_body == "ニックネーム確認":
             nicks = db.load_nicknames()
-            if not nicks:
-                await send_myu(message, user_id, "まだ誰もあだ名を登録してないみたい。")
-            else:
-                lines = ["【登録済みニックネーム】"]
-                for uid, n in nicks.items():
-                    lines.append(f"<@{uid}>: {n}")
-                await send_myu(message, user_id, "\n".join(lines))
+            lines = [f"<@{uid}>: {n}" for uid, n in nicks.items()] if nicks else ["なし"]
+            await send_myu(message, user_id, "\n".join(lines))
             return
         
         if content_body == "管理者編集":
@@ -531,7 +521,6 @@ async def on_message(message):
 
     # --- あだ名系 (EN/JP) ---
     if any(content_body_lower.startswith(k) for k in ["あだ名登録", "set nickname"]):
-        # "あだ名登録" または "set nickname" を削除
         new = re.sub(r"^(あだ名登録|set nickname)\s*", "", content_body, flags=re.IGNORECASE).strip()
         if not new:
             waiting_for_nickname.add(user_id)
@@ -553,12 +542,21 @@ async def on_message(message):
 
     # --- ガチャ (EN/JP) ---
     if any(k in content_body_lower for k in GACHA_KEYWORDS):
+        if "ticket" in content_body_lower or "チケット" in content_body_lower:
+            is_10 = "10" in content_body_lower or "ten" in content_body_lower
+            if not is_10: is_10 = True 
+            if is_10:
+                ok, res = logic.perform_gacha_pulls(user_id, 10, use_ticket=True)
+                await send_myu(message, user_id, res)
+            else:
+                await send_myu(message, user_id, logic.format_gacha_status(user_id))
+            return
+
         if any(k in content_body_lower for k in ["単発", "pull 1"]) and "10" not in content_body_lower:
             ok, res = logic.perform_gacha_pulls(user_id, 1)
             await send_myu(message, user_id, res)
         elif any(k in content_body_lower for k in ["10連", "pull 10"]):
-            use_ticket = "ticket" in content_body_lower or "チケット" in content_body_lower
-            ok, res = logic.perform_gacha_pulls(user_id, 10, use_ticket)
+            ok, res = logic.perform_gacha_pulls(user_id, 10, use_ticket=False)
             await send_myu(message, user_id, res)
         else:
             await send_myu(message, user_id, logic.format_gacha_status(user_id)) 
@@ -636,7 +634,8 @@ async def on_message(message):
     
     if "記憶は流れ星を待ってる" in content_body and get_janken_wins(user_id) >= 307 and not is_nanoka_unlocked(user_id):
         set_nanoka_unlocked(user_id, True)
-        reply += "\n\n【三月なのか 解放！】『なのになってみて』と言ってみて？"
+        if lang == "en": reply += "\n\n【March 7th Unlocked!】 Try saying 'Transform into March'."
+        else: reply += "\n\n【三月なのか 解放！】『なのになってみて』と言ってみて？"
 
     await send_myu(message, user_id, f"{message.author.mention} {reply}")
     logic.add_affection_xp(user_id, 3)

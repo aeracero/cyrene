@@ -27,18 +27,18 @@ MODULE_MAP = {
 
 def generate_reply_for_form(form_key: str, message_text: str, affection_level: int, user_id: int, name: str) -> str:
     module = MODULE_MAP.get(form_key, lines_cyrene)
-    lang = db.get_user_lang(user_id) # ★重要: ここで言語設定を読み込んでいます
+    lang = db.get_user_lang(user_id) # 言語取得
     
     if hasattr(module, "get_reply"):
         try:
-            # 優先1: 言語(lang)を渡す新しい呼び出し方
+            # 優先1: 言語引数つき (get_reply(msg, lv, name, lang))
             base = module.get_reply(message_text, affection_level, name, lang)
         except TypeError:
             try:
-                # 優先2: 言語なし（古い形式）
+                # 優先2: 言語なし (get_reply(msg, lv, name))
                 base = module.get_reply(message_text, affection_level, name)
             except TypeError:
-                # 優先3: さらに古い形式
+                # 優先3: 古い形式
                 try:
                     base = module.get_reply(message_text, affection_level)
                 except TypeError:
@@ -70,6 +70,7 @@ def get_nickname_message_for_form(form_key: str, action: str, name: str, user_id
     else:
         return "あたし、どう呼べばいいの？" if action == "ask" else f"ふふ…これからは「{name}」って呼ぶわね♪"
 
+# ★修正: user_id を受け取るように変更 (エラー箇所)
 def get_rps_flavor(form_key: str, result: str, name: str, user_id: int) -> str:
     module = MODULE_MAP.get(form_key, lines_cyrene)
     lang = db.get_user_lang(user_id)
@@ -90,6 +91,7 @@ def get_rps_flavor(form_key: str, result: str, name: str, user_id: int) -> str:
             
     return ""
 
+# ★修正: user_id を受け取るように変更 (エラー箇所)
 def get_rps_prompt_for_form(form_key: str, name: str, user_id: int) -> str:
     module = MODULE_MAP.get(form_key, lines_cyrene)
     lang = db.get_user_lang(user_id)
@@ -101,6 +103,7 @@ def get_rps_prompt_for_form(form_key: str, name: str, user_id: int) -> str:
     
     return "Let's play RPS! Rock, Paper, or Scissors?" if lang == "en" else "じゃんけんをしましょう♪ グー / チョキ / パー、どれにするかしら？"
 
+# ★修正: user_id を受け取るように変更 (エラー箇所)
 def format_rps_result(form_key: str, name: str, user_hand: str, bot_hand: str, flavor: str, wins: int, user_id: int) -> str:
     module = MODULE_MAP.get(form_key, lines_cyrene)
     lang = db.get_user_lang(user_id)

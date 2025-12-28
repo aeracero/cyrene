@@ -67,7 +67,7 @@ def format_all_affection_status(guild) -> str:
         lines.append(f"- **{name}**: Lv.{level} ({xp} XP)")
     return "\n".join(lines)
 
-# ★ 英語対応: 好感度ステータス
+# 好感度ステータス
 def get_affection_status_message(user_id: int) -> str:
     lang = db.get_user_lang(user_id)
     xp, level = get_user_affection(user_id)
@@ -141,7 +141,7 @@ async def send_myurion_question(message, user_id, correct_count, state_dict):
     state_dict[user_id] = {"question": q, "options": [c for _, c in indexed], "correct_index": correct_index}
     await message.channel.send(apply_myurion_filter(user_id, f"{message.author.mention} {body}"))
 
-# --- ガチャロジック (英語対応) ---
+# --- ガチャロジック (チケット機能復活版) ---
 def calc_main_5star_rate(pity_5: int) -> float:
     base = 0.0006
     if pity_5 <= 73: return base
@@ -157,15 +157,15 @@ def perform_gacha_pulls(user_id: int, num_pulls: int, use_ticket: bool = False) 
     msg_ticket_10only = "Tickets are for 10-pulls only." if lang == "en" else "チケットは10連専用みたい。"
     msg_ticket_lack = "Not enough tickets." if lang == "en" else "チケットが足りないみたい。"
     msg_stone_lack = "Not enough stones (Need: {cost})" if lang == "en" else "石が足りないみたい（必要: {cost}）"
-    cost_ticket_str = "(1 Ticket consumed)" if lang == "en" else "（チケット1枚消費）"
     
+    # ★チケット処理ロジック (1チケット = 10連)
     if use_ticket:
         if num_pulls != 10: return False, msg_ticket_10only
         if state.get("offbanner_tickets", 0) <= 0: return False, msg_ticket_lack
-        state["offbanner_tickets"] -= 1
-        cost_str = cost_ticket_str
+        state["offbanner_tickets"] -= 1 # チケットを1枚消費
+        cost_str = "(1 Ticket consumed)" if lang == "en" else "（すり抜けチケット1枚消費）"
     else:
-        cost = 160 * num_pulls if num_pulls == 1 else 1600
+        cost = 160 * num_pulls
         if state.get("stones", 0) < cost: return False, msg_stone_lack.format(cost=cost)
         state["stones"] -= cost
         cost_str = f"({cost} stones consumed)" if lang == "en" else f"（石 {cost} 個消費）"
@@ -258,7 +258,7 @@ def format_gacha_status(user_id: int) -> str:
             f"- Cyrene Copies: {cyrene_copies} (Affection x{mult:.1f})\n"
             f"- Tickets: {tickets}\n"
             f"- Pity Count: {pity_5} (Next ★5 is {next_up})\n\n"
-            "Use `Pull 1` or `Pull 10` to play♪"
+            "Use `Pull 1` or `Pull 10` (or `Ticket 10`) to play♪"
         )
     else:
         next_up = "キュレネ確定" if guaranteed else "50%でキュレネ"
@@ -268,7 +268,7 @@ def format_gacha_status(user_id: int) -> str:
             f"・キュレネ所持: {cyrene_copies} 枚 (好感度倍率 x{mult:.1f})\n"
             f"・すり抜けチケット: {tickets} 枚\n"
             f"・天井カウント: {pity_5} 連 (次の★5は {next_up})\n\n"
-            "『単発ガチャ』『10連ガチャ』で引けるわよ♪"
+            "『単発ガチャ』『10連ガチャ』(または『チケット10連』)で引けるわよ♪"
         )
 
 # --- じゃんけんロジック (英語入力対応) ---
