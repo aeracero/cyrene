@@ -9,6 +9,7 @@ import reply_system as rs
 from lines import ARAFUE_TRIGGER_LINE
 from forms import get_user_form, set_user_form, resolve_form_code, get_form_display_name, get_all_forms
 from special_unlocks import inc_janken_win, get_janken_wins, is_nanoka_unlocked, set_nanoka_unlocked, has_danheng_stage1, mark_danheng_stage1, is_danheng_unlocked, set_danheng_unlocked
+import kimera_game
 
 # --- Discord Setup ---
 intents = discord.Intents.default()
@@ -698,6 +699,11 @@ async def on_message(message):
         fname = get_form_display_name(current_form)
         msg = f"I am currently **{fname}**." if lang=="en" else f"今のあたしは **{fname}** よ♪"
         await send_myu(message, user_id, f"{message.author.mention} {msg}")
+        return
+
+    kimera_reply = kimera_game.process_kimera_command(user_id, content_body)
+    if kimera_reply:
+        await send_myu(message, user_id, f"{message.author.mention} {kimera_reply}")
         return
 
     # --- 通常会話 ---
