@@ -24,7 +24,7 @@ waiting_for_admin_remove = set()
 waiting_for_rps_choice = set()
 waiting_for_guardian_level = {}
 waiting_for_msg_limit = {}
-waiting_for_bypass_edit = set() # 新規: Bypass編集待ち
+waiting_for_bypass_edit = set()
 waiting_for_transform_code = set()
 FORCE_RPS_WIN_NEXT = set()
 MYURION_QUIZ_STATE = {}
@@ -87,15 +87,12 @@ async def on_message(message):
     user_id = message.author.id
     content = message.content.strip() # 原文
     
-    # メイン管理者かどうかのフラグ
     is_main_admin = (user_id == PRIMARY_ADMIN_ID)
-
-    # ユーザー名とフォームの取得
     nickname = db.get_nickname(user_id)
     name = nickname if nickname else message.author.display_name
     current_form = get_user_form(user_id)
     
-    # --- モード切替コマンド (最優先) ---
+    # --- モード切替コマンド (最優先・メンション不要) ---
     if content == "!mode auto":
         db.set_reply_mode(user_id, "auto")
         await message.channel.send(f"了解です♪ これからはメンションなしでもお話しますね、{name}さん！")
@@ -117,18 +114,16 @@ async def on_message(message):
     
     # コマンド確認キーワード
     is_command_query = content in ["コマンド", "コマンド教えて", "コマンドを教えて", "ヘルプ"]
-    is_keyword_trigger = any(k in content for k in [
-        "じゃんけん", "変身", "ガチャ", "デイリー", "あだ名", "ミュリオン", 
-        "親衛隊レベル", "好感度", "skopeo", "skepeo", "今の姿", "今のフォーム",
-        "記憶は流れ星"
-    ])
     
-    # 返信判定
+    # ★返信判定ロジック（修正済み）★
     is_mentioned = client.user in message.mentions
     reply_mode = db.get_reply_mode(user_id)
     is_auto_reply = (reply_mode == "auto")
     
-    should_reply = (is_mentioned or is_active_mode or is_command_query or is_keyword_trigger or is_auto_reply)
+    # 【変更点】
+    # 「メンションされた」か「入力待ち(Active)」か「Autoモード」の時だけ反応する。
+    # キーワードが含まれていても、Autoモードじゃなければ無視する。
+    should_reply = (is_mentioned or is_active_mode or is_auto_reply)
     
     if not should_reply:
         return
@@ -255,7 +250,7 @@ async def on_message(message):
             await send_myu(message, user_id, "そのコードは知らないみたい…。もう一度確認してくれる？")
         return
     
-    # --- データ管理モード (実装漏れ修正・権限強化版) ---
+    # --- データ管理モード ---
     if user_id in admin_data_mode:
         
         if content_body == "データ管理終了":
@@ -334,7 +329,6 @@ async def on_message(message):
             m = re.search(r"じゃんけん勝利数追加\s+<@!?(\d+)>\s+(\d+)", content_body)
             if m:
                 tid, val = int(m.group(1)), int(m.group(2))
-                # database.pyに追加した関数を使用
                 current = get_janken_wins(tid)
                 db.set_janken_wins_direct(tid, current + val)
                 await send_myu(message, user_id, f"<@{tid}> の勝利数を {val} 増やしたわ。")
@@ -347,7 +341,6 @@ async def on_message(message):
             if not is_main_admin:
                 await send_myu(message, user_id, "ごめんなさい、それはメイン管理者だけの権限よ。")
                 return
-            # database.pyに追加した関数を使用
             status_list = db.get_all_special_status()
             if not status_list:
                 await send_myu(message, user_id, "まだ特別な解放をしている人はいないみたい。")
@@ -374,41 +367,7 @@ async def on_message(message):
         await send_myu(message, user_id, f"{ADMIN_COMMANDS_LIST}\n\nコマンドを待ってるわ。何をすればいいかしら？♪")
         return
     
-    # --- Bypass編集待ち (メイン管理者のみ到達) ---
-    if user_id in waiting_for_bypass_edit:
-        if content_body in ["追加", "削除"]:
-            # 追加/削除モードを記憶して次のメンション待ちへ
-            waiting_for_bypass_edit.remove(user_id)
-            # ここでは簡易的にセットで状態管理（タプルや辞書を使うのが丁寧ですが、既存のwaiting_for...に合わせます）
-            # admin_data_modeと同様のフローにするため、辞書で管理します
-            waiting_for_bypass_edit_step = {user_id: content_body} 
-            # ※注意: waiting_for_bypass_edit は set で定義されていますが、
-            # 状態遷移のために dict に切り替えるか、別変数を用意する必要があります。
-            # ここではシンプルにするため「waiting_for_bypass_mention」という新しい状態セットを作るより、
-            # 既存の辞書型状態変数を使うパターン（waiting_for_guardian_levelのような）に書き換えます。
-            # 今回はコード量の都合上、変数を新設せず、admin_data_modeに戻してコマンド再入力を促す形にします
-            # （本来ならもっと細かく分岐すべきですが、簡易実装とします）
-            pass 
-        
-        # 簡易実装: Bypass編集は「コマンド引数」ではなく対話形式にするのが複雑なため
-        # ここで直接メンションを待つ形に修正します。
-        # 上記の if content_body... は削除し、以下のようにします。
-        
-        if message.mentions:
-            target = message.mentions[0]
-            # 直前の入力が「追加」か「削除」か覚えていないといけないため、
-            # 本来は waiting_for_bypass_edit = {} (辞書) にすべきでした。
-            # 修正: 上部のState定義を修正できないため、ここで強引に判定します。
-            # コマンドを分けます。
-            pass
-    
-    # ★ Bypass編集フロー修正 (辞書型を使用)
-    # 上記の waiting_for_bypass_edit は set でしたが、辞書に変更する必要があります。
-    # しかし変数の型を変えると既存と整合性が取れないため、ここでは
-    # 「メッセージ制限bypass編集」コマンドを打った直後に
-    # 「追加 @user」または「削除 @user」と入力させる方式にします。
-
-    # --- (再修正) Bypass編集ロジック ---
+    # --- Bypass編集待ち ---
     if user_id in waiting_for_bypass_edit:
         if content_body == "中止":
             waiting_for_bypass_edit.discard(user_id)
