@@ -193,6 +193,10 @@ async def on_message(message):
     if content_body in["おやすみ"]:
         await message.channel.send(f"# {message.author.mention} が寝るらしいわ♪永眠しないようにしてちょうだいね♪")
         return
+    
+    if content_body in["キュレネさん"]:
+        await message.channel.send(f"# {message.author.mention} ハーイ♪あたしのこと呼んだ？ミュミュ〜♪")
+        return
 
     # 他の機能は返信対象のときのみ実行
     if not should_reply: return
