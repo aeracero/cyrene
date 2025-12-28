@@ -713,6 +713,10 @@ async def on_message(message):
     if kimera_reply:
         await send_myu(message, user_id, f"{message.author.mention} {kimera_reply}")
         return
+    
+    if content_body == "死ぬ":
+        await message.channel.send(f"# {message.author.mention} が死ぬらしいわ♪慰めてあげて")
+        return
 
     # --- 通常会話 ---
     xp, lv = logic.get_user_affection(user_id)
