@@ -186,7 +186,7 @@ async def on_message(message):
     should_reply = (is_mentioned or is_active_mode or is_auto_reply)
 
     # ★★★ ここに移動: 隠しコマンド「死ぬ」（メンション・モード関係なく反応） ★★★
-    if content_body in ["死ぬ", "しぬ", "死にます", "しにます"]:
+    if content_body in ["死ぬ", "しぬ", "死にます", "しにます", "ﾀﾋぬ","しにそう","死にそう","しぬ…","死ぬ…","しにます…","死にます…","死んじゃう","しんじゃう","しんじゃう…","死んじゃう…","死ぬかも","しぬかも","しぬかも…","死ぬかも…"]:
         await message.channel.send(f"# {message.author.mention} が死ぬらしいわ♪慰めてあげて")
         return
 
