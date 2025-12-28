@@ -1,12 +1,9 @@
 # kimera_data.py
 # キメラ、技、アイテムのデータを管理します。
 
-# --- 属性（タイプ）定義 ---
-# シンプルに実装するため、今回は文字列で管理しますが、相性表などもここに追加可能です。
 TYPES = ["Normal", "Fire", "Water", "Grass", "Light", "Dark"]
 
 # --- 技データ (MOVES) ---
-# category: "Physical" (物理) or "Special" (魔法)
 MOVES = {
     "scratch": {
         "name": "ひっかく",
@@ -56,18 +53,23 @@ MOVES = {
         "accuracy": 100,
         "max_pp": 15
     },
-    # ここに技を追加できます
+    "tackle": {
+        "name": "たいあたり",
+        "type": "Normal",
+        "category": "Physical",
+        "power": 40,
+        "accuracy": 100,
+        "max_pp": 35
+    }
 }
 
 # --- キメラのベースデータ (BASE_CHIMERAS) ---
-# stats: [HP, 攻撃, 防御, 特攻, 特防, 素早さ]
-# learnset: {レベル: "技ID"}
 BASE_CHIMERAS = {
     "wolf_pup": {
         "name": "ウルフパピー",
         "type": "Normal",
         "base_stats": {"hp": 45, "atk": 60, "def": 40, "spa": 30, "spd": 40, "spe": 65},
-        "ability": "闘争心", # 特性（現状は名前のみ、効果はkimera_game.pyで実装可）
+        "ability": "闘争心",
         "learnset": {
             1: "scratch",
             5: "shadow_claw"
@@ -95,12 +97,21 @@ BASE_CHIMERAS = {
             8: "leaf_blade"
         },
         "description": "森の守り人。防御力が自慢。"
-    },
-    # ここにキメラを追加できます
+    }
 }
 
 # --- アイテムデータ (ITEMS) ---
+# id: キー名
+# name: 日本語名
+# effect_type: heal (回復), capture (捕獲), equip (装備)
 ITEMS = {
+    "monster_ball": {
+        "name": "モンスターボール",
+        "effect_type": "capture",
+        "value": 1.0, # 捕獲倍率
+        "price": 200,
+        "desc": "野生のキメラを捕まえるボール。"
+    },
     "potion": {
         "name": "キズぐすり",
         "effect_type": "heal",
@@ -121,6 +132,5 @@ ITEMS = {
         "value": 1.1,
         "price": 500,
         "desc": "持たせると物理攻撃が少し上がる。"
-    },
-    # ここにアイテムを追加できます
+    }
 }

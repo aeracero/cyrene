@@ -5,12 +5,11 @@ import math
 from pathlib import Path
 from kimera_data import BASE_CHIMERAS, MOVES, ITEMS
 
-# データ保存パス
 DATA_DIR = Path("/data")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 KIMERA_SAVE_FILE = DATA_DIR / "kimera_save.json"
 
-# --- データ管理クラス ---
+# --- データ管理 ---
 
 def load_kimera_data():
     if not KIMERA_SAVE_FILE.exists():
@@ -27,18 +26,22 @@ def get_user_data(user_id):
     data = load_kimera_data()
     uid = str(user_id)
     if uid not in data:
-        # 新規ユーザー初期化
         data[uid] = {
-            "party": [],      # 手持ち（最大3体）
-            "box": [],        # 預かり所
-            "items": {},      # 所持アイテム {item_id: count}
-            "money": 1000,    # 所持金
-            "battle_state": None # 戦闘中かどうか
+            "party": [],
+            "box": [],
+            "items": {"monster_ball": 5, "potion": 1}, # 初期アイテム
+            "money": 3000,
+            "battle_state": None
         }
-        # 初期キメラを1体ランダムで付与
+        # 初期キメラ
         starter = create_chimera_instance(random.choice(list(BASE_CHIMERAS.keys())), level=5)
         data[uid]["party"].append(starter)
         save_kimera_data(data)
+    
+    # データ構造のマイグレーション用（古いデータがある場合のエラー防止）
+    if "items" not in data[uid]: data[uid]["items"] = {}
+    if "money" not in data[uid]: data[uid]["money"] = 1000
+    
     return data[uid]
 
 def save_user_data(user_id, user_data):
@@ -46,13 +49,45 @@ def save_user_data(user_id, user_data):
     data[str(user_id)] = user_data
     save_kimera_data(data)
 
-# --- キメラ生成とステータス計算 ---
+# --- アイテム・金銭管理 ---
+
+def add_item(user_id, item_key, count=1):
+    ud = get_user_data(user_id)
+    cur = ud["items"].get(item_key, 0)
+    ud["items"][item_key] = cur + count
+    save_user_data(user_id, ud)
+
+def remove_item(user_id, item_key, count=1):
+    ud = get_user_data(user_id)
+    cur = ud["items"].get(item_key, 0)
+    if cur >= count:
+        ud["items"][item_key] = cur - count
+        if ud["items"][item_key] <= 0:
+            del ud["items"][item_key]
+        save_user_data(user_id, ud)
+        return True
+    return False
+
+def has_item(user_id, item_key):
+    ud = get_user_data(user_id)
+    return ud["items"].get(item_key, 0) > 0
+
+def add_money(user_id, amount):
+    ud = get_user_data(user_id)
+    ud["money"] += amount
+    save_user_data(user_id, ud)
+
+def spend_money(user_id, amount):
+    ud = get_user_data(user_id)
+    if ud["money"] >= amount:
+        ud["money"] -= amount
+        save_user_data(user_id, ud)
+        return True
+    return False
+
+# --- キメラ生成・計算 ---
 
 def calculate_stat(base, level, is_hp=False):
-    # ポケモン風の簡易計算式
-    # (Base * 2 * Level / 100) + (Level + 10)  (HPの場合)
-    # (Base * 2 * Level / 100) + 5             (他)
-    # ※個体値・努力値は今回は省略
     val = math.floor((base * 2 * level) / 100)
     if is_hp:
         return val + level + 10
@@ -63,15 +98,13 @@ def create_chimera_instance(base_id, level=5, nickname=None):
     base = BASE_CHIMERAS.get(base_id)
     if not base: return None
     
-    # 技の初期習得
     moves = []
     for lv, mid in base["learnset"].items():
         if lv <= level:
             moves.append(mid)
-    # 4つまで
+    if not moves: moves = ["tackle"] # 最低限の技
     moves = moves[-4:]
 
-    # ステータス計算
     bs = base["base_stats"]
     stats = {
         "max_hp": calculate_stat(bs["hp"], level, is_hp=True),
@@ -83,12 +116,12 @@ def create_chimera_instance(base_id, level=5, nickname=None):
     }
     
     return {
-        "id": random.randint(100000, 999999), # ユニークID
+        "id": random.randint(100000, 999999),
         "base_id": base_id,
         "nickname": nickname or base["name"],
         "level": level,
         "xp": 0,
-        "next_xp": level * 100, # 必要経験値（簡易）
+        "next_xp": level * 100,
         "current_hp": stats["max_hp"],
         "stats": stats,
         "moves": moves,
@@ -97,7 +130,6 @@ def create_chimera_instance(base_id, level=5, nickname=None):
     }
 
 def get_chimera_display_stats(instance):
-    """詳細表示用のテキストを生成"""
     base = BASE_CHIMERAS[instance["base_id"]]
     s = instance["stats"]
     moves_txt = ", ".join([MOVES[m]["name"] for m in instance["moves"]])
@@ -115,7 +147,6 @@ def get_chimera_display_stats(instance):
     )
 
 def level_up_chimera(instance):
-    """レベルアップ処理"""
     instance["level"] += 1
     instance["xp"] = 0
     instance["next_xp"] = instance["level"] * 100
@@ -123,7 +154,6 @@ def level_up_chimera(instance):
     base = BASE_CHIMERAS[instance["base_id"]]
     bs = base["base_stats"]
     
-    # ステータス再計算
     instance["stats"]["max_hp"] = calculate_stat(bs["hp"], instance["level"], is_hp=True)
     instance["stats"]["atk"] = calculate_stat(bs["atk"], instance["level"])
     instance["stats"]["def"] = calculate_stat(bs["def"], instance["level"])
@@ -131,9 +161,8 @@ def level_up_chimera(instance):
     instance["stats"]["spd"] = calculate_stat(bs["spd"], instance["level"])
     instance["stats"]["spe"] = calculate_stat(bs["spe"], instance["level"])
     
-    # 新技習得チェック
     new_move = base["learnset"].get(instance["level"])
-    msg = f"{instance['nickname']}はレベル{instance['level']}になった！"
+    msg = f"\n**{instance['nickname']}** はレベル{instance['level']}になった！"
     
     if new_move:
         if len(instance["moves"]) < 4:

@@ -195,6 +195,14 @@ async def on_message(message):
             list_text = GENERAL_COMMANDS_LIST_EN if lang == "en" else GENERAL_COMMANDS_LIST_JP
             await send_myu(message, user_id, f"{message.author.mention} {list_text}")
         return
+    
+    if content_body == "データ管理":
+        if db.is_admin(user_id):
+            admin_data_mode.add(user_id)
+            await send_myu(message, user_id, ADMIN_COMMANDS_LIST)
+        else:
+            await send_myu(message, user_id, "ごめんなさい、そのコマンドは管理者専用よ。")
+        return
 
     # --- ミュリオン設定 ---
     if content_body == "全体ミュリオンモード" and db.is_admin(user_id):
