@@ -189,6 +189,10 @@ async def on_message(message):
     if content_body in ["死ぬ", "しぬ", "死にます", "しにます", "ﾀﾋぬ","しにそう","死にそう","しぬ…","死ぬ…","しにます…","死にます…","死んじゃう","しんじゃう","しんじゃう…","死んじゃう…","死ぬかも","しぬかも","しぬかも…","死ぬかも…","くたばる","死","墓","DEATH","death","Die","die","DIE","ﾀﾋ","ﾀﾋ…","ﾀﾋかも","ﾀﾋかも…","くたばる…","タヒます","タヒます…","タヒる","タヒる…","タヒ","タヒ…","タヒかも","タヒかも…","亡","亡…","亡かも","亡かも…","逝","逝…","逝かも","逝かも…"]:
         await message.channel.send(f"# {message.author.mention} が死ぬらしいわ♪慰めてあげて")
         return
+    
+    if content_body in["おやすみ"]:
+        await message.channel.send(f"# {message.author.mention} が寝るらしいわ♪永眠しないようにしてちょうだいね♪")
+        return
 
     # 他の機能は返信対象のときのみ実行
     if not should_reply: return
