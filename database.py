@@ -4,11 +4,11 @@ from pathlib import Path
 from config import (
     NICKNAMES_FILE, ADMINS_FILE, GUARDIAN_FILE, AFFECTION_FILE,
     AFFECTION_CONFIG_FILE, MESSAGE_LIMIT_FILE, MESSAGE_USAGE_FILE,
-    MESSAGE_LIMIT_CONFIG_FILE, GACHA_FILE, MYURION_FILE,
+    MESSAGE_LIMIT_CONFIG_FILE, GACHA_FILE, MYURION_FILE, SPECIAL_UNLOCKS_FILE,
     PRIMARY_ADMIN_ID, today_str
 )
 
-# 新規追加: 返信モード保存用ファイル（dataフォルダ内を想定）
+# 新規追加: 返信モード保存用ファイル
 REPLY_MODE_FILE = Path("data/reply_mode.json")
 
 # --- 共通ユーティリティ ---
@@ -24,21 +24,14 @@ def _load_json(path: Path, default=None):
         return default
 
 def _save_json(path: Path, data):
-    # 親ディレクトリがない場合は作成
     if not path.parent.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
-# --- 返信モード (新規追加) ---
+# --- 返信モード ---
 def load_reply_modes(): return _load_json(REPLY_MODE_FILE, {})
-
-def get_reply_mode(user_id):
-    """ユーザーの返信モードを取得 (デフォルトは 'mention')"""
-    data = load_reply_modes()
-    return data.get(str(user_id), "mention")
-
+def get_reply_mode(user_id): return load_reply_modes().get(str(user_id), "mention")
 def set_reply_mode(user_id, mode):
-    """返信モードを設定 ('auto' or 'mention')"""
     data = load_reply_modes()
     data[str(user_id)] = mode
     _save_json(REPLY_MODE_FILE, data)
@@ -103,8 +96,8 @@ def load_affection_config():
     return base
 def save_affection_config(cfg): _save_json(AFFECTION_CONFIG_FILE, cfg)
 
-# --- メッセージ制限 ---
-DEFAULT_MSG_LIMIT_CONFIG = {"bypass_enabled": False, "allow_bypass_grant": False, "bypass_users": []}
+# --- メッセージ制限 & Bypass (機能拡張) ---
+DEFAULT_MSG_LIMIT_CONFIG = {"bypass_enabled": False, "bypass_users": []}
 def load_message_limits(): return _load_json(MESSAGE_LIMIT_FILE, {})
 def set_message_limit(user_id, limit):
     data = load_message_limits()
@@ -142,6 +135,21 @@ def can_bypass_message_limit(user_id):
     cfg = load_message_limit_config()
     if not cfg.get("bypass_enabled", False): return False
     return str(user_id) in cfg.get("bypass_users", [])
+
+# ★追加: Bypassユーザー操作
+def add_bypass_user(user_id):
+    cfg = load_message_limit_config()
+    users = set(cfg.get("bypass_users", []))
+    users.add(str(user_id))
+    cfg["bypass_users"] = list(users)
+    save_message_limit_config(cfg)
+def remove_bypass_user(user_id):
+    cfg = load_message_limit_config()
+    users = set(cfg.get("bypass_users", []))
+    if str(user_id) in users:
+        users.remove(str(user_id))
+        cfg["bypass_users"] = list(users)
+        save_message_limit_config(cfg)
 
 def is_over_message_limit(user_id):
     limit = get_message_limit(user_id)
@@ -191,3 +199,28 @@ def set_all_myurion_enabled(enabled: bool):
         if enabled: st["unlocked"] = True
         data[uid] = st
     _save_json(MYURION_FILE, data)
+
+# --- ★追加: 特殊アンロック/じゃんけん勝利数管理 ---
+# special_unlocks.py のデータをここで扱えるようにして、コマンドを確実に動作させます
+def load_special_unlocks(): return _load_json(SPECIAL_UNLOCKS_FILE, {})
+def save_special_unlocks(data): _save_json(SPECIAL_UNLOCKS_FILE, data)
+
+def set_janken_wins_direct(user_id: int, wins: int):
+    """管理者用: 勝利数を直接設定"""
+    data = load_special_unlocks()
+    info = data.get(str(user_id), {})
+    info["janken_wins"] = max(0, int(wins))
+    data[str(user_id)] = info
+    save_special_unlocks(data)
+
+def get_all_special_status():
+    """管理者用: 全員の解放状況を取得"""
+    data = load_special_unlocks()
+    results = []
+    for uid, info in data.items():
+        wins = info.get("janken_wins", 0)
+        nano = "済" if info.get("nanoka_unlocked") else "未"
+        dan = "済" if info.get("danheng_unlocked") else "未"
+        if wins > 0 or nano == "済" or dan == "済":
+            results.append(f"<@{uid}>: 勝{wins}/な{nano}/丹{dan}")
+    return results
