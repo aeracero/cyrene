@@ -14,6 +14,7 @@ import kimera_game
 # --- Discord Setup ---
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True # メンバー検索(PvP招待)用
 client = discord.Client(intents=intents)
 
 # --- State ---
@@ -127,11 +128,22 @@ async def on_message(message):
     current_form = get_user_form(user_id)
     lang = db.get_user_lang(user_id)
     
-    # ★二つ名の適用（名前にPrefixをつける）
     title_prefix = logic.get_title_prefix(user_id)
     name = f"{title_prefix}{raw_name}"
 
-    # --- モード/言語切替コマンド (最優先・メンション不要) ---
+    # --- キーワード定義 (ここを追加しました) ---
+    CMD_KEYWORDS = ["コマンド", "ヘルプ", "command", "help"]
+    RPS_KEYWORDS = ["じゃんけん", "rps", "rock paper scissors"]
+    TRANS_KEYWORDS = ["変身", "transform"]
+    GACHA_KEYWORDS = ["ガチャ", "gacha"]
+    DAILY_KEYWORDS = ["デイリー", "daily"]
+    NICK_KEYWORDS = ["あだ名", "nickname"]
+    MYU_KEYWORDS = ["ミュリオン", "myurion"]
+    AFF_KEYWORDS = ["好感度", "affection"]
+    ACHIEVE_KEYWORDS = ["実績", "achievement", "進捗", "progress"]
+    TITLE_KEYWORDS = ["二つ名", "change title"]
+
+    # --- モード/言語切替 ---
     if content_lower == "!mode auto":
         db.set_reply_mode(user_id, "auto")
         msg = f"Got it! I'll reply even without mentions now, {name}!" if lang=="en" else f"了解です♪ これからはメンションなしでもお話しますね、{name}さん！"
@@ -162,48 +174,44 @@ async def on_message(message):
     )
     
     # キメラゲーム中かチェック
-    is_playing_kimera = kimera_game.get_session(user_id) is not None
+    kimera_session = kimera_game.get_session(user_id)
+    is_playing_kimera = kimera_session is not None
 
-    # キーワードトリガー (EN/JP対応)
-    CMD_KEYWORDS = ["コマンド", "ヘルプ", "command", "help"]
-    RPS_KEYWORDS = ["じゃんけん", "rps", "rock paper scissors"]
-    TRANS_KEYWORDS = ["変身", "transform"]
-    GACHA_KEYWORDS = ["ガチャ", "gacha"]
-    DAILY_KEYWORDS = ["デイリー", "daily"]
-    NICK_KEYWORDS = ["あだ名", "nickname"]
-    MYU_KEYWORDS = ["ミュリオン", "myurion"]
-    AFF_KEYWORDS = ["好感度", "affection"]
-    ACHIEVE_KEYWORDS = ["実績", "achievement", "進捗", "progress"]
-    TITLE_KEYWORDS = ["二つ名", "change title"]
-    
+    # キーワードトリガー
     is_command_query = any(k in content_body_lower for k in CMD_KEYWORDS)
-    is_keyword_trigger = any(k in content_body_lower for k in (
-        RPS_KEYWORDS + TRANS_KEYWORDS + GACHA_KEYWORDS + DAILY_KEYWORDS + 
-        NICK_KEYWORDS + MYU_KEYWORDS + AFF_KEYWORDS + ACHIEVE_KEYWORDS + TITLE_KEYWORDS +
-        ["親衛隊レベル", "guardian", "skopeo", "skepeo", "今の姿", "current form", "記憶は流れ星"]
-    ))
     
     # 返信判定
     is_mentioned = client.user in message.mentions
     reply_mode = db.get_reply_mode(user_id)
     is_auto_reply = (reply_mode == "auto")
-    
-    # ゲーム中はメンションなしでも反応させる
     should_reply = (is_mentioned or is_active_mode or is_auto_reply or is_playing_kimera)
 
-    # ★★★ 隠しコマンド「死ぬ」（メンション・モード関係なく反応） ★★★
+    # 隠しコマンド
     if content_body in ["死ぬ", "しぬ", "死にます", "しにます"]:
         await message.channel.send(f"# {message.author.mention} が死ぬらしいわ♪慰めてあげて")
         return
 
-    # 他の機能は返信対象のときのみ実行
+    # ★ DM移動機能
+    if content_body == "DMに移動する":
+        try:
+            await message.author.send("ここなら二人きりで話せるわね♪\n戻りたい時は『戻りたい』と言ってね。")
+            if message.guild:
+                await message.channel.send(f"{message.author.mention} DMを送ったわ。そっちで話しましょ♪")
+        except:
+            await message.channel.send("DMを送れないみたい。設定を確認してくれる？")
+        return
+
+    if content_body == "戻りたい" and isinstance(message.channel, discord.DMChannel):
+        await message.channel.send("わかったわ。サーバーの方に戻りましょ♪")
+        return
+
     if not should_reply: return
 
     # 空メッセージ判定
     if not content_body and not message.attachments and not is_active_mode and not is_mentioned:
         return
     
-    # --- コマンド一覧表示 ---
+    # --- コマンド一覧 ---
     if is_command_query:
         if user_id in admin_data_mode:
             await send_myu(message, user_id, ADMIN_COMMANDS_LIST)
@@ -212,7 +220,7 @@ async def on_message(message):
             await send_myu(message, user_id, f"{message.author.mention} {list_text}")
         return
 
-    # --- データ管理モード開始 ---
+    # --- データ管理モード ---
     if content_body == "データ管理":
         if db.is_admin(user_id):
             admin_data_mode.add(user_id)
@@ -221,7 +229,6 @@ async def on_message(message):
             await send_myu(message, user_id, "ごめんなさい、そのコマンドは管理者専用よ。")
         return
     
-    # --- データ移行実行 ---
     if content_body == "データ移行実行" and db.is_admin(user_id):
         import kimera_core
         msg = kimera_core.migrate_old_data()
@@ -238,7 +245,6 @@ async def on_message(message):
         await message.channel.send(f"{message.author.mention} 全員ミュリオンモード解除。普通の言葉に戻るわね。")
         return
 
-    # --- ミュリオンクイズ ---
     if user_id in MYURION_QUIZ_STATE:
         ans = logic.parse_myurion_answer(content_body)
         if not ans:
@@ -288,7 +294,7 @@ async def on_message(message):
         await message.channel.send("Back to normal language." if lang=="en" else "わかったわ、通常言語に戻るわね。")
         return
 
-    # --- 丹恒解放コード ---
+    # --- 既存の処理 (丹恒コード〜Bypass編集など) は省略せず記述 ---
     if "skopeo365" in re.sub(r"\s+", "", content_body).lower():
         if has_danheng_stage1(user_id) and not is_danheng_unlocked(user_id):
             set_danheng_unlocked(user_id, True)
@@ -300,11 +306,9 @@ async def on_message(message):
         waiting_for_transform_code.discard(user_id)
         return
 
-    # --- 変身コード待ち ---
     if user_id in waiting_for_transform_code:
         t_text = content_body
         waiting_for_transform_code.discard(user_id)
-        
         if "なのになってみて" in t_text:
             if is_nanoka_unlocked(user_id):
                 set_user_form(user_id, "nanoka")
@@ -319,7 +323,6 @@ async def on_message(message):
             else:
                 await send_myu(message, user_id, "Locked." if lang=="en" else "鍵が足りないみたい。")
             return
-        
         fk = resolve_form_code(t_text)
         if fk:
             set_user_form(user_id, fk)
@@ -331,7 +334,6 @@ async def on_message(message):
             await send_myu(message, user_id, msg)
         return
     
-    # --- データ管理モード ---
     if user_id in admin_data_mode:
         if content_body == "データ管理終了":
             admin_data_mode.discard(user_id)
@@ -365,7 +367,6 @@ async def on_message(message):
             waiting_for_msg_limit[user_id] = {"step": "mention"}
             await send_myu(message, user_id, "メッセージ制限を設定する人をメンションしてね。")
             return
-        # Bypass編集
         if content_body == "メッセージ制限bypass編集":
             if not is_main_admin:
                 await send_myu(message, user_id, "ごめんなさい、それはメイン管理者だけの権限よ。")
@@ -374,7 +375,6 @@ async def on_message(message):
             waiting_for_bypass_edit.add(user_id)
             await send_myu(message, user_id, "制限無視(bypass)リストに「追加」する？「削除」する？\n`追加` か `削除` で答えて。")
             return
-        # XP追加
         if content_body.startswith("好感度XP追加"):
             if not is_main_admin:
                 await send_myu(message, user_id, "ごめんなさい、それはメイン管理者だけの権限よ。")
@@ -383,7 +383,6 @@ async def on_message(message):
             if m:
                 tid, val = int(m.group(1)), int(m.group(2))
                 logic.add_affection_xp(tid, val)
-                # 実績チェック
                 unlocks = logic.check_all_achievements(tid)
                 msg = f"<@{tid}> に {val} XPを追加したわ♪"
                 if unlocks: msg += "\n" + "\n".join(unlocks)
@@ -391,7 +390,6 @@ async def on_message(message):
             else:
                 await send_myu(message, user_id, "書式が違うみたい。`好感度XP追加 @ユーザー 100` のように書いてね。")
             return
-        # じゃんけん勝利数
         if content_body.startswith("じゃんけん勝利数追加"):
             if not is_main_admin:
                 await send_myu(message, user_id, "ごめんなさい、それはメイン管理者だけの権限よ。")
@@ -401,7 +399,6 @@ async def on_message(message):
                 tid, val = int(m.group(1)), int(m.group(2))
                 current = get_janken_wins(tid)
                 db.set_janken_wins_direct(tid, current + val)
-                # 実績チェック
                 unlocks = logic.check_all_achievements(tid)
                 msg = f"<@{tid}> の勝利数を {val} 増やしたわ。"
                 if unlocks: msg += "\n" + "\n".join(unlocks)
@@ -409,7 +406,6 @@ async def on_message(message):
             else:
                 await send_myu(message, user_id, "書式が違うみたい。`じゃんけん勝利数追加 @ユーザー 10` のように書いてね。")
             return
-        # 解放状況
         if content_body == "変身解放状況確認":
             if not is_main_admin:
                 await send_myu(message, user_id, "ごめんなさい、それはメイン管理者だけの権限よ。")
@@ -421,12 +417,10 @@ async def on_message(message):
                 msg = "\n".join(status_list)
                 await send_myu(message, user_id, f"【現在の解放状況】\n{msg}")
             return
-        # 好感度一覧
         if content_body == "好感度一覧":
             text = logic.format_all_affection_status(message.guild)
             await send_myu(message, user_id, text)
             return
-        # 変身管理
         if content_body == "変身管理":
             forms_data = get_all_forms()
             lines = ["【現在の変身状態】"]
@@ -435,18 +429,16 @@ async def on_message(message):
                 lines.append(f"<@{uid}>: {dname} ({key})")
             await send_myu(message, user_id, "\n".join(lines))
             return
-        # デフォルト案内
         await send_myu(message, user_id, f"{ADMIN_COMMANDS_LIST}\n\nコマンドを待ってるわ。何をすればいいかしら？♪")
         return
 
-    # --- Bypass編集待ち ---
+    # --- 各種待ち状態処理 ---
     if user_id in waiting_for_bypass_edit:
         if content_body == "中止":
             waiting_for_bypass_edit.discard(user_id)
             admin_data_mode.add(user_id)
             await send_myu(message, user_id, "中止したわ。")
             return
-
         m = re.match(r"(追加|削除)\s+<@!?(\d+)>", content_body)
         if m:
             action, tid = m.group(1), int(m.group(2))
@@ -456,20 +448,18 @@ async def on_message(message):
             else:
                 db.remove_bypass_user(tid)
                 await send_myu(message, user_id, f"<@{tid}> をBypassリストから削除したわ。")
-            
             waiting_for_bypass_edit.discard(user_id)
             admin_data_mode.add(user_id)
         else:
             await send_myu(message, user_id, "書式が違うみたい。\n`追加 @ユーザー` または `削除 @ユーザー` と入力してね。")
         return
 
-    # --- 管理者追加待ち処理 ---
     if user_id in waiting_for_admin_add:
         if message.mentions:
             target = message.mentions[0]
             db.add_admin(target.id)
             waiting_for_admin_add.discard(user_id)
-            admin_data_mode.add(user_id) # モードに戻る
+            admin_data_mode.add(user_id)
             await send_myu(message, user_id, f"{target.mention} を管理者に追加したわ。\nデータ管理モードに戻るわね。")
         else:
             await send_myu(message, user_id, "ユーザーをメンションしてね。（中止なら `中止` と言って）")
@@ -478,7 +468,6 @@ async def on_message(message):
                 admin_data_mode.add(user_id)
         return
 
-    # --- 管理者削除待ち処理 ---
     if user_id in waiting_for_admin_remove:
         if message.mentions:
             target = message.mentions[0]
@@ -495,7 +484,6 @@ async def on_message(message):
                 admin_data_mode.add(user_id)
         return
 
-    # --- 親衛隊レベル設定待ち処理 ---
     if user_id in waiting_for_guardian_level:
         step_data = waiting_for_guardian_level[user_id]
         if step_data["step"] == "mention":
@@ -517,7 +505,6 @@ async def on_message(message):
                     await send_myu(message, user_id, f"<@{tid}> の親衛隊レベルを削除したわ。")
                 else:
                     db.set_guardian_level(tid, lv)
-                    # 実績チェック
                     unlocks = logic.check_all_achievements(tid)
                     msg = f"<@{tid}> を親衛隊レベル {lv} に設定したわ。"
                     if unlocks: msg += "\n" + "\n".join(unlocks)
@@ -528,7 +515,6 @@ async def on_message(message):
                 await send_myu(message, user_id, "数値を入力してね。")
         return
 
-    # --- メッセージ制限設定待ち処理 ---
     if user_id in waiting_for_msg_limit:
         step_data = waiting_for_msg_limit[user_id]
         if step_data["step"] == "mention":
@@ -557,7 +543,7 @@ async def on_message(message):
                 await send_myu(message, user_id, "数値を入力してね。")
         return
 
-    # --- あだ名系 ---
+    # --- あだ名登録 ---
     if any(content_body_lower.startswith(k) for k in ["あだ名登録", "set nickname"]):
         new = re.sub(r"^(あだ名登録|set nickname)\s*", "", content_body, flags=re.IGNORECASE).strip()
         if not new:
@@ -580,14 +566,11 @@ async def on_message(message):
 
     # --- ガチャ ---
     if any(k in content_body_lower for k in GACHA_KEYWORDS):
-        
-        # チケット10連
         if "ticket" in content_body_lower or "チケット" in content_body_lower:
             is_10 = "10" in content_body_lower or "ten" in content_body_lower
             if not is_10: is_10 = True 
             if is_10:
                 ok, res = logic.perform_gacha_pulls(user_id, 10, use_ticket=True)
-                # 実績チェック (回数/完凸)
                 db.increment_achievement_stat(user_id, "gacha_count", 10)
                 unlocks = logic.check_all_achievements(user_id)
                 if unlocks: res += "\n" + "\n".join(unlocks)
@@ -595,18 +578,14 @@ async def on_message(message):
             else:
                 await send_myu(message, user_id, logic.format_gacha_status(user_id))
             return
-
-        # 通常ガチャ
         if any(k in content_body_lower for k in ["単発", "pull 1"]) and "10" not in content_body_lower:
             ok, res = logic.perform_gacha_pulls(user_id, 1)
-            # 実績チェック
             db.increment_achievement_stat(user_id, "gacha_count", 1)
             unlocks = logic.check_all_achievements(user_id)
             if unlocks: res += "\n" + "\n".join(unlocks)
             await send_myu(message, user_id, res)
         elif any(k in content_body_lower for k in ["10連", "pull 10"]):
             ok, res = logic.perform_gacha_pulls(user_id, 10, use_ticket=False)
-            # 実績チェック
             db.increment_achievement_stat(user_id, "gacha_count", 10)
             unlocks = logic.check_all_achievements(user_id)
             if unlocks: res += "\n" + "\n".join(unlocks)
@@ -631,30 +610,22 @@ async def on_message(message):
     is_rps_msg = any(k in content_body_lower for k in RPS_KEYWORDS)
     if is_rps_msg or user_id in waiting_for_rps_choice:
         hand = logic.parse_hand(content_body)
-        
         if not hand and is_rps_msg:
             waiting_for_rps_choice.add(user_id)
             prompt = rs.get_rps_prompt_for_form(current_form, name, user_id)
             await send_myu(message, user_id, prompt)
             return
-        
         if hand:
             force = user_id in FORCE_RPS_WIN_NEXT
             bot_hand = logic.get_bot_hand(hand, force)
             res = "win" if force else logic.judge_janken(hand, bot_hand)
             if force: FORCE_RPS_WIN_NEXT.discard(user_id)
-            
             wins = inc_janken_win(user_id) if res == "win" else get_janken_wins(user_id)
-            
             result_msg = rs.format_rps_result(current_form, name, hand, bot_hand, rs.get_rps_flavor(current_form, res, name, user_id), wins, user_id)
-            
-            # 実績チェック (じゃんけん勝利)
             if res == "win":
                 unlocks = logic.check_all_achievements(user_id)
                 if unlocks: result_msg += "\n" + "\n".join(unlocks)
-
             await send_myu(message, user_id, result_msg)
-            
             xp_map = {"win": 10, "lose": 5, "draw": 7}
             logic.add_affection_xp(user_id, xp_map.get(res, 0))
             waiting_for_rps_choice.discard(user_id)
@@ -663,13 +634,11 @@ async def on_message(message):
     # --- 親衛隊レベル確認 ---
     if any(k in content_body_lower for k in ["親衛隊レベル", "guardian"]):
         lv = db.get_guardian_level(user_id)
-        # 実績チェック (親衛隊)
         if lv:
             unlocks = logic.check_all_achievements(user_id)
             if unlocks: 
                 msg = "\n".join(unlocks)
                 await send_myu(message, user_id, msg)
-
         if lang == "en":
             msg = f"Your Guardian Level is Lv.{lv}." if lv else "No Guardian Level registered."
         else:
@@ -677,13 +646,12 @@ async def on_message(message):
         await send_myu(message, user_id, msg)
         return
 
-    # --- 好感度チェック ---
+    # --- 好感度/実績/二つ名 ---
     if any(k in content_body_lower for k in AFF_KEYWORDS):
         msg = logic.get_affection_status_message(user_id)
         await send_myu(message, user_id, f"{message.author.mention} {msg}")
         return
 
-    # --- 実績・二つ名 ---
     if any(k in content_body_lower for k in ACHIEVE_KEYWORDS):
         msg = logic.format_achievement_progress(user_id)
         await send_myu(message, user_id, msg)
@@ -698,22 +666,17 @@ async def on_message(message):
     if user_id in waiting_for_title_change:
         t_input = content_body.strip()
         waiting_for_title_change.discard(user_id)
-        
         if t_input in ["なし", "None", "remove", "off"]:
             db.set_equipped_title(user_id, None)
             msg = "Title removed." if lang=="en" else "二つ名を外したわ。"
             await send_myu(message, user_id, msg)
             return
-        
-        # 名前からIDを探す
         target_id = None
         for aid, data in logic.ACHIEVEMENTS.items():
             if t_input == data["title_jp"] or t_input == data["title_en"]:
                 target_id = aid
                 break
-        
         if target_id:
-            # 持っているか確認
             user_ach = db.get_user_achievements(user_id)
             if target_id in user_ach["unlocked"]:
                 db.set_equipped_title(user_id, target_id)
@@ -722,23 +685,50 @@ async def on_message(message):
                 msg = "You haven't unlocked that title yet." if lang=="en" else "その二つ名はまだ獲得してないみたい。"
         else:
             msg = "Unknown title." if lang=="en" else "そんな二つ名はないみたいよ？"
-        
         await send_myu(message, user_id, msg)
         return
 
-    # --- 変身状態確認 ---
     if any(k in content_body_lower for k in ["変身状態", "今の姿", "current form"]):
         fname = get_form_display_name(current_form)
         msg = f"I am currently **{fname}**." if lang=="en" else f"今のあたしは **{fname}** よ♪"
         await send_myu(message, user_id, f"{message.author.mention} {msg}")
         return
 
-    # --- キメラミニゲーム ---
-    # 通常会話より優先して判定
+    # --- ★ キメラミニゲーム ★ ---
+    # PvPロビーでの名前検索 (メンションでない文字列の場合)
+    if is_playing_kimera and kimera_session["state"] == "battle_pvp_lobby" and "<@" not in content_body:
+        target_name = content_body
+        found_user = None
+        
+        # 1. あだ名リストから検索
+        nicks = db.load_nicknames()
+        for uid_str, nick in nicks.items():
+            if nick == target_name:
+                found_user = int(uid_str)
+                break
+        
+        # 2. Discordサーバーのメンバーから検索
+        if not found_user:
+            all_members = list(client.get_all_members())
+            # 完全一致
+            for m in all_members:
+                if m.display_name == target_name or m.name == target_name:
+                    found_user = m.id
+                    break
+            # 部分一致
+            if not found_user:
+                for m in all_members:
+                    if target_name in m.display_name:
+                        found_user = m.id
+                        break
+
+        if found_user:
+            content_body = f"<@{found_user}>" # メンション形式に変換
+
     kimera_result = kimera_game.process_kimera_command(user_id, content_body)
     
     if kimera_result:
-        # process_kimera_command が (msg, extra_msgs) を返す場合と、msg だけ返す場合に対応
+        # 結果の受け取り (自分への返信, 他人へのメッセージリスト)
         if isinstance(kimera_result, tuple):
             reply_msg, extra_messages = kimera_result
         else:
@@ -747,20 +737,22 @@ async def on_message(message):
         if reply_msg:
             await send_myu(message, user_id, f"{message.author.mention} {reply_msg}")
         
-        # PvPなどで相手に送るメッセージがある場合
+        # 相手への通知 (DM優先, 失敗時はチャンネル)
         for target_uid, target_msg in extra_messages:
             try:
-                # 同じチャンネルに送信（相手が同じチャンネルを見ている前提）
-                await message.channel.send(f"<@{target_uid}> {target_msg}")
+                target_user = client.get_user(target_uid)
+                if not target_user: target_user = await client.fetch_user(target_uid)
+                await target_user.send(target_msg)
             except:
-                pass
+                try:
+                    await message.channel.send(f"<@{target_uid}> {target_msg}")
+                except: pass
         return
 
     # --- 通常会話 ---
     xp, lv = logic.get_user_affection(user_id)
     reply = rs.generate_reply_for_form(current_form, content_body, lv, user_id, name)
     
-    # 隠し解放トリガー
     if current_form == "cyrene" and ARAFUE_TRIGGER_LINE in reply:
         mark_danheng_stage1(user_id)
     
@@ -769,7 +761,6 @@ async def on_message(message):
         if lang == "en": reply += "\n\n【March 7th Unlocked!】 Try saying 'Transform into March'."
         else: reply += "\n\n【三月なのか 解放！】『なのになってみて』と言ってみて？"
 
-    # 実績チェック (好感度 / 会話数)
     db.increment_achievement_stat(user_id, "talk_count", 1)
     unlocks = logic.check_all_achievements(user_id)
     if unlocks: reply += "\n" + "\n".join(unlocks)
