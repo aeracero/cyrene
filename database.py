@@ -8,13 +8,15 @@ from config import (
     PRIMARY_ADMIN_ID, today_str
 )
 
+# 新規追加: 返信モード保存用ファイル（dataフォルダ内を想定）
+REPLY_MODE_FILE = Path("data/reply_mode.json")
+
 # --- 共通ユーティリティ ---
 def _load_json(path: Path, default=None):
     if default is None: default = {}
     if not path.exists(): return default
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        # もし読み込んだ型がデフォルトと違う（リスト期待なのに辞書など）場合はデフォルトを返す
         if isinstance(default, list) and not isinstance(data, list): return default
         if isinstance(default, dict) and not isinstance(data, dict): return default
         return data
@@ -22,7 +24,24 @@ def _load_json(path: Path, default=None):
         return default
 
 def _save_json(path: Path, data):
+    # 親ディレクトリがない場合は作成
+    if not path.parent.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+# --- 返信モード (新規追加) ---
+def load_reply_modes(): return _load_json(REPLY_MODE_FILE, {})
+
+def get_reply_mode(user_id):
+    """ユーザーの返信モードを取得 (デフォルトは 'mention')"""
+    data = load_reply_modes()
+    return data.get(str(user_id), "mention")
+
+def set_reply_mode(user_id, mode):
+    """返信モードを設定 ('auto' or 'mention')"""
+    data = load_reply_modes()
+    data[str(user_id)] = mode
+    _save_json(REPLY_MODE_FILE, data)
 
 # --- あだ名 ---
 def load_nicknames(): return _load_json(NICKNAMES_FILE, {})
@@ -79,7 +98,6 @@ def load_affection_data(): return _load_json(AFFECTION_FILE, {})
 def save_affection_data(data): _save_json(AFFECTION_FILE, data)
 def load_affection_config(): 
     cfg = _load_json(AFFECTION_CONFIG_FILE, DEFAULT_AFFECTION_CONFIG.copy())
-    # マージ
     base = DEFAULT_AFFECTION_CONFIG.copy()
     base.update(cfg)
     return base

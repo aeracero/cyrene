@@ -29,7 +29,7 @@ waiting_for_transform_code = set()
 FORCE_RPS_WIN_NEXT = set()
 MYURION_QUIZ_STATE = {}
 
-# --- Help Messages (柔らかい口調に修正) ---
+# --- Help Messages ---
 ADMIN_COMMANDS_LIST = (
     "【データ管理モードよ♪】\n"
     "このモードでは以下のコマンドが使えるわ。\n\n"
@@ -50,6 +50,8 @@ ADMIN_COMMANDS_LIST = (
 GENERAL_COMMANDS_LIST = (
     "【あたしとできること一覧よ♪】\n\n"
     "**★ お話ししましょう♪**\n"
+    "- `!mode auto`: メンションなしでもお話しするようになるわ\n"
+    "- `!mode mention`: メンションした時だけお話しするわ\n"
     "- `こんにちは` / `おやすみ`: 挨拶は大事よね♪\n"
     "- `みんなについて教えて`: 他の人のこと、こっそり教えるわ\n"
     "- `甘えていいんだよ`: …ふふっ、遠慮なく甘えちゃうかも？\n"
@@ -83,6 +85,21 @@ async def on_message(message):
     user_id = message.author.id
     content = message.content.strip() # 原文
     
+    # ユーザー名とフォームの取得
+    nickname = db.get_nickname(user_id)
+    name = nickname if nickname else message.author.display_name
+    current_form = get_user_form(user_id)
+    
+    # --- モード切替コマンド (最優先) ---
+    if content == "!mode auto":
+        db.set_reply_mode(user_id, "auto")
+        await message.channel.send(f"了解です♪ これからはメンションなしでもお話しますね、{name}さん！")
+        return
+    if content == "!mode mention":
+        db.set_reply_mode(user_id, "mention")
+        await message.channel.send(f"わかりました。これからは呼んでくれた時（メンション）だけお返事しますね。")
+        return
+
     # 状態チェック
     is_active_mode = (
         user_id in waiting_for_nickname or user_id in waiting_for_rename or
@@ -103,15 +120,25 @@ async def on_message(message):
     ]
     is_keyword_trigger = any(k in content for k in KEYWORD_TRIGGERS)
     
-    # 処理開始判定
-    if not (client.user in message.mentions or is_active_mode or is_command_query or is_keyword_trigger):
+    # ★返信判定ロジックの変更★
+    # 1. メンションされているか
+    is_mentioned = client.user in message.mentions
+    # 2. autoモードか
+    reply_mode = db.get_reply_mode(user_id)
+    is_auto_reply = (reply_mode == "auto")
+    
+    # 反応するかどうかの最終決定
+    should_reply = (is_mentioned or is_active_mode or is_command_query or is_keyword_trigger or is_auto_reply)
+    
+    if not should_reply:
         return
 
     # メンション除去後のテキスト
     content_body = re.sub(rf"<@!?{client.user.id}>", "", content).strip()
-    nickname = db.get_nickname(user_id)
-    name = nickname if nickname else message.author.display_name
-    current_form = get_user_form(user_id)
+    
+    # 空メッセージかつ画像なしの場合は無視 (autoモードでの誤爆防止)
+    if not content_body and not message.attachments and not is_active_mode:
+        return
     
     # --- コマンド一覧表示 ---
     if is_command_query:
@@ -159,7 +186,7 @@ async def on_message(message):
         if st.get("unlocked"):
             st["enabled"] = True
             db.save_myurion_state(user_id, st)
-            await send_myu(message, user_id, f"{message.author.mention} もう解放されてるわよ♪ ミュリオンモードONミュ！")
+            await send_myu(message, user_id, f"{message.author.mention} もう解放されているわよ♪ ミュリオンモードONミュ！")
         else:
             await logic.send_myurion_question(message, user_id, st.get("quiz_correct", 0), MYURION_QUIZ_STATE)
         return
@@ -293,7 +320,6 @@ async def on_message(message):
         # 手が入力されていない場合 -> 開始
         if not hand and "じゃんけん" in content_body:
             waiting_for_rps_choice.add(user_id)
-            # ★修正: rs.get_rps_prompt_for_form を使用
             prompt = rs.get_rps_prompt_for_form(current_form, name)
             await send_myu(message, user_id, prompt)
             return
@@ -337,6 +363,7 @@ async def on_message(message):
 
     # --- 通常会話 ---
     xp, lv = logic.get_user_affection(user_id)
+    # ここで reply_system.py の新しい呼び出しに対応
     reply = rs.generate_reply_for_form(current_form, content_body, lv, user_id, name)
     
     if current_form == "cyrene" and ARAFUE_TRIGGER_LINE in reply:

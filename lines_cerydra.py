@@ -2,10 +2,12 @@ import random
 
 CHAR_NAME = "ケリュドラ"
 
-# ★ キャラクター設定（一人称や語尾）
+# ★ キャラクター設定
 PROFILE = {
     "first_person": "僕",
-    "rps_tail": "だな。",  # じゃんけん結果の末尾など
+    # ★ ここでじゃんけんの表示形式を自由に決められます
+    "rps_duel_format": "{name}卿は **{user_hand}**、僕は **{bot_hand}** だな。",
+    "rps_stats_format": "（これまでに {wins} 回、僕から勝利を奪ったな。）",
 }
 
 LINES = {
@@ -48,9 +50,7 @@ LINES = {
 }
 
 def _pick_high_affection_line(affection_level: int) -> str | None:
-    """好感度レベルに応じた重み付け抽選"""
     if affection_level <= 0: return None
-    # LINESの中から high_l1, high_l2... を探す
     valid_tiers = []
     for k in LINES.keys():
         if k.startswith("high_l"):
@@ -60,39 +60,27 @@ def _pick_high_affection_line(affection_level: int) -> str | None:
             except: pass
     
     if not valid_tiers: return None
-    
-    # 重み計算: 10 + (Lv * 10)
     weights = [10 + (t * 10) for t in valid_tiers]
     selected_tier = random.choices(valid_tiers, weights=weights, k=1)[0]
     return random.choice(LINES[f"high_l{selected_tier}"])
 
-# 修正: user_name 引数を追加し、replace で名前を埋め込み
 def get_reply(message: str, affection_level: int, user_name: str) -> str:
-    # 抽選ロジック: Lv1~2:10%, Lv3:60%, Lv4~:70% で好感度ボイス
     high_prob = 0.1
     if affection_level == 3: high_prob = 0.6
     elif affection_level >= 4: high_prob = 0.7
-
-    # メッセージが空（メンションのみ）、挨拶、甘える等の場合に判定
     msg_check = message.strip() == "" or any(x in message for x in ["こんにちは", "おはよう", "甘えて"])
-    
     line = None
     if msg_check and random.random() < high_prob:
         line = _pick_high_affection_line(affection_level)
-    
     if not line:
         line = random.choice(LINES["normal"])
-
-    # ここで {name} を置き換えます
     return line.replace("{name}", user_name)
 
-# 修正: user_name 引数を追加
 def get_nickname_line(action: str, user_name: str) -> str:
     key = "nickname_ask" if action == "ask" else "nickname_confirm"
     line = random.choice(LINES.get(key, ["..."]))
     return line.replace("{name}", user_name)
 
-# 修正: user_name 引数を追加
 def get_rps_flavor(result: str, user_name: str) -> str:
     key = f"rps_{result}"
     line = random.choice(LINES.get(key, ["..."]))

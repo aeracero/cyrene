@@ -32,12 +32,10 @@ def generate_reply_for_form(form_key: str, message_text: str, affection_level: i
     if hasattr(module, "get_reply"):
         try:
             # ★優先1: 最新の形式（本文, 好感度, 名前）で呼び出す
-            # ヒアシンシア、ケリュドラなどはこっち
             base = module.get_reply(message_text, affection_level, name)
         except TypeError:
             try:
                 # ★優先2: 従来の形式（本文, 好感度）で呼び出す
-                # まだ修正していない他のキャラはこっち
                 base = module.get_reply(message_text, affection_level)
             except TypeError:
                 # ★優先3: さらに古い形式（本文のみ）
@@ -46,7 +44,6 @@ def generate_reply_for_form(form_key: str, message_text: str, affection_level: i
         base = lines_cyrene.get_cyrene_reply(message_text, affection_level)
 
     if name:
-        # モジュール側で対応していても、念のためここでも置換を実行しておく（安全策）
         base = base.replace("「あだ名」", f"「{name}」").replace("あだ名", name).replace("{nickname}", name).replace("{name}", name)
     return base
 
@@ -55,10 +52,8 @@ def get_nickname_message_for_form(form_key: str, action: str, name: str = "") ->
     
     if hasattr(module, "get_nickname_line"):
         try:
-            # ★修正: 名前引数ありを優先
             line = module.get_nickname_line(action, name)
         except TypeError:
-            # 引数なしの旧バージョン
             line = module.get_nickname_line(action)
         return line.replace("{name}", name)
     
@@ -69,12 +64,11 @@ def get_nickname_message_for_form(form_key: str, action: str, name: str = "") ->
 def get_rps_flavor(form_key: str, result: str, name: str) -> str:
     module = MODULE_MAP.get(form_key, lines_cyrene)
     
-    # もしモジュールに専用の関数があれば、そちらを優先的に試す（新しい形式への対応）
     if hasattr(module, "get_rps_flavor"):
         try:
             return module.get_rps_flavor(result, name)
         except TypeError:
-            pass # 引数が合わなければ下のLINES取得処理へ進む
+            pass 
 
     if hasattr(module, "LINES"):
         lines_dict = module.LINES
@@ -85,37 +79,50 @@ def get_rps_flavor(form_key: str, result: str, name: str) -> str:
             
     return lines_cyrene.get_rps_line(result)
 
-# ★ここが重要：じゃんけん開始時のセリフ
 def get_rps_prompt_for_form(form_key: str, name: str) -> str:
     module = MODULE_MAP.get(form_key, lines_cyrene)
     
-    # 各キャラファイルの LINES["rps_start"] を優先
     if hasattr(module, "LINES"):
         lines_dict = module.LINES
         if "rps_start" in lines_dict and lines_dict["rps_start"]:
             base = random.choice(lines_dict["rps_start"])
             return base.replace("{nickname}", name).replace("{name}", name)
     
-    # デフォルト（キュレネ）
     return "じゃんけんをしましょう♪ グー / チョキ / パー、どれにするかしら？"
 
+# ★重要修正: フォーマットを柔軟に変更可能にしました
 def format_rps_result(form_key: str, name: str, user_hand: str, bot_hand: str, flavor: str, wins: int) -> str:
     module = MODULE_MAP.get(form_key, lines_cyrene)
     
-    pronoun = "あたし"
-    tail = "わ♡"
+    # デフォルト設定 (キュレネ用)
+    # これが基本の形です。各キャラファイルで上書きできます。
+    duel_fmt = "{name} は **{user_hand}**、あたしは **{bot_hand}** よ。"
+    stats_fmt = "（これまでに {wins} 回、あたしに勝っているわ♡）"
     
-    if hasattr(module, "PROFILE"): # CHAR_PROFILE -> PROFILE に統一されている場合が多いので変更を推奨
+    # キャラごとの設定 (PROFILE) を読み込む
+    if hasattr(module, "PROFILE"):
         profile = module.PROFILE
-        pronoun = profile.get("first_person", pronoun) # "pronoun" or "first_person"
-        tail = profile.get("rps_tail", tail)
-    elif hasattr(module, "CHAR_PROFILE"):
-        profile = module.CHAR_PROFILE
-        pronoun = profile.get("pronoun", pronoun)
-        tail = profile.get("rps_tail", tail)
-        
-    return (
-        f"{name} は **{user_hand}**、{pronoun}は **{bot_hand}** だ。\n"
-        f"{flavor}\n"
-        f"（これまでに {wins} 回、{pronoun}に勝っている{tail}）"
-    )
+        # PROFILE辞書にフォーマットがあればそれを使う
+        if "rps_duel_format" in profile:
+            duel_fmt = profile["rps_duel_format"]
+        elif "first_person" in profile:
+             # フォーマット指定がない場合の自動生成（簡易版）
+             fp = profile["first_person"]
+             # 「僕は〜だ」のようにしたい場合、ここだと制御しきれないので
+             # 基本的には各ファイルで format を指定することを推奨
+             duel_fmt = f"{{name}} は **{{user_hand}}**、{fp}は **{{bot_hand}}** だ。"
+
+        if "rps_stats_format" in profile:
+            stats_fmt = profile["rps_stats_format"]
+    
+    # フォーマットを適用
+    # user_name, user_hand, bot_hand, wins が使えます
+    try:
+        duel_msg = duel_fmt.format(name=name, user_hand=user_hand, bot_hand=bot_hand)
+        stats_msg = stats_fmt.format(name=name, wins=wins)
+    except:
+        # 万が一フォーマットエラーが出た場合の安全策
+        duel_msg = f"{name} : {user_hand} vs {bot_hand}"
+        stats_msg = f"(Wins: {wins})"
+
+    return f"{duel_msg}\n{flavor}\n{stats_msg}"
