@@ -35,6 +35,7 @@ def get_user_data(user_id):
 
     try:
         data = json.loads(file_path.read_text(encoding="utf-8"))
+        # データマイグレーション
         if "items" not in data: data["items"] = {}
         if "money" not in data: data["money"] = 1000
         if "box" not in data: data["box"] = []
@@ -54,11 +55,13 @@ def save_user_data(user_id, user_data):
 def add_trainer_xp(user_id, xp_amount):
     ud = get_user_data(user_id)
     ud["trainer_xp"] += xp_amount
+    
     leveled_up = False
     while ud["trainer_xp"] >= ud["trainer_level"] * 500:
         ud["trainer_xp"] -= ud["trainer_level"] * 500
         ud["trainer_level"] += 1
         leveled_up = True
+        
     save_user_data(user_id, ud)
     return leveled_up, ud["trainer_level"]
 
@@ -114,12 +117,14 @@ def use_item_effect(user_id, item_key, target_chimera):
 
 # --- キメラ生成・計算 ---
 def calculate_stat(base, level, is_hp=False):
+    # 基本計算式: (種族値 * 2 * レベル) / 100
     val = math.floor((base * 2 * level) / 100)
+    
     if is_hp:
-        # 修正: HP計算式を強化 (係数を増やし固定値を大幅アップ)
-        # 旧: val + level + 10
-        # 新: val * 1.5 + level * 2 + 50
-        return int(val * 1.5 + level * 2 + 50)
+        # ★修正: HP計算式を大幅強化してワンパン防止
+        # 旧: val * 1.5 + level * 2 + 50
+        # 新: val * 2.5 + level * 5 + 100
+        return int(val * 2.5 + level * 5 + 100)
     else:
         return int(val + 5)
 
@@ -156,7 +161,8 @@ def create_chimera_instance(base_id, level=5, nickname=None):
         "stats": stats,
         "moves": moves,
         "held_item": None,
-        "friendship": 0
+        "friendship": 0,
+        "rarity": base.get("rarity", 1) # レアリティ保存
     }
 
 def get_chimera_display_stats(instance):
@@ -164,9 +170,10 @@ def get_chimera_display_stats(instance):
     s = instance["stats"]
     moves_txt = ", ".join([MOVES[m]["name"] for m in instance["moves"]])
     item_txt = ITEMS[instance["held_item"]]["name"] if instance.get("held_item") else "なし"
+    rarity_star = "★" * base.get("rarity", 1)
     
     return (
-        f"**名前**: {instance['nickname']} (Lv.{instance['level']})\n"
+        f"**名前**: {instance['nickname']} (Lv.{instance['level']}) {rarity_star}\n"
         f"**種類**: {base['name']} / **タイプ**: {base['type']}\n"
         f"**特性**: {base['ability']} / **持ち物**: {item_txt}\n"
         f"**HP**: {instance['current_hp']}/{s['max_hp']}\n"
