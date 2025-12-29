@@ -206,16 +206,13 @@ def handle_battle_action(user_id, content):
             if session["state"] == STATE_BATTLE_CHALLENGE: return "チャレンジモードからは逃げられないわ！", []
             end_session(user_id)
             return "逃げ出したわ。", []
-        
         if "道具" in content:
             ctx["sub_state"] = BATTLE_SUB_ITEM
             items = [f"{data.ITEMS[k]['name']}x{v}" for k, v in ud['items'].items()]
             return f"道具: {', '.join(items)}\n(戻るなら『戻る』)", []
-        
         if "入れ替え" in content:
             ctx["sub_state"] = BATTLE_SUB_SWITCH
             return "誰と入れ替える？(番号)\n" + _generate_party_list(ud), []
-        
         if "戦" in content:
             moves = [data.MOVES[m]['name'] for m in player["moves"]]
             return f"技: {', '.join(moves)}", []
@@ -266,20 +263,26 @@ def handle_battle_action(user_id, content):
 # --- PvE ターン処理 ---
 def _execute_pve_turn(user_id, session, player, enemy, move_id, ud):
     mdata = data.MOVES[move_id]
-    dmg = int(mdata["power"] * (player["stats"]["atk"] / enemy["stats"]["def"]) * random.uniform(0.85, 1.0))
+    dmg = int(mdata["power"] * (player["stats"]["atk"] / enemy["stats"]["def"]) * 0.4 * random.uniform(0.85, 1.0))
     if dmg < 1: dmg = 1
     
     enemy["current_hp"] -= dmg
     msg = f"{player['nickname']} の {mdata['name']}！ {dmg} ダメージ！"
     
+    # セーブ（敵HP減少）
+    core.save_user_data(user_id, ud)
+    
     if enemy["current_hp"] <= 0:
         enemy["current_hp"] = 0
         msg += f"\n相手の {enemy['nickname']} は倒れた！"
         
-        xp = enemy["level"] * 15
+        xp = (enemy["level"] * 20) + random.randint(0, enemy["level"] * 10)
         player["xp"] += xp
         if player["xp"] >= player["next_xp"]:
             msg += "\n" + core.level_up_chimera(player)
+        
+        # セーブ（経験値獲得）
+        core.save_user_data(user_id, ud)
         
         ctx = session["context"]
         next_enemy = next((c for c in ctx["enemy_party"] if c["current_hp"] > 0), None)
@@ -295,7 +298,7 @@ def _execute_pve_turn(user_id, session, player, enemy, move_id, ud):
 
 def _enemy_attack_phase(user_id, session, player, enemy, ud):
     emove = data.MOVES[random.choice(enemy["moves"])]
-    dmg = int(emove["power"] * (enemy["stats"]["atk"] / player["stats"]["def"]) * random.uniform(0.85, 1.0))
+    dmg = int(emove["power"] * (enemy["stats"]["atk"] / player["stats"]["def"]) * 0.4 * random.uniform(0.85, 1.0))
     if dmg < 1: dmg = 1
     
     player["current_hp"] -= dmg
@@ -375,7 +378,7 @@ def use_item_in_battle(user_id, session, item_key, ud, player, enemy):
         if session["state"] != STATE_BATTLE_WILD: return "人のキメラは捕まえられないわ！"
         core.remove_item(user_id, item_key, 1)
         
-        rate = ((1 - (enemy["current_hp"]/enemy["stats"]["max_hp"])) * 0.5 + 0.5) * item["value"]
+        rate = ((1 - (enemy["current_hp"]/enemy["stats"]["max_hp"])) * 0.8 + 0.4) * item["value"]
         if random.random() < rate:
             enemy["current_hp"] = enemy["stats"]["max_hp"]
             if len(ud["party"]) < 3: ud["party"].append(enemy)
@@ -407,21 +410,21 @@ def handle_pvp_lobby(user_id, content):
         return "キャンセルしたわ。", []
     return "相手を指名してね。", []
 
-# --- ★★★ 修正箇所: 引数名を正しく変更 ★★★
-def _initiate_pvp_battle(p1_id, p2_id):
-    if p2_id in PVP_CHALLENGES: del PVP_CHALLENGES[p2_id]
-    battle_id = f"pvp_{p1_id}_{p2_id}"
-    PVP_BATTLES[battle_id] = {"p1": p1_id, "p2": p2_id, "actions": {}, "turn": 1}
-    for uid in [p1_id, p2_id]:
+# ★★★ 修正: 引数名 p1, p2 に統一 ★★★
+def _initiate_pvp_battle(p1, p2):
+    if p2 in PVP_CHALLENGES: del PVP_CHALLENGES[p2]
+    battle_id = f"pvp_{p1}_{p2}"
+    PVP_BATTLES[battle_id] = {"p1": p1, "p2": p2, "actions": {}, "turn": 1}
+    for uid in [p1, p2]:
         if uid not in KIMERA_SESSIONS: start_session(uid)
         sess = KIMERA_SESSIONS[uid]
         sess["state"] = STATE_BATTLE_PVP
         sess["context"] = {"battle_id": battle_id, "sub_state": BATTLE_SUB_MAIN}
-    ud1 = core.get_user_data(p1_id); ud2 = core.get_user_data(p2_id)
+    ud1 = core.get_user_data(p1); ud2 = core.get_user_data(p2)
     c1 = ud1["party"][0]; c2 = ud2["party"][0]
     msg1 = f"対戦開始！ 相手は **{c2['nickname']}** (Lv.{c2['level']}) よ！\nどうする？ 『戦う』 『降参』"
     msg2 = f"対戦開始！ 相手は **{c1['nickname']}** (Lv.{c1['level']}) よ！\nどうする？ 『戦う』 『降参』"
-    return msg2, [(p1_id, msg1)]
+    return msg2, [(p1, msg1)]
 
 # --- PvP アクション ---
 def handle_pvp_action(user_id, content):
@@ -430,8 +433,8 @@ def handle_pvp_action(user_id, content):
     battle = PVP_BATTLES.get(ctx["battle_id"])
     if not battle:
         session["state"] = STATE_MENU
-        return "対戦は終了しているみたい。", []
-
+        return "終了しているわ。", []
+    
     ud = core.get_user_data(user_id)
     player_chimera = ud['party'][0]
     sub = ctx.get("sub_state", BATTLE_SUB_MAIN)
@@ -480,7 +483,6 @@ def _resolve_pvp_turn(battle):
     speed1 = c1["stats"]["spe"]
     speed2 = c2["stats"]["spe"]
     
-    # 行動順決定
     if speed1 > speed2: order = [(p1, c1, act1, p2, c2), (p2, c2, act2, p1, c1)]
     elif speed2 > speed1: order = [(p2, c2, act2, p1, c1), (p1, c1, act1, p2, c2)]
     else:
@@ -561,7 +563,7 @@ def process_kimera_command(user_id, content):
     if not session:
         if "キメラと遊びたい" in content:
             start_session(user_id)
-            return "あら、キメラたちと遊びたいの？いいわよ♪\n何をしたいかしら？\n\n『バトル』 『編成』 『キメラ詳細』 『ショップ』", []
+            return "あら、キメラたちと遊びたいの？", []
         return None
     
     if content in ["終了", "やめる", "もう遊び疲れたよ"]:

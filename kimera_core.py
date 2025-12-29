@@ -24,8 +24,8 @@ def get_user_data(user_id):
             "money": 3000,
             "trainer_xp": 0,
             "trainer_level": 1,
-            "challenge_stage": 1, # 現在挑めるステージ
-            "titles": [], # 獲得した二つ名
+            "challenge_stage": 1,
+            "titles": [],
             "battle_state": None
         }
         starter = create_chimera_instance(random.choice(list(BASE_CHIMERAS.keys())), level=5)
@@ -35,7 +35,6 @@ def get_user_data(user_id):
 
     try:
         data = json.loads(file_path.read_text(encoding="utf-8"))
-        # マイグレーション（不足キー追加）
         if "items" not in data: data["items"] = {}
         if "money" not in data: data["money"] = 1000
         if "box" not in data: data["box"] = []
@@ -55,14 +54,11 @@ def save_user_data(user_id, user_data):
 def add_trainer_xp(user_id, xp_amount):
     ud = get_user_data(user_id)
     ud["trainer_xp"] += xp_amount
-    
-    # 簡易レベルアップ計算: 必要XP = 現在レベル * 500
     leveled_up = False
     while ud["trainer_xp"] >= ud["trainer_level"] * 500:
         ud["trainer_xp"] -= ud["trainer_level"] * 500
         ud["trainer_level"] += 1
         leveled_up = True
-        
     save_user_data(user_id, ud)
     return leveled_up, ud["trainer_level"]
 
@@ -82,7 +78,6 @@ def remove_item(user_id, item_key, count=1):
     return False
 
 def use_item_effect(user_id, item_key, target_chimera):
-    """メニュー画面等でのアイテム使用（回復、飴など）"""
     ud = get_user_data(user_id)
     item = ITEMS.get(item_key)
     if not item or ud["items"].get(item_key, 0) <= 0: return "そのアイテムは持っていないわ。"
@@ -104,7 +99,6 @@ def use_item_effect(user_id, item_key, target_chimera):
         target_chimera["xp"] += item["value"]
         msg = f"{target_chimera['nickname']} に {item['value']} の経験値を与えたわ！"
         
-        # レベルアップループ
         while target_chimera["xp"] >= target_chimera["next_xp"] and target_chimera["level"] < 100:
             lvl_msg = level_up_chimera(target_chimera)
             msg += f"\n{lvl_msg}"
@@ -121,13 +115,19 @@ def use_item_effect(user_id, item_key, target_chimera):
 # --- キメラ生成・計算 ---
 def calculate_stat(base, level, is_hp=False):
     val = math.floor((base * 2 * level) / 100)
-    return (val + level + 10) if is_hp else (val + 5)
+    if is_hp:
+        # 修正: HP計算式を強化 (係数を増やし固定値を大幅アップ)
+        # 旧: val + level + 10
+        # 新: val * 1.5 + level * 2 + 50
+        return int(val * 1.5 + level * 2 + 50)
+    else:
+        return int(val + 5)
 
 def create_chimera_instance(base_id, level=5, nickname=None):
     base = BASE_CHIMERAS.get(base_id)
     if not base: return None
     
-    level = min(100, max(1, level)) # 1~100制限
+    level = min(100, max(1, level))
     
     moves = []
     for lv, mid in base["learnset"].items():
@@ -186,7 +186,6 @@ def level_up_chimera(instance):
     base = BASE_CHIMERAS[instance["base_id"]]
     bs = base["base_stats"]
     
-    # ステータス再計算
     instance["stats"]["max_hp"] = calculate_stat(bs["hp"], instance["level"], True)
     instance["stats"]["atk"] = calculate_stat(bs["atk"], instance["level"])
     instance["stats"]["def"] = calculate_stat(bs["def"], instance["level"])
@@ -194,26 +193,22 @@ def level_up_chimera(instance):
     instance["stats"]["spd"] = calculate_stat(bs["spd"], instance["level"])
     instance["stats"]["spe"] = calculate_stat(bs["spe"], instance["level"])
     
-    # レベルアップ時はHP全快（ボーナス）
     instance["current_hp"] = instance["stats"]["max_hp"]
     
     msg = f"**{instance['nickname']}** はレベル{instance['level']}になった！"
     
-    # 技習得
     new_move = base["learnset"].get(instance["level"])
     if new_move:
         if len(instance["moves"]) < 4:
             instance["moves"].append(new_move)
             msg += f"\n『{MOVES[new_move]['name']}』を覚えた！"
         else:
-            # 簡易的に古い技を忘れる（または後で技変更機能で対応）
             forgot = instance["moves"].pop(0)
             instance["moves"].append(new_move)
             msg += f"\n『{MOVES[forgot]['name']}』を忘れて、『{MOVES[new_move]['name']}』を覚えた！"
             
     return msg
 
-# --- 旧データ移行用 ---
 def migrate_old_data():
     old_path = DATA_DIR / "kimera_save.json"
     if not old_path.exists(): return "古いデータファイルが見つかりません。"
