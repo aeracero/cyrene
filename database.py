@@ -91,18 +91,20 @@ def delete_guardian_level(user_id):
         _save_json(GUARDIAN_FILE, data)
 
 # --- 好感度 (修正箇所) ---
+# 新しいレベル閾値: Lv1=0, Lv2=1000, Lv3=2000, Lv4=3500, Lv5=7000, Lv6=10000
 DEFAULT_AFFECTION_CONFIG = {
-    # レベル1, 2, 3, 4, 5, 6
-    "level_thresholds": [0, 0, 1000, 2000, 3500, 7000, 10000],
+    "level_thresholds": [0, 1000, 2000, 3500, 7000, 10000],
     "xp_actions": {"talk": 3, "rps_win": 10, "rps_lose": 5, "rps_draw": 7},
 }
 def load_affection_data(): return _load_json(AFFECTION_FILE, {})
 def save_affection_data(data): _save_json(AFFECTION_FILE, data)
+
 def load_affection_config(): 
+    # ファイルから読み込むが、閾値に関してはコード内の最新値を優先する
     cfg = _load_json(AFFECTION_CONFIG_FILE, DEFAULT_AFFECTION_CONFIG.copy())
-    base = DEFAULT_AFFECTION_CONFIG.copy()
-    base.update(cfg)
-    return base
+    cfg["level_thresholds"] = DEFAULT_AFFECTION_CONFIG["level_thresholds"]
+    return cfg
+
 def save_affection_config(cfg): _save_json(AFFECTION_CONFIG_FILE, cfg)
 
 # --- メッセージ制限 & Bypass ---

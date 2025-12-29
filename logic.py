@@ -5,9 +5,7 @@ import database as db
 from special_unlocks import get_janken_wins
 
 # --- アチーブメント定義 ---
-# type: 'manual' は自動チェックではなく、ゲームクリア時などに手動で解除するタイプです
 ACHIEVEMENTS = {
-    # 既存の実績
     "aff_max_love": {
         "name_jp": "永遠の誓い", "name_en": "Eternal Oath",
         "desc_jp": "好感度Lv.6に到達する", "desc_en": "Reach Affection Level 6",
@@ -28,9 +26,9 @@ ACHIEVEMENTS = {
     },
     "xp_limit_break": {
         "name_jp": "愛の極地", "name_en": "Limitless Love",
-        "desc_jp": "好感度XPを100,000以上獲得する", "desc_en": "Gain over 10,000,000 Affection XP",
+        "desc_jp": "好感度XPを10,000,000以上獲得する", "desc_en": "Gain over 10,000,000 Affection XP",
         "title_jp": "限界を超えた愛を持った", "title_en": "Limit-Breaking",
-        "type": "xp", "threshold": 100000
+        "type": "xp", "threshold": 10000000
     },
     "rps_master_50": {
         "name_jp": "じゃんけん王", "name_en": "RPS Legend",
@@ -38,7 +36,6 @@ ACHIEVEMENTS = {
         "title_jp": "勝負師", "title_en": "Gambler",
         "type": "rps_win", "threshold": 50
     },
-    # ★追加: キメラチャレンジ制覇
     "kimera_champion": {
         "name_jp": "キメラチャンピオン", "name_en": "Kimera Champion",
         "desc_jp": "チャレンジモードを完全制覇する", "desc_en": "Complete Challenge Mode",
@@ -48,9 +45,6 @@ ACHIEVEMENTS = {
 }
 
 def check_all_achievements(user_id: int) -> list[str]:
-    """
-    ユーザーの全ステータスを確認し、解除条件を満たした実績があれば解除して通知を返す。
-    """
     newly_unlocked = []
     lang = db.get_user_lang(user_id)
     
@@ -75,8 +69,6 @@ def check_all_achievements(user_id: int) -> list[str]:
 
     for ach_id, data in ACHIEVEMENTS.items():
         if ach_id in unlocked_ids: continue
-        
-        # manualタイプはここでは自動判定しない（ゲーム側でunlock_achievementを呼ぶ）
         if data["type"] == "manual": continue
             
         req_type = data["type"]
@@ -141,7 +133,7 @@ def format_achievement_progress(user_id: int) -> str:
         else:
             check = "🔒"
             if data["type"] == "manual":
-                status = "(???)" # 隠し条件など
+                status = "(???)"
             else:
                 curr = vals.get(data["type"], 0)
                 status = f"({curr}/{req})"
@@ -158,13 +150,16 @@ def format_achievement_progress(user_id: int) -> str:
 
 # --- 好感度ロジック ---
 def get_level_from_xp(xp: int, cfg: dict) -> int:
-    thresholds = cfg.get("level_thresholds", [0])
-    if len(thresholds) <= 1: return 1
-    level = 1
-    for lv in range(1, len(thresholds)):
-        if xp >= thresholds[lv]: level = lv
-        else: break
-    return max(1, level)
+    thresholds = cfg.get("level_thresholds", [])
+    # thresholds = [0, 1000, 2000, 3500, 7000, 10000]
+    # XPが0以上ならLv1(index0+1)、1000以上ならLv2(index1+1)...
+    current_level = 1
+    for i, th in enumerate(thresholds):
+        if xp >= th:
+            current_level = i + 1
+        else:
+            break
+    return current_level
 
 def get_user_affection(user_id: int):
     cfg = db.load_affection_config()
@@ -220,10 +215,14 @@ def get_affection_status_message(user_id: int) -> str:
     lang = db.get_user_lang(user_id)
     xp, level = get_user_affection(user_id)
     cfg = db.load_affection_config()
-    thresholds = cfg.get("level_thresholds", [0])
+    thresholds = cfg.get("level_thresholds", [])
     
-    if level + 1 < len(thresholds):
-        next_xp_req = thresholds[level + 1]
+    # 次のレベルに必要な経験値を計算
+    if level < len(thresholds):
+        next_xp_req = thresholds[level] # levelは1始まり、indexは0始まり。Lv1(index0)の次はindex1(Lv2の閾値)
+        # ただし get_level_from_xp の返し値は "現在のレベル" (index+1) なので
+        # thresholds[level] は "次のレベルの閾値" になる
+        
         needed = max(0, next_xp_req - xp)
         if lang == "en":
             return (f"Your affection is **Lv.{level}** (Total {xp} XP)♪\n"
