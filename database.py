@@ -90,10 +90,11 @@ def delete_guardian_level(user_id):
         del data[str(user_id)]
         _save_json(GUARDIAN_FILE, data)
 
-# --- 好感度 ---
+# --- 好感度 (修正箇所) ---
 DEFAULT_AFFECTION_CONFIG = {
+    # レベル1, 2, 3, 4, 5, 6
     "level_thresholds": [0, 0, 1000, 2000, 3500, 7000, 10000],
-    "xp_actions": {"talk": 5, "rps_win": 15, "rps_lose": 3, "rps_draw": 5},
+    "xp_actions": {"talk": 3, "rps_win": 10, "rps_lose": 5, "rps_draw": 7},
 }
 def load_affection_data(): return _load_json(AFFECTION_FILE, {})
 def save_affection_data(data): _save_json(AFFECTION_FILE, data)
@@ -229,14 +230,13 @@ def get_all_special_status():
             results.append(f"<@{uid}>: 勝{wins}/な{nano}/丹{dan}")
     return results
 
-# --- ★アチーブメント管理 (二つ名対応) ---
+# --- アチーブメント管理 ---
 def load_achievements(): return _load_json(ACHIEVEMENTS_FILE, {})
 def save_achievements(data): _save_json(ACHIEVEMENTS_FILE, data)
 
 def get_user_achievements(user_id: int):
     data = load_achievements()
     user_data = data.get(str(user_id))
-    # 構造: unlocked(IDリスト), stats(累計データ), equipped_title(装備中の二つ名ID)
     if not isinstance(user_data, dict):
         user_data = {"unlocked": [], "stats": {}, "equipped_title": None}
         data[str(user_id)] = user_data
@@ -252,7 +252,7 @@ def unlock_achievement(user_id: int, achievement_id: str):
     if achievement_id not in data[user_key]["unlocked"]:
         data[user_key]["unlocked"].append(achievement_id)
         _save_json(ACHIEVEMENTS_FILE, data)
-        return True # 新規解除
+        return True
     return False
 
 def increment_achievement_stat(user_id: int, stat_key: str, value: int = 1):

@@ -26,6 +26,7 @@ waiting_for_admin_remove = set()
 waiting_for_rps_choice = set()
 waiting_for_guardian_level = {}
 waiting_for_msg_limit = {}
+waiting_for_affection_edit = {}
 waiting_for_bypass_edit = set()
 waiting_for_transform_code = set()
 waiting_for_title_change = set()
@@ -46,7 +47,7 @@ ADMIN_COMMANDS_LIST = (
     "- `変身管理`: 誰がどの姿か確認したり、変身させたりできるわ\n"
     "- `データ管理終了`: 管理モードを終わるわね\n\n"
     "**★ メイン管理者限定 ★**\n"
-    "- `好感度XP追加 @ユーザー 数値`\n"
+    "- `好感度XP追加 @ユーザー 数値`: XPを増減させるわ (マイナスもOK)\n"
     "- `じゃんけん勝利数追加 @ユーザー 数値`\n"
     "- `メッセージ制限bypass編集`\n"
     "- `変身解放状況確認`\n"
@@ -131,7 +132,7 @@ async def on_message(message):
     title_prefix = logic.get_title_prefix(user_id)
     name = f"{title_prefix}{raw_name}"
 
-    # --- キーワード定義 (ここを追加しました) ---
+    # --- キーワード定義 ---
     CMD_KEYWORDS = ["コマンド", "ヘルプ", "command", "help"]
     RPS_KEYWORDS = ["じゃんけん", "rps", "rock paper scissors"]
     TRANS_KEYWORDS = ["変身", "transform"]
@@ -169,6 +170,7 @@ async def on_message(message):
         user_id in waiting_for_admin_add or user_id in waiting_for_admin_remove or
         user_id in waiting_for_rps_choice or user_id in admin_data_mode or
         user_id in waiting_for_guardian_level or user_id in waiting_for_msg_limit or
+        user_id in waiting_for_affection_edit or
         user_id in waiting_for_bypass_edit or user_id in waiting_for_transform_code or
         user_id in waiting_for_title_change or user_id in MYURION_QUIZ_STATE
     )
@@ -187,12 +189,8 @@ async def on_message(message):
     should_reply = (is_mentioned or is_active_mode or is_auto_reply or is_playing_kimera)
 
     # 隠しコマンド
-    if content_body in ["死ぬ", "しぬ", "死にます", "しにます","death","DEATH"]:
+    if content_body in ["死ぬ", "しぬ", "死にます", "しにます"]:
         await message.channel.send(f"# {message.author.mention} が死ぬらしいわ♪慰めてあげて")
-        return
-    
-    if content_body in ["ハーーイ♪"]:
-        await message.channel.send(f"# ハーイ♪ {message.author.mention} あたしを呼んだかしら♪")
         return
 
     # ★ DM移動機能
@@ -298,7 +296,7 @@ async def on_message(message):
         await message.channel.send("Back to normal language." if lang=="en" else "わかったわ、通常言語に戻るわね。")
         return
 
-    # --- 既存の処理 (丹恒コード〜Bypass編集など) は省略せず記述 ---
+    # --- 特殊コード ---
     if "skopeo365" in re.sub(r"\s+", "", content_body).lower():
         if has_danheng_stage1(user_id) and not is_danheng_unlocked(user_id):
             set_danheng_unlocked(user_id, True)
@@ -338,6 +336,7 @@ async def on_message(message):
             await send_myu(message, user_id, msg)
         return
     
+    # --- データ管理モード処理 ---
     if user_id in admin_data_mode:
         if content_body == "データ管理終了":
             admin_data_mode.discard(user_id)
@@ -366,6 +365,11 @@ async def on_message(message):
             waiting_for_guardian_level[user_id] = {"step": "mention"}
             await send_myu(message, user_id, "親衛隊レベルを設定する人をメンションしてね。")
             return
+        if content_body == "好感度編集":
+            admin_data_mode.discard(user_id)
+            waiting_for_affection_edit[user_id] = {"step": "mention"}
+            await send_myu(message, user_id, "好感度XPを編集するユーザーをメンションしてね。")
+            return
         if content_body == "メッセージ制限編集":
             admin_data_mode.discard(user_id)
             waiting_for_msg_limit[user_id] = {"step": "mention"}
@@ -379,20 +383,21 @@ async def on_message(message):
             waiting_for_bypass_edit.add(user_id)
             await send_myu(message, user_id, "制限無視(bypass)リストに「追加」する？「削除」する？\n`追加` か `削除` で答えて。")
             return
+        # ★修正: 正規表現でマイナス符号(-)も受け付けるように変更
         if content_body.startswith("好感度XP追加"):
             if not is_main_admin:
                 await send_myu(message, user_id, "ごめんなさい、それはメイン管理者だけの権限よ。")
                 return
-            m = re.search(r"好感度XP追加\s+<@!?(\d+)>\s+(\d+)", content_body)
+            m = re.search(r"好感度XP追加\s+<@!?(\d+)>\s+(-?\d+)", content_body)
             if m:
                 tid, val = int(m.group(1)), int(m.group(2))
                 logic.add_affection_xp(tid, val)
                 unlocks = logic.check_all_achievements(tid)
-                msg = f"<@{tid}> に {val} XPを追加したわ♪"
+                msg = f"<@{tid}> に {val} XPを追加（または減少）したわ♪"
                 if unlocks: msg += "\n" + "\n".join(unlocks)
                 await send_myu(message, user_id, msg)
             else:
-                await send_myu(message, user_id, "書式が違うみたい。`好感度XP追加 @ユーザー 100` のように書いてね。")
+                await send_myu(message, user_id, "書式が違うみたい。`好感度XP追加 @ユーザー -100` のように書いてね。")
             return
         if content_body.startswith("じゃんけん勝利数追加"):
             if not is_main_admin:
@@ -514,6 +519,36 @@ async def on_message(message):
                     if unlocks: msg += "\n" + "\n".join(unlocks)
                     await send_myu(message, user_id, msg)
                 del waiting_for_guardian_level[user_id]
+                admin_data_mode.add(user_id)
+            except ValueError:
+                await send_myu(message, user_id, "数値を入力してね。")
+        return
+
+    if user_id in waiting_for_affection_edit:
+        step_data = waiting_for_affection_edit[user_id]
+        if step_data["step"] == "mention":
+            if message.mentions:
+                step_data["target_id"] = message.mentions[0].id
+                step_data["step"] = "xp"
+                await send_myu(message, user_id, "設定する『累計XP』を数値で入力してね。\n(現在のXPを上書きします)")
+            elif content_body == "中止":
+                del waiting_for_affection_edit[user_id]
+                admin_data_mode.add(user_id)
+                await send_myu(message, user_id, "中止したわ。")
+            else:
+                await send_myu(message, user_id, "ユーザーをメンションしてね。")
+        elif step_data["step"] == "xp":
+            try:
+                val = int(content_body)
+                tid = step_data["target_id"]
+                data = db.load_affection_data()
+                info = data.get(str(tid), {})
+                info["xp"] = max(0, val)
+                data[str(tid)] = info
+                db.save_affection_data(data)
+                _, new_lvl = logic.get_user_affection(tid)
+                await send_myu(message, user_id, f"<@{tid}> の好感度XPを {val} (Lv.{new_lvl}) に設定したわ。")
+                del waiting_for_affection_edit[user_id]
                 admin_data_mode.add(user_id)
             except ValueError:
                 await send_myu(message, user_id, "数値を入力してね。")
@@ -699,27 +734,22 @@ async def on_message(message):
         return
 
     # --- ★ キメラミニゲーム ★ ---
-    # PvPロビーでの名前検索 (メンションでない文字列の場合)
     if is_playing_kimera and kimera_session["state"] == "battle_pvp_lobby" and "<@" not in content_body:
         target_name = content_body
         found_user = None
         
-        # 1. あだ名リストから検索
         nicks = db.load_nicknames()
         for uid_str, nick in nicks.items():
             if nick == target_name:
                 found_user = int(uid_str)
                 break
         
-        # 2. Discordサーバーのメンバーから検索
         if not found_user:
             all_members = list(client.get_all_members())
-            # 完全一致
             for m in all_members:
                 if m.display_name == target_name or m.name == target_name:
                     found_user = m.id
                     break
-            # 部分一致
             if not found_user:
                 for m in all_members:
                     if target_name in m.display_name:
@@ -727,12 +757,11 @@ async def on_message(message):
                         break
 
         if found_user:
-            content_body = f"<@{found_user}>" # メンション形式に変換
+            content_body = f"<@{found_user}>"
 
     kimera_result = kimera_game.process_kimera_command(user_id, content_body)
     
     if kimera_result:
-        # 結果の受け取り (自分への返信, 他人へのメッセージリスト)
         if isinstance(kimera_result, tuple):
             reply_msg, extra_messages = kimera_result
         else:
@@ -741,7 +770,6 @@ async def on_message(message):
         if reply_msg:
             await send_myu(message, user_id, f"{message.author.mention} {reply_msg}")
         
-        # 相手への通知 (DM優先, 失敗時はチャンネル)
         for target_uid, target_msg in extra_messages:
             try:
                 target_user = client.get_user(target_uid)
@@ -760,6 +788,7 @@ async def on_message(message):
     if current_form == "cyrene" and ARAFUE_TRIGGER_LINE in reply:
         mark_danheng_stage1(user_id)
     
+    # 緩和された解放条件: じゃんけん勝利37回以上
     if "記憶は流れ星を待ってる" in content_body and get_janken_wins(user_id) >= 37 and not is_nanoka_unlocked(user_id):
         set_nanoka_unlocked(user_id, True)
         if lang == "en": reply += "\n\n【March 7th Unlocked!】 Try saying 'Transform into March'."
