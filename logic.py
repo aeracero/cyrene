@@ -28,9 +28,9 @@ ACHIEVEMENTS = {
     },
     "xp_limit_break": {
         "name_jp": "愛の極地", "name_en": "Limitless Love",
-        "desc_jp": "好感度XPを10,000,000以上獲得する", "desc_en": "Gain over 10,000,000 Affection XP",
+        "desc_jp": "好感度XPを100,000以上獲得する", "desc_en": "Gain over 10,000,000 Affection XP",
         "title_jp": "限界を超えた愛を持った", "title_en": "Limit-Breaking",
-        "type": "xp", "threshold": 10000000
+        "type": "xp", "threshold": 100000
     },
     "rps_master_50": {
         "name_jp": "じゃんけん王", "name_en": "RPS Legend",

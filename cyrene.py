@@ -760,7 +760,7 @@ async def on_message(message):
     if current_form == "cyrene" and ARAFUE_TRIGGER_LINE in reply:
         mark_danheng_stage1(user_id)
     
-    if "記憶は流れ星を待ってる" in content_body and get_janken_wins(user_id) >= 307 and not is_nanoka_unlocked(user_id):
+    if "記憶は流れ星を待ってる" in content_body and get_janken_wins(user_id) >= 37 and not is_nanoka_unlocked(user_id):
         set_nanoka_unlocked(user_id, True)
         if lang == "en": reply += "\n\n【March 7th Unlocked!】 Try saying 'Transform into March'."
         else: reply += "\n\n【三月なのか 解放！】『なのになってみて』と言ってみて？"

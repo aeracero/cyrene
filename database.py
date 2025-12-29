@@ -92,8 +92,8 @@ def delete_guardian_level(user_id):
 
 # --- 好感度 ---
 DEFAULT_AFFECTION_CONFIG = {
-    "level_thresholds": [0, 0, 1000, 4000, 16000, 640000, 33350337],
-    "xp_actions": {"talk": 3, "rps_win": 10, "rps_lose": 5, "rps_draw": 7},
+    "level_thresholds": [0, 0, 1000, 2000, 3500, 7000, 10000],
+    "xp_actions": {"talk": 5, "rps_win": 15, "rps_lose": 3, "rps_draw": 5},
 }
 def load_affection_data(): return _load_json(AFFECTION_FILE, {})
 def save_affection_data(data): _save_json(AFFECTION_FILE, data)
