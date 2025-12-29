@@ -187,8 +187,12 @@ async def on_message(message):
     should_reply = (is_mentioned or is_active_mode or is_auto_reply or is_playing_kimera)
 
     # 隠しコマンド
-    if content_body in ["死ぬ", "しぬ", "死にます", "しにます"]:
+    if content_body in ["死ぬ", "しぬ", "死にます", "しにます","death","DEATH"]:
         await message.channel.send(f"# {message.author.mention} が死ぬらしいわ♪慰めてあげて")
+        return
+    
+    if content_body in ["ハーーイ♪"]:
+        await message.channel.send(f"# ハーイ♪ {message.author.mention} あたしを呼んだかしら♪")
         return
 
     # ★ DM移動機能
