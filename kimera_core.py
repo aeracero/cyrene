@@ -5,120 +5,139 @@ import math
 from pathlib import Path
 from kimera_data import BASE_CHIMERAS, MOVES, ITEMS
 
-# データ保存ディレクトリ（Railwayの永続化ボリューム）
 DATA_DIR = Path("/data")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-# --- データ管理 (個別ファイル方式) ---
+# --- データ管理 ---
 
 def _get_user_file_path(user_id):
-    """ユーザーIDごとのファイルパスを生成"""
     return DATA_DIR / f"kimera_user_{user_id}.json"
 
 def get_user_data(user_id):
-    """指定ユーザーのデータを個別のJSONファイルから読み込む"""
     file_path = _get_user_file_path(user_id)
     
-    # ファイルが存在しない場合は新規作成（初期データ）
     if not file_path.exists():
         initial_data = {
             "party": [],
             "box": [],
-            "items": {"monster_ball": 5, "potion": 1}, # 初期アイテム
+            "items": {"monster_ball": 5, "potion": 1},
             "money": 3000,
+            "trainer_xp": 0,
+            "trainer_level": 1,
+            "challenge_stage": 1, # 現在挑めるステージ
+            "titles": [], # 獲得した二つ名
             "battle_state": None
         }
-        # 初期キメラ付与
         starter = create_chimera_instance(random.choice(list(BASE_CHIMERAS.keys())), level=5)
         initial_data["party"].append(starter)
-        
-        # 保存して返す
         save_user_data(user_id, initial_data)
         return initial_data
 
-    # ファイルが存在する場合は読み込み
     try:
         data = json.loads(file_path.read_text(encoding="utf-8"))
-        
-        # データ構造の不足分を補完（アップデート時のエラー防止）
+        # マイグレーション（不足キー追加）
         if "items" not in data: data["items"] = {}
         if "money" not in data: data["money"] = 1000
         if "box" not in data: data["box"] = []
-        
+        if "trainer_level" not in data: data["trainer_level"] = 1
+        if "trainer_xp" not in data: data["trainer_xp"] = 0
+        if "challenge_stage" not in data: data["challenge_stage"] = 1
+        if "titles" not in data: data["titles"] = []
         return data
     except Exception:
-        # 読み込みエラー時は初期データを返す（安全策）
-        return {
-            "party": [], "box": [], "items": {}, "money": 0, "battle_state": None
-        }
+        return {"party": [], "box": [], "items": {}, "money": 0}
 
 def save_user_data(user_id, user_data):
-    """指定ユーザーのデータを個別のJSONファイルに保存する"""
     file_path = _get_user_file_path(user_id)
     file_path.write_text(json.dumps(user_data, ensure_ascii=False, indent=2), encoding="utf-8")
 
-# --- アイテム・金銭管理ヘルパー ---
-# kimera_game.py から呼び出されるショートカット関数群
+# --- トレーナーレベル管理 ---
+def add_trainer_xp(user_id, xp_amount):
+    ud = get_user_data(user_id)
+    ud["trainer_xp"] += xp_amount
+    
+    # 簡易レベルアップ計算: 必要XP = 現在レベル * 500
+    leveled_up = False
+    while ud["trainer_xp"] >= ud["trainer_level"] * 500:
+        ud["trainer_xp"] -= ud["trainer_level"] * 500
+        ud["trainer_level"] += 1
+        leveled_up = True
+        
+    save_user_data(user_id, ud)
+    return leveled_up, ud["trainer_level"]
 
+# --- アイテム管理 ---
 def add_item(user_id, item_key, count=1):
     ud = get_user_data(user_id)
-    cur = ud["items"].get(item_key, 0)
-    ud["items"][item_key] = cur + count
+    ud["items"][item_key] = ud["items"].get(item_key, 0) + count
     save_user_data(user_id, ud)
 
 def remove_item(user_id, item_key, count=1):
     ud = get_user_data(user_id)
-    cur = ud["items"].get(item_key, 0)
-    if cur >= count:
-        ud["items"][item_key] = cur - count
-        if ud["items"][item_key] <= 0:
-            del ud["items"][item_key]
+    if ud["items"].get(item_key, 0) >= count:
+        ud["items"][item_key] -= count
+        if ud["items"][item_key] <= 0: del ud["items"][item_key]
         save_user_data(user_id, ud)
         return True
     return False
 
-def has_item(user_id, item_key):
+def use_item_effect(user_id, item_key, target_chimera):
+    """メニュー画面等でのアイテム使用（回復、飴など）"""
     ud = get_user_data(user_id)
-    return ud["items"].get(item_key, 0) > 0
+    item = ITEMS.get(item_key)
+    if not item or ud["items"].get(item_key, 0) <= 0: return "そのアイテムは持っていないわ。"
 
-def add_money(user_id, amount):
-    ud = get_user_data(user_id)
-    ud["money"] += amount
-    save_user_data(user_id, ud)
+    msg = ""
+    consumed = False
 
-def spend_money(user_id, amount):
-    ud = get_user_data(user_id)
-    if ud["money"] >= amount:
-        ud["money"] -= amount
+    if item["effect_type"] == "heal":
+        if target_chimera["current_hp"] >= target_chimera["stats"]["max_hp"]:
+            return "その子はもう元気いっぱいよ。"
+        target_chimera["current_hp"] = min(target_chimera["stats"]["max_hp"], target_chimera["current_hp"] + item["value"])
+        msg = f"{target_chimera['nickname']} のHPが回復したわ！"
+        consumed = True
+
+    elif item["effect_type"] == "exp":
+        if target_chimera["level"] >= 100:
+            return "その子はもうレベルMAXよ！"
+        
+        target_chimera["xp"] += item["value"]
+        msg = f"{target_chimera['nickname']} に {item['value']} の経験値を与えたわ！"
+        
+        # レベルアップループ
+        while target_chimera["xp"] >= target_chimera["next_xp"] and target_chimera["level"] < 100:
+            lvl_msg = level_up_chimera(target_chimera)
+            msg += f"\n{lvl_msg}"
+            
+        consumed = True
+
+    if consumed:
+        remove_item(user_id, item_key, 1)
         save_user_data(user_id, ud)
-        return True
-    return False
+        return msg
+    
+    return "そのアイテムは今は使えないみたい。"
 
-# --- キメラ生成・計算ロジック ---
-
+# --- キメラ生成・計算 ---
 def calculate_stat(base, level, is_hp=False):
     val = math.floor((base * 2 * level) / 100)
-    if is_hp:
-        return val + level + 10
-    else:
-        return val + 5
+    return (val + level + 10) if is_hp else (val + 5)
 
 def create_chimera_instance(base_id, level=5, nickname=None):
     base = BASE_CHIMERAS.get(base_id)
     if not base: return None
     
-    # 技構成
+    level = min(100, max(1, level)) # 1~100制限
+    
     moves = []
     for lv, mid in base["learnset"].items():
-        if lv <= level:
-            moves.append(mid)
+        if lv <= level: moves.append(mid)
     if not moves: moves = ["tackle"]
     moves = moves[-4:]
 
-    # ステータス計算
     bs = base["base_stats"]
     stats = {
-        "max_hp": calculate_stat(bs["hp"], level, is_hp=True),
+        "max_hp": calculate_stat(bs["hp"], level, True),
         "atk": calculate_stat(bs["atk"], level),
         "def": calculate_stat(bs["def"], level),
         "spa": calculate_stat(bs["spa"], level),
@@ -144,7 +163,7 @@ def get_chimera_display_stats(instance):
     base = BASE_CHIMERAS[instance["base_id"]]
     s = instance["stats"]
     moves_txt = ", ".join([MOVES[m]["name"] for m in instance["moves"]])
-    item_txt = ITEMS[instance["held_item"]]["name"] if instance["held_item"] else "なし"
+    item_txt = ITEMS[instance["held_item"]]["name"] if instance.get("held_item") else "なし"
     
     return (
         f"**名前**: {instance['nickname']} (Lv.{instance['level']})\n"
@@ -158,60 +177,53 @@ def get_chimera_display_stats(instance):
     )
 
 def level_up_chimera(instance):
+    if instance["level"] >= 100: return ""
+    
     instance["level"] += 1
-    instance["xp"] = 0
+    instance["xp"] = max(0, instance["xp"] - instance["next_xp"])
     instance["next_xp"] = instance["level"] * 100
     
     base = BASE_CHIMERAS[instance["base_id"]]
     bs = base["base_stats"]
     
-    # ステータス更新
-    instance["stats"]["max_hp"] = calculate_stat(bs["hp"], instance["level"], is_hp=True)
+    # ステータス再計算
+    instance["stats"]["max_hp"] = calculate_stat(bs["hp"], instance["level"], True)
     instance["stats"]["atk"] = calculate_stat(bs["atk"], instance["level"])
     instance["stats"]["def"] = calculate_stat(bs["def"], instance["level"])
     instance["stats"]["spa"] = calculate_stat(bs["spa"], instance["level"])
     instance["stats"]["spd"] = calculate_stat(bs["spd"], instance["level"])
     instance["stats"]["spe"] = calculate_stat(bs["spe"], instance["level"])
     
-    # HPも全快させる（レベルアップボーナス）
+    # レベルアップ時はHP全快（ボーナス）
     instance["current_hp"] = instance["stats"]["max_hp"]
     
-    new_move = base["learnset"].get(instance["level"])
-    msg = f"\n**{instance['nickname']}** はレベル{instance['level']}になった！"
+    msg = f"**{instance['nickname']}** はレベル{instance['level']}になった！"
     
+    # 技習得
+    new_move = base["learnset"].get(instance["level"])
     if new_move:
         if len(instance["moves"]) < 4:
             instance["moves"].append(new_move)
             msg += f"\n『{MOVES[new_move]['name']}』を覚えた！"
         else:
-            msg += f"\n『{MOVES[new_move]['name']}』を覚えたいけど、技がいっぱいだ…"
+            # 簡易的に古い技を忘れる（または後で技変更機能で対応）
+            forgot = instance["moves"].pop(0)
+            instance["moves"].append(new_move)
+            msg += f"\n『{MOVES[forgot]['name']}』を忘れて、『{MOVES[new_move]['name']}』を覚えた！"
             
     return msg
 
-# --- データ移行用関数 (kimera_core.pyの末尾に追加) ---
+# --- 旧データ移行用 ---
 def migrate_old_data():
-    """古い kimera_save.json を読み込み、ユーザーごとの個別ファイルに分割保存する"""
     old_path = DATA_DIR / "kimera_save.json"
-    
-    # 古いファイルがない、または既にバックアップ済みの場合は何もしない
-    if not old_path.exists():
-        return "古いデータファイル(kimera_save.json)が見つかりません。移行は不要か、既に完了しています。"
-
+    if not old_path.exists(): return "古いデータファイルが見つかりません。"
     try:
-        # 古いデータを一括読み込み
         all_data = json.loads(old_path.read_text(encoding="utf-8"))
-        count = 0
-
-        for user_id, user_data in all_data.items():
-            # 新しい保存関数を使って個別ファイルに書き出し
-            # (注意: 既に新しい形式で遊んでデータがある場合は上書きされます)
-            save_user_data(user_id, user_data)
-            count += 1
-
-        # 古いファイルをリネームしてバックアップにする（二重実行防止）
+        c = 0
+        for uid, d in all_data.items():
+            save_user_data(uid, d)
+            c += 1
         old_path.rename(DATA_DIR / "kimera_save.json.bak")
-        
-        return f"成功: {count}人分のデータを個別ファイルに移行しました！\n古いファイルは 'kimera_save.json.bak' に変更しました。"
-    
+        return f"成功: {c}件のデータを移行しました。"
     except Exception as e:
-        return f"エラー: データの移行中に問題が発生しました。\n{e}"
+        return f"エラー: {e}"
