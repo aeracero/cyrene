@@ -4,71 +4,65 @@ from config import today_str
 import database as db
 from special_unlocks import get_janken_wins
 
-# --- アチーブメント定義 (簡単に追加可能) ---
-# key: ID
-# value: { 名前, 説明, 称号名, 判定条件(type, threshold) }
-# type: 'rps_win'(じゃんけん勝利数), 'affection'(好感度Lv), 'xp'(累計XP), 
-#       'gacha_count'(ガチャ回数), 'talk_count'(会話数), 'cyrene_copies'(キュレネ所持数)
-
+# --- アチーブメント定義 ---
+# type: 'manual' は自動チェックではなく、ゲームクリア時などに手動で解除するタイプです
 ACHIEVEMENTS = {
-    # 1. 好感度Lv6 -> 最愛の
+    # 既存の実績
     "aff_max_love": {
         "name_jp": "永遠の誓い", "name_en": "Eternal Oath",
         "desc_jp": "好感度Lv.6に到達する", "desc_en": "Reach Affection Level 6",
         "title_jp": "最愛の", "title_en": "Beloved",
         "type": "affection", "threshold": 6
     },
-    # 2. ガチャ完凸 (7枚) -> 豪運の
     "gacha_cyrene_e6": {
         "name_jp": "運命の再会", "name_en": "Fated Reunion",
         "desc_jp": "キュレネを合計7体（完凸）所持する", "desc_en": "Own 7 copies of Cyrene (E6)",
         "title_jp": "豪運の", "title_en": "Lucky",
         "type": "cyrene_copies", "threshold": 7
     },
-    # 3. 会話300回 -> おしゃべりな
     "talk_master_300": {
         "name_jp": "お喋り好き", "name_en": "Chatterbox",
         "desc_jp": "累計300回会話する", "desc_en": "Talk 300 times total",
         "title_jp": "おしゃべりな", "title_en": "Chatty",
         "type": "talk_count", "threshold": 300
     },
-    # 4. XP 1000万 -> 限界を超えた愛を持った
     "xp_limit_break": {
         "name_jp": "愛の極地", "name_en": "Limitless Love",
         "desc_jp": "好感度XPを10,000,000以上獲得する", "desc_en": "Gain over 10,000,000 Affection XP",
         "title_jp": "限界を超えた愛を持った", "title_en": "Limit-Breaking",
         "type": "xp", "threshold": 10000000
     },
-    
-    # --- その他（既存の実績例） ---
     "rps_master_50": {
         "name_jp": "じゃんけん王", "name_en": "RPS Legend",
         "desc_jp": "じゃんけんで50回勝利する", "desc_en": "Win RPS 50 times",
         "title_jp": "勝負師", "title_en": "Gambler",
         "type": "rps_win", "threshold": 50
     },
+    # ★追加: キメラチャレンジ制覇
+    "kimera_champion": {
+        "name_jp": "キメラチャンピオン", "name_en": "Kimera Champion",
+        "desc_jp": "チャレンジモードを完全制覇する", "desc_en": "Complete Challenge Mode",
+        "title_jp": "ポ◯モンマスターの", "title_en": "Po*emon Master",
+        "type": "manual", "threshold": 1
+    },
 }
 
 def check_all_achievements(user_id: int) -> list[str]:
     """
     ユーザーの全ステータスを確認し、解除条件を満たした実績があれば解除して通知を返す。
-    どのタイミングで呼んでもOK。
     """
     newly_unlocked = []
     lang = db.get_user_lang(user_id)
     
-    # 1. ユーザーデータの収集
     ach_data = db.get_user_achievements(user_id)
     unlocked_ids = set(ach_data["unlocked"])
-    stats = ach_data.get("stats", {}) # 累計データ (talk_count, gacha_count等)
+    stats = ach_data.get("stats", {})
     
-    # 2. 外部データの収集
     aff_xp, aff_lv = get_user_affection(user_id)
     gacha_state = db.get_gacha_state(user_id)
     cyrene_copies = gacha_state.get("cyrene_copies", 0)
     rps_wins = get_janken_wins(user_id)
     
-    # 3. 判定用辞書の作成
     current_values = {
         "affection": aff_lv,
         "xp": aff_xp,
@@ -79,52 +73,43 @@ def check_all_achievements(user_id: int) -> list[str]:
         "guardian": 1 if db.get_guardian_level(user_id) else 0
     }
 
-    # 4. 全実績を走査
     for ach_id, data in ACHIEVEMENTS.items():
-        if ach_id in unlocked_ids:
-            continue
+        if ach_id in unlocked_ids: continue
+        
+        # manualタイプはここでは自動判定しない（ゲーム側でunlock_achievementを呼ぶ）
+        if data["type"] == "manual": continue
             
         req_type = data["type"]
         req_val = data["threshold"]
         
-        # 条件を満たしているか？
         curr_val = current_values.get(req_type, 0)
         if curr_val >= req_val:
             if db.unlock_achievement(user_id, ach_id):
-                # 通知作成
                 name = data["name_en"] if lang == "en" else data["name_jp"]
-                desc = data["desc_en"] if lang == "en" else data["desc_jp"]
                 title = data["title_en"] if lang == "en" else data["title_jp"]
-                
                 if lang == "en":
                     msg = f"\n🏆 **Achievement Unlocked: [{name}]**\nTitle Acquired: **[{title}]**"
                 else:
                     msg = f"\n🏆 **実績解除: 【{name}】**\n二つ名獲得: **【{title}】**"
                 newly_unlocked.append(msg)
-                
-                # 自動装備（初回のみ）も可能だが、今回は手動変更にする
     
     return newly_unlocked
 
 def get_title_prefix(user_id: int) -> str:
-    """現在の二つ名を取得（名前の前に付ける文字列）"""
     equipped_id = db.get_equipped_title_id(user_id)
     if not equipped_id or equipped_id not in ACHIEVEMENTS:
         return ""
-    
     lang = db.get_user_lang(user_id)
     data = ACHIEVEMENTS[equipped_id]
     title = data["title_en"] if lang == "en" else data["title_jp"]
-    return f"{title} " # 後ろにスペースを入れる
+    return f"{title} "
 
 def format_achievement_progress(user_id: int) -> str:
-    """実績の進捗一覧を表示"""
     ach_data = db.get_user_achievements(user_id)
     unlocked_ids = set(ach_data["unlocked"])
     lang = db.get_user_lang(user_id)
     equipped = db.get_equipped_title_id(user_id)
     
-    # 現在値の再取得（表示用）
     stats = ach_data.get("stats", {})
     xp, lv = get_user_affection(user_id)
     gacha = db.get_gacha_state(user_id)
@@ -147,9 +132,7 @@ def format_achievement_progress(user_id: int) -> str:
         name = data["name_en"] if lang == "en" else data["name_jp"]
         title = data["title_en"] if lang == "en" else data["title_jp"]
         req = data["threshold"]
-        curr = vals.get(data["type"], 0)
         
-        # 進捗バー的な表示
         if ach_id in unlocked_ids:
             check = "✅"
             status = "(Complete)" if lang=="en" else "(達成)"
@@ -157,13 +140,17 @@ def format_achievement_progress(user_id: int) -> str:
                 status += " [Equipped]" if lang=="en" else " [装備中]"
         else:
             check = "🔒"
-            status = f"({curr}/{req})"
+            if data["type"] == "manual":
+                status = "(???)" # 隠し条件など
+            else:
+                curr = vals.get(data["type"], 0)
+                status = f"({curr}/{req})"
             
         lines.append(f"{check} **{name}**: {status}")
         lines.append(f"   └ Title: {title}")
         
     if lang == "en":
-        lines.append("\nUse `Change Title` or `Title List` to equip one.")
+        lines.append("\nUse `Change Title` to equip one.")
     else:
         lines.append("\n『二つ名変更』で獲得した称号をつけられるわよ♪")
         
@@ -208,7 +195,6 @@ def add_affection_xp(user_id: int, delta: int, reason: str = ""):
     data[str(user_id)] = info
     db.save_affection_data(data)
 
-# 管理者用: 全員のリスト
 def format_all_affection_status(guild) -> str:
     data = db.load_affection_data()
     if not data: return "No data."
@@ -230,7 +216,6 @@ def format_all_affection_status(guild) -> str:
         lines.append(f"- **{name}**: Lv.{level} ({xp} XP)")
     return "\n".join(lines)
 
-# 好感度ステータス
 def get_affection_status_message(user_id: int) -> str:
     lang = db.get_user_lang(user_id)
     xp, level = get_user_affection(user_id)
@@ -282,7 +267,6 @@ def parse_myurion_answer(text: str) -> int | None:
     return None
 
 async def send_myurion_question(message, user_id, correct_count, state_dict):
-    # (省略なしのため記述)
     MYURION_QUESTIONS = [
         {"q": "ミュミュ、ミミュミュミュミュウミュミュウミー", "choices": ["ミュウミーミミュミミュミュ", "ミミュミュウミーミーミュウミュウミミ", "ミュウミみミュみミミュミュミュミュウ", "ミュウミュミュミュミュウ"], "answer_index": 0},
         {"q": "ミュウミュミュミュウミュミュミュウウミュウ？", "choices": ["ミュウミミミュミュミュミュウミ", "ミュウーミミュミュミュウミュウ", "ミュウミュウミュミュミュミュミュ", "ミミミュミュミュムミュウミミミュ"], "answer_index": 1},
@@ -430,7 +414,7 @@ def format_gacha_status(user_id: int) -> str:
             "『単発ガチャ』『10連ガチャ』(または『チケット10連』)で引けるわよ♪"
         )
 
-# --- じゃんけんロジック (英語入力対応) ---
+# --- じゃんけんロジック ---
 JANKEN_HANDS = ["グー", "チョキ", "パー"]
 
 def parse_hand(text: str):
