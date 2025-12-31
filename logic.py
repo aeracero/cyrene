@@ -6,6 +6,7 @@ from special_unlocks import get_janken_wins
 
 # --- アチーブメント定義 ---
 ACHIEVEMENTS = {
+    # 既存の実績
     "aff_max_love": {
         "name_jp": "永遠の誓い", "name_en": "Eternal Oath",
         "desc_jp": "好感度Lv.6に到達する", "desc_en": "Reach Affection Level 6",
@@ -36,10 +37,25 @@ ACHIEVEMENTS = {
         "title_jp": "勝負師", "title_en": "Gambler",
         "type": "rps_win", "threshold": 50
     },
+    # ★追加: キメラチャレンジ制覇
     "kimera_champion": {
         "name_jp": "キメラチャンピオン", "name_en": "Kimera Champion",
         "desc_jp": "チャレンジモードを完全制覇する", "desc_en": "Complete Challenge Mode",
         "title_jp": "ポ◯モンマスターの", "title_en": "Po*emon Master",
+        "type": "manual", "threshold": 1
+    },
+    # ★追加: なのか解放実績
+    "unlock_nanoka": {
+        "name_jp": "可愛いは正義", "name_en": "Cute is Justice",
+        "desc_jp": "三月なのかの姿を解放する", "desc_en": "Unlock March 7th form",
+        "title_jp": "なのかなのか？", "title_en": "March 7th?",
+        "type": "manual", "threshold": 1
+    },
+    # ★追加: 丹恒解放実績
+    "unlock_danheng": {
+        "name_jp": "過去との決別", "name_en": "Farewell to the Past",
+        "desc_jp": "丹恒の姿を解放する", "desc_en": "Unlock Dan Heng form",
+        "title_jp": "皆を護りし者", "title_en": "The Guardian",
         "type": "manual", "threshold": 1
     },
 }
@@ -150,10 +166,11 @@ def format_achievement_progress(user_id: int) -> str:
 
 # --- 好感度ロジック ---
 def get_level_from_xp(xp: int, cfg: dict) -> int:
-    thresholds = cfg.get("level_thresholds", [])
-    # thresholds = [0, 1000, 2000, 3500, 7000, 10000]
-    # XPが0以上ならLv1(index0+1)、1000以上ならLv2(index1+1)...
+    # ★修正: 閾値をここで固定
+    thresholds = [0, 1000, 2000, 3500, 7000, 10000]
+    
     current_level = 1
+    # thresholds[0]=0 (Lv1), thresholds[1]=1000 (Lv2), ...
     for i, th in enumerate(thresholds):
         if xp >= th:
             current_level = i + 1
@@ -214,15 +231,12 @@ def format_all_affection_status(guild) -> str:
 def get_affection_status_message(user_id: int) -> str:
     lang = db.get_user_lang(user_id)
     xp, level = get_user_affection(user_id)
-    cfg = db.load_affection_config()
-    thresholds = cfg.get("level_thresholds", [])
     
-    # 次のレベルに必要な経験値を計算
+    # ★修正: 閾値をここで固定
+    thresholds = [0, 1000, 2000, 3500, 7000, 10000]
+    
     if level < len(thresholds):
-        next_xp_req = thresholds[level] # levelは1始まり、indexは0始まり。Lv1(index0)の次はindex1(Lv2の閾値)
-        # ただし get_level_from_xp の返し値は "現在のレベル" (index+1) なので
-        # thresholds[level] は "次のレベルの閾値" になる
-        
+        next_xp_req = thresholds[level] # 次のレベルの閾値
         needed = max(0, next_xp_req - xp)
         if lang == "en":
             return (f"Your affection is **Lv.{level}** (Total {xp} XP)♪\n"

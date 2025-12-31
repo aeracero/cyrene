@@ -300,7 +300,17 @@ async def on_message(message):
     if "skopeo365" in re.sub(r"\s+", "", content_body).lower():
         if has_danheng_stage1(user_id) and not is_danheng_unlocked(user_id):
             set_danheng_unlocked(user_id, True)
-            await send_myu(message, user_id, "Danheng's memory awakened..." if lang=="en" else "丹恒の記憶が…蘇ったみたい♪")
+            
+            msg = "Danheng's memory awakened..." if lang=="en" else "丹恒の記憶が…蘇ったみたい♪"
+            
+            # ★追加: 実績解除（丹恒）
+            if db.unlock_achievement(user_id, "unlock_danheng"):
+                t_name = "The Guardian" if lang=="en" else "皆を護りし者"
+                a_name = "Farewell to the Past" if lang=="en" else "過去との決別"
+                msg += f"\n\n🏆 実績解除: **【{a_name}】**\n二つ名獲得: **【{t_name}】**"
+            
+            await send_myu(message, user_id, msg)
+            
         elif is_danheng_unlocked(user_id):
             await send_myu(message, user_id, "Already unlocked." if lang=="en" else "ふふっ、その姿ならもう解放されているわよ♪")
         else:
@@ -383,7 +393,6 @@ async def on_message(message):
             waiting_for_bypass_edit.add(user_id)
             await send_myu(message, user_id, "制限無視(bypass)リストに「追加」する？「削除」する？\n`追加` か `削除` で答えて。")
             return
-        # ★修正: 正規表現でマイナス符号(-)も受け付けるように変更
         if content_body.startswith("好感度XP追加"):
             if not is_main_admin:
                 await send_myu(message, user_id, "ごめんなさい、それはメイン管理者だけの権限よ。")
@@ -791,6 +800,10 @@ async def on_message(message):
     # 緩和された解放条件: じゃんけん勝利37回以上
     if "記憶は流れ星を待ってる" in content_body and get_janken_wins(user_id) >= 37 and not is_nanoka_unlocked(user_id):
         set_nanoka_unlocked(user_id, True)
+        # ★追加: 実績解除処理
+        if db.unlock_achievement(user_id, "unlock_nanoka"):
+            reply += "\n\n🏆 実績解除: **【可愛いは正義】**\n二つ名獲得: **【なのかなのか？】**"
+
         if lang == "en": reply += "\n\n【March 7th Unlocked!】 Try saying 'Transform into March'."
         else: reply += "\n\n【三月なのか 解放！】『なのになってみて』と言ってみて？"
 
