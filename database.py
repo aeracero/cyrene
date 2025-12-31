@@ -90,8 +90,7 @@ def delete_guardian_level(user_id):
         del data[str(user_id)]
         _save_json(GUARDIAN_FILE, data)
 
-# --- 好感度 (修正箇所) ---
-# 新しいレベル閾値: Lv1=0, Lv2=1000, Lv3=2000, Lv4=3500, Lv5=7000, Lv6=10000
+# --- 好感度 ---
 DEFAULT_AFFECTION_CONFIG = {
     "level_thresholds": [0, 1000, 2000, 3500, 7000, 10000],
     "xp_actions": {"talk": 3, "rps_win": 10, "rps_lose": 5, "rps_draw": 7},
@@ -100,7 +99,6 @@ def load_affection_data(): return _load_json(AFFECTION_FILE, {})
 def save_affection_data(data): _save_json(AFFECTION_FILE, data)
 
 def load_affection_config(): 
-    # ファイルから読み込むが、閾値に関してはコード内の最新値を優先する
     cfg = _load_json(AFFECTION_CONFIG_FILE, DEFAULT_AFFECTION_CONFIG.copy())
     cfg["level_thresholds"] = DEFAULT_AFFECTION_CONFIG["level_thresholds"]
     return cfg
@@ -220,6 +218,25 @@ def set_janken_wins_direct(user_id: int, wins: int):
     info["janken_wins"] = max(0, int(wins))
     data[str(user_id)] = info
     save_special_unlocks(data)
+
+# ★追加: HC愛の進行度更新
+def mark_hc_love_phrase(user_id: int, phrase_index: int):
+    """
+    phrase_index: 0, 1, 2
+    戻り値: True if all 3 collected
+    """
+    data = load_special_unlocks()
+    info = data.get(str(user_id), {})
+    flags = info.get("hc_love_flags", 0)
+    
+    # ビット演算でフラグを立てる
+    flags |= (1 << phrase_index)
+    
+    info["hc_love_flags"] = flags
+    data[str(user_id)] = info
+    save_special_unlocks(data)
+    
+    return flags == 7 # 111(binary) -> 7
 
 def get_all_special_status():
     data = load_special_unlocks()
