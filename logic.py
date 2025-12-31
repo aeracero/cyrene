@@ -2,7 +2,7 @@ import random
 import re
 from config import today_str
 import database as db
-from special_unlocks import get_janken_wins
+from special_unlocks import get_janken_wins, is_nanoka_unlocked, is_danheng_unlocked
 
 # --- アチーブメント定義 ---
 ACHIEVEMENTS = {
@@ -27,9 +27,9 @@ ACHIEVEMENTS = {
     },
     "xp_limit_break": {
         "name_jp": "愛の極地", "name_en": "Limitless Love",
-        "desc_jp": "好感度XPを10,000,000以上獲得する", "desc_en": "Gain over 10,000,000 Affection XP",
+        "desc_jp": "好感度XPを100,000以上獲得する", "desc_en": "Gain over 100,000 Affection XP",
         "title_jp": "限界を超えた愛を持った", "title_en": "Limit-Breaking",
-        "type": "xp", "threshold": 10000000
+        "type": "xp", "threshold": 100000
     },
     "rps_master_50": {
         "name_jp": "じゃんけん王", "name_en": "RPS Legend",
@@ -37,30 +37,32 @@ ACHIEVEMENTS = {
         "title_jp": "勝負師", "title_en": "Gambler",
         "type": "rps_win", "threshold": 50
     },
-    # ★追加: キメラチャレンジ制覇
+    # キメラチャレンジ制覇 (手動解除のまま)
     "kimera_champion": {
         "name_jp": "キメラチャンピオン", "name_en": "Kimera Champion",
         "desc_jp": "チャレンジモードを完全制覇する", "desc_en": "Complete Challenge Mode",
         "title_jp": "ポ◯モンマスターの", "title_en": "Po*emon Master",
         "type": "manual", "threshold": 1
     },
-    # ★追加: なのか解放実績
+    # ★修正: 自動チェック用にタイプを変更
     "unlock_nanoka": {
         "name_jp": "可愛いは正義", "name_en": "Cute is Justice",
         "desc_jp": "三月なのかの姿を解放する", "desc_en": "Unlock March 7th form",
         "title_jp": "なのかなのか？", "title_en": "March 7th?",
-        "type": "manual", "threshold": 1
+        "type": "nanoka_flag", "threshold": 1
     },
-    # ★追加: 丹恒解放実績
     "unlock_danheng": {
         "name_jp": "過去との決別", "name_en": "Farewell to the Past",
         "desc_jp": "丹恒の姿を解放する", "desc_en": "Unlock Dan Heng form",
         "title_jp": "皆を護りし者", "title_en": "The Guardian",
-        "type": "manual", "threshold": 1
+        "type": "danheng_flag", "threshold": 1
     },
 }
 
 def check_all_achievements(user_id: int) -> list[str]:
+    """
+    ユーザーの全ステータスを確認し、解除条件を満たした実績があれば解除して通知を返す。
+    """
     newly_unlocked = []
     lang = db.get_user_lang(user_id)
     
@@ -73,6 +75,7 @@ def check_all_achievements(user_id: int) -> list[str]:
     cyrene_copies = gacha_state.get("cyrene_copies", 0)
     rps_wins = get_janken_wins(user_id)
     
+    # 現在のステータスを辞書化
     current_values = {
         "affection": aff_lv,
         "xp": aff_xp,
@@ -80,11 +83,15 @@ def check_all_achievements(user_id: int) -> list[str]:
         "rps_win": rps_wins,
         "talk_count": stats.get("talk_count", 0),
         "gacha_count": stats.get("gacha_count", 0),
-        "guardian": 1 if db.get_guardian_level(user_id) else 0
+        "guardian": 1 if db.get_guardian_level(user_id) else 0,
+        "nanoka_flag": 1 if is_nanoka_unlocked(user_id) else 0,
+        "danheng_flag": 1 if is_danheng_unlocked(user_id) else 0
     }
 
     for ach_id, data in ACHIEVEMENTS.items():
         if ach_id in unlocked_ids: continue
+        
+        # manualタイプはここでは自動判定しない（ゲーム側でunlock_achievementを呼ぶ）
         if data["type"] == "manual": continue
             
         req_type = data["type"]
@@ -113,6 +120,9 @@ def get_title_prefix(user_id: int) -> str:
     return f"{title} "
 
 def format_achievement_progress(user_id: int) -> str:
+    # 閲覧時に最新状態をチェックして更新
+    new_unlocks = check_all_achievements(user_id)
+    
     ach_data = db.get_user_achievements(user_id)
     unlocked_ids = set(ach_data["unlocked"])
     lang = db.get_user_lang(user_id)
@@ -125,7 +135,9 @@ def format_achievement_progress(user_id: int) -> str:
     vals = {
         "affection": lv, "xp": xp, "cyrene_copies": gacha.get("cyrene_copies", 0),
         "rps_win": get_janken_wins(user_id), "talk_count": stats.get("talk_count", 0),
-        "gacha_count": stats.get("gacha_count", 0), "guardian": 1 if db.get_guardian_level(user_id) else 0
+        "gacha_count": stats.get("gacha_count", 0), "guardian": 1 if db.get_guardian_level(user_id) else 0,
+        "nanoka_flag": 1 if is_nanoka_unlocked(user_id) else 0,
+        "danheng_flag": 1 if is_danheng_unlocked(user_id) else 0
     }
     
     total = len(ACHIEVEMENTS)
@@ -149,13 +161,16 @@ def format_achievement_progress(user_id: int) -> str:
         else:
             check = "🔒"
             if data["type"] == "manual":
-                status = "(???)"
+                status = "(???)" # 隠し条件など
             else:
                 curr = vals.get(data["type"], 0)
                 status = f"({curr}/{req})"
             
         lines.append(f"{check} **{name}**: {status}")
         lines.append(f"   └ Title: {title}")
+    
+    if new_unlocks:
+        lines.append("\n" + "\n".join(new_unlocks))
         
     if lang == "en":
         lines.append("\nUse `Change Title` to equip one.")
@@ -166,11 +181,9 @@ def format_achievement_progress(user_id: int) -> str:
 
 # --- 好感度ロジック ---
 def get_level_from_xp(xp: int, cfg: dict) -> int:
-    # ★修正: 閾値をここで固定
+    # 閾値固定
     thresholds = [0, 1000, 2000, 3500, 7000, 10000]
-    
     current_level = 1
-    # thresholds[0]=0 (Lv1), thresholds[1]=1000 (Lv2), ...
     for i, th in enumerate(thresholds):
         if xp >= th:
             current_level = i + 1
@@ -232,11 +245,10 @@ def get_affection_status_message(user_id: int) -> str:
     lang = db.get_user_lang(user_id)
     xp, level = get_user_affection(user_id)
     
-    # ★修正: 閾値をここで固定
     thresholds = [0, 1000, 2000, 3500, 7000, 10000]
     
     if level < len(thresholds):
-        next_xp_req = thresholds[level] # 次のレベルの閾値
+        next_xp_req = thresholds[level] 
         needed = max(0, next_xp_req - xp)
         if lang == "en":
             return (f"Your affection is **Lv.{level}** (Total {xp} XP)♪\n"
@@ -284,7 +296,7 @@ async def send_myurion_question(message, user_id, correct_count, state_dict):
         {"q": "ミュミュ、ミミュミュミュミュウミュミュウミー", "choices": ["ミュウミーミミュミミュミュ", "ミミュミュウミーミーミュウミュウミミ", "ミュウミみミュみミミュミュミュミュウ", "ミュウミュミュミュミュウ"], "answer_index": 0},
         {"q": "ミュウミュミュミュウミュミュミュウウミュウ？", "choices": ["ミュウミミミュミュミュミュウミ", "ミュウーミミュミュミュウミュウ", "ミュウミュウミュミュミュミュミュ", "ミミミュミュミュムミュウミミミュ"], "answer_index": 1},
         {"q": "ミュミュミミュウミュユミミュミュウ？", "choices": ["ミュウミュミュミュミュ、ミーミュユミュミュウ", "ミミュミュミーミーミュ。ミュミュミーミュミュ", "ミュウミュミュミュウ。ミュウミーみミュミュウ", "ミュウ。"], "answer_index": 0},
-        {"q": "ミュミュミュミュミューーミュウミュウミュウミュウミュウ？", "choices": ["ミュウミュユミュミュミューミュウミュウミュウミュウ", "ミュウ。ミミュミュミュミーミミュミュミュミュミュウ", "ミミミュミュミュミュウ", "ミュウミュミュミュミュミュミュミュミュミュミュ"], "answer_index": 1},
+        {"q": "ミュミュミュミュミューーミュウミュウミュウミュウミュウ？", "choices": ["ミュウミュユミュミュミューミュウミュウミュウミュウ", "ミュウ。ミミュミュミュミーミミュミュミュミュミュウ", "ミミミュミュミュミュウ", "ミュウミュミュミュミュミュミュミュミュミュ"], "answer_index": 1},
         {"q": "ミュミュミュミュウミュウミュウミュウミュウミュウミュウミュウ？", "choices": ["ミュウ!", "ミュウ?", "ミュウ。", "ミュウ♪"], "answer_index": 0},
     ]
     q = random.choice(MYURION_QUESTIONS)

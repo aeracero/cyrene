@@ -302,13 +302,9 @@ async def on_message(message):
             set_danheng_unlocked(user_id, True)
             
             msg = "Danheng's memory awakened..." if lang=="en" else "丹恒の記憶が…蘇ったみたい♪"
-            
-            # ★追加: 実績解除（丹恒）
             if db.unlock_achievement(user_id, "unlock_danheng"):
-                t_name = "The Guardian" if lang=="en" else "皆を護りし者"
-                a_name = "Farewell to the Past" if lang=="en" else "過去との決別"
-                msg += f"\n\n🏆 実績解除: **【{a_name}】**\n二つ名獲得: **【{t_name}】**"
-            
+                msg += "\n\n🏆 実績解除: **【過去との決別】**\n二つ名獲得: **【皆を護りし者】**"
+                
             await send_myu(message, user_id, msg)
             
         elif is_danheng_unlocked(user_id):
@@ -705,9 +701,32 @@ async def on_message(message):
         await send_myu(message, user_id, msg)
         return
 
+    # ★修正: 二つ名コマンドのUI改善
     if any(k in content_body_lower for k in TITLE_KEYWORDS):
         waiting_for_title_change.add(user_id)
-        msg = "Which title do you want to equip? Type the title name or 'None' to remove." if lang=="en" else "どの二つ名を付ける？ 二つ名の名前を入力してね。（外す場合は『なし』）"
+        
+        # 遡及チェック
+        new_unlocks = logic.check_all_achievements(user_id)
+        
+        user_ach = db.get_user_achievements(user_id)
+        unlocked = user_ach["unlocked"]
+        
+        titles_list = []
+        for aid in unlocked:
+            if aid in logic.ACHIEVEMENTS:
+                t_name = logic.ACHIEVEMENTS[aid]["title_en"] if lang=="en" else logic.ACHIEVEMENTS[aid]["title_jp"]
+                titles_list.append(f"・{t_name}")
+                
+        if not titles_list:
+            msg = "You don't have any titles yet." if lang=="en" else "まだ二つ名を持っていないみたい。"
+        else:
+            t_text = "\n".join(titles_list)
+            if lang=="en":
+                msg = f"【Unlocked Titles】\n{t_text}\n\nType the title name to equip (or 'None' to remove)."
+            else:
+                msg = f"【獲得済みの二つ名】\n{t_text}\n\n付けたい二つ名の名前を入力してね。（外す場合は『なし』）"
+        
+        if new_unlocks: msg = "\n".join(new_unlocks) + "\n\n" + msg
         await send_myu(message, user_id, msg)
         return
 
@@ -800,7 +819,8 @@ async def on_message(message):
     # 緩和された解放条件: じゃんけん勝利37回以上
     if "記憶は流れ星を待ってる" in content_body and get_janken_wins(user_id) >= 37 and not is_nanoka_unlocked(user_id):
         set_nanoka_unlocked(user_id, True)
-        # ★追加: 実績解除処理
+        
+        # 実績解除処理
         if db.unlock_achievement(user_id, "unlock_nanoka"):
             reply += "\n\n🏆 実績解除: **【可愛いは正義】**\n二つ名獲得: **【なのかなのか？】**"
 

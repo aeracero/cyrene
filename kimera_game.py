@@ -16,7 +16,7 @@ STATE_BATTLE_CHALLENGE = "battle_challenge"
 STATE_BATTLE_PVP_LOBBY = "battle_pvp_lobby"
 STATE_BATTLE_PVP = "battle_pvp"
 STATE_BOX = "box_menu"
-STATE_EQUIP = "equip_menu" # 新規: 装備メニュー
+STATE_EQUIP = "equip_menu"
 
 # サブステート
 BATTLE_SUB_MAIN = "main"
@@ -61,7 +61,6 @@ def handle_menu(user_id, content):
         session["state"] = STATE_BOX
         return _get_box_menu_text(user_id), []
 
-    # ★追加: 装備メニューへ
     if "装備" in content:
         session["state"] = STATE_EQUIP
         return _get_equip_menu_text(user_id), []
@@ -127,22 +126,32 @@ def handle_menu(user_id, content):
         if item_key:
             ud = core.get_user_data(user_id)
             if not ud["party"]: return "手持ちがいないわ。", []
-            res = core.apply_item_effect_logic(ud, item_key, ud["party"][0]) # 先頭に使用
+            res = core.apply_item_effect_logic(ud, item_key, ud["party"][0])
             core.save_user_data(user_id, ud)
             return res, []
 
-    return "『バトル』『編成』『装備』『詳細』『ショップ』『回復』『図鑑』から選んでね。", []
+    # ★修正: ユーザーフレンドリーな案内
+    return (
+        "【キメラメニュー】\n"
+        "・**バトル**: 野生/CPU/対戦\n"
+        "・**編成**: 手持ちとボックスの入れ替え\n"
+        "・**装備**: アイテムを持たせる\n"
+        "・**詳細**: ステータス確認\n"
+        "・**ショップ**: ボールや薬を買う\n"
+        "・**回復**: 全回復する\n"
+        "・**図鑑**: 出会ったキメラを見る\n"
+        "・**終了**: ゲームを終わる\n\n"
+        "何をしたいかしら？"
+    ), []
 
 # --- 装備操作 ---
 def _get_equip_menu_text(user_id):
     ud = core.get_user_data(user_id)
     msg = "【装備管理】\n"
-    # 手持ちリスト
     for i, c in enumerate(ud["party"]):
         item_name = data.ITEMS[c["held_item"]]["name"] if c["held_item"] else "なし"
         msg += f"{i+1}. {c['nickname']}: {item_name}\n"
     
-    # 装備可能アイテムリスト
     equipable = []
     for k, v in ud["items"].items():
         idata = data.ITEMS.get(k)
@@ -161,13 +170,11 @@ def handle_equip_menu(user_id, content):
         session["state"] = STATE_MENU
         return "メニューに戻るわ。", []
 
-    # 装備: "1にちからのハチマキ"
     m = re.search(r"(\d+)に(.+?)を持たせる", content) or re.search(r"(\d+)に(.+?)", content)
     if m:
         idx = int(m.group(1)) - 1
         item_name = m.group(2).strip()
         
-        # 名前からID検索
         item_key = None
         for k, v in data.ITEMS.items():
             if v["name"] == item_name:
@@ -181,7 +188,6 @@ def handle_equip_menu(user_id, content):
         else:
             return "そのアイテムは見つからないわ。", []
 
-    # 外す: "1を外す"
     m = re.search(r"(\d+)を外す", content)
     if m:
         idx = int(m.group(1)) - 1
@@ -738,7 +744,11 @@ def process_kimera_command(user_id, content):
     if not session:
         if "キメラと遊びたい" in content:
             start_session(user_id)
-            return "あら、キメラたちと遊びたいの？", []
+            return (
+                "あら、キメラたちと遊びたいの？\n"
+                "**『バトル』『編成』『装備』『詳細』『ショップ』『回復』『図鑑』『ボックス』**\n"
+                "何をしたいかしら？"
+            ), []
         return None
     
     if content in ["終了", "やめる", "もう遊び疲れたよ"]:
