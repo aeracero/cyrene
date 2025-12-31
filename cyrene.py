@@ -14,7 +14,7 @@ import kimera_game
 # --- Discord Setup ---
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members = True
+intents.members = True # メンバー検索(PvP招待)用
 client = discord.Client(intents=intents)
 
 # --- State ---
@@ -160,6 +160,9 @@ async def on_message(message):
         if not broadcast_msg:
             await send_myu(message, user_id, "送るメッセージが空っぽよ？\n`全体送信 こんにちは` のように入力してね。")
             return
+        
+        # ★修正: 送るメッセージを大きくする
+        broadcast_msg = f"# {broadcast_msg}"
 
         # 送信処理開始
         sent_count = 0
@@ -254,9 +257,9 @@ async def on_message(message):
     if any(word in content_body for word in NEW_YEAR_WORDS):
         # お正月用の特別な返信
         if lang == "en":
-            reply = "Happy New Year! Let's make this a wonderful year together♪"
+            reply = "# Happy New Year! Let's make this a wonderful year together♪"
         else:
-            reply = "あけましておめでとうございます♪ 今年もあなたと一緒にいられて嬉しいわ。よろしくね！"
+            reply = "# あけましておめでとう♪ 今年もあなたと一緒にいられて嬉しいわ。よろしくね！"
         
         await send_myu(message, user_id, f"{message.author.mention} {reply}")
         logic.add_affection_xp(user_id, 5) # お正月なので少しボーナス
@@ -416,7 +419,6 @@ async def on_message(message):
             msg = f"Transformed into **{dname}**!" if lang=="en" else f"**{dname}** に変身したわ♪ どう？似合う？"
             await send_myu(message, user_id, msg)
         else:
-            # Safel (Sephalia/Saphir) の特例処理
             if "サフェル" in t_text:
                 fk = "safel" 
                 if user_id not in USER_FORM_HISTORY: USER_FORM_HISTORY[user_id] = []
@@ -787,6 +789,7 @@ async def on_message(message):
         await send_myu(message, user_id, msg)
         return
 
+    # 二つ名UI
     if any(k in content_body_lower for k in TITLE_KEYWORDS):
         waiting_for_title_change.add(user_id)
         
