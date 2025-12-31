@@ -54,7 +54,8 @@ ADMIN_COMMANDS_LIST = (
     "- `じゃんけん勝利数追加 @ユーザー 数値`\n"
     "- `メッセージ制限bypass編集`\n"
     "- `変身解放状況確認`\n"
-    "- `データ移行実行`: 旧データを新形式へ移行"
+    "- `データ移行実行`: 旧データを新形式へ移行\n"
+    "- `全体送信 [メッセージ]`: 全チャンネルにメッセージを送るわ"
 )
 
 GENERAL_COMMANDS_LIST_JP = (
@@ -147,6 +148,38 @@ async def on_message(message):
     ACHIEVE_KEYWORDS = ["実績", "achievement", "進捗", "progress"]
     TITLE_KEYWORDS = ["二つ名", "change title"]
 
+    # --- ★ 全チャンネル送信 (管理者限定) ---
+    if content_body.startswith("全体送信"):
+        # 管理者権限チェック
+        if not db.is_admin(user_id):
+            await send_myu(message, user_id, "そのコマンドは管理者専用よ。")
+            return
+
+        # 送信するメッセージを取り出す
+        broadcast_msg = content_body.replace("全体送信", "", 1).strip()
+        if not broadcast_msg:
+            await send_myu(message, user_id, "送るメッセージが空っぽよ？\n`全体送信 こんにちは` のように入力してね。")
+            return
+
+        # 送信処理開始
+        sent_count = 0
+        error_count = 0
+        
+        # サーバー内の全テキストチャンネルをループ
+        for channel in message.guild.text_channels:
+            # Botがそのチャンネルで「メッセージを送信する権限」を持っているか確認
+            perms = channel.permissions_for(message.guild.me)
+            if perms.send_messages and perms.view_channel:
+                try:
+                    await channel.send(broadcast_msg)
+                    sent_count += 1
+                except Exception:
+                    error_count += 1
+        
+        # 結果報告
+        await message.channel.send(f"送信完了よ。\n成功: {sent_count} チャンネル\n失敗(権限不足など): {error_count} チャンネル")
+        return
+
     # --- モード/言語切替 ---
     if content_lower == "!mode auto":
         db.set_reply_mode(user_id, "auto")
@@ -194,6 +227,39 @@ async def on_message(message):
     # 隠しコマンド
     if content_body in ["死ぬ", "しぬ", "死にます", "しにます"]:
         await message.channel.send(f"# {message.author.mention} が死ぬらしいわ♪慰めてあげて")
+        return
+    
+    # --- ★ お正月・挨拶の判定 (完全一致リスト) ---
+    EXACT_GREETINGS = [
+        "あけおめ", "あけましておめでとう", "あけおめ", "新年おめでとう",
+        "happy new year", "happy new year!", "あけおめ！", "あけましておめでとう！",
+        "新年おめでとう！", "よろしくね", "よろしくね", "ことよろ", "ことよろ！",
+        "よろしくね！", "おめでとう", "おめでとう！", "2026", "2026年", "2026年!",
+        "2026!", "happy 2026", "happy 2026!", "happy new year 2026",
+        "happy new year 2026!"
+    ]
+    if content_body_lower in EXACT_GREETINGS:
+        await message.channel.send(f"# {message.author.mention} あけましておめでとう♪ 今年もよろしくね！")
+        return
+    
+    # --- ★ お正月・挨拶の判定 (部分一致リスト) ---
+    NEW_YEAR_WORDS = [
+        "あけましておめでとう", 
+        "明けましておめでとう", 
+        "謹賀新年", 
+        "Happy New Year",
+        "ハッピーニューイヤー"
+    ]
+    
+    if any(word in content_body for word in NEW_YEAR_WORDS):
+        # お正月用の特別な返信
+        if lang == "en":
+            reply = "Happy New Year! Let's make this a wonderful year together♪"
+        else:
+            reply = "あけましておめでとうございます♪ 今年もあなたと一緒にいられて嬉しいわ。よろしくね！"
+        
+        await send_myu(message, user_id, f"{message.author.mention} {reply}")
+        logic.add_affection_xp(user_id, 5) # お正月なので少しボーナス
         return
 
     # ★ DM移動機能
@@ -350,6 +416,7 @@ async def on_message(message):
             msg = f"Transformed into **{dname}**!" if lang=="en" else f"**{dname}** に変身したわ♪ どう？似合う？"
             await send_myu(message, user_id, msg)
         else:
+            # Safel (Sephalia/Saphir) の特例処理
             if "サフェル" in t_text:
                 fk = "safel" 
                 if user_id not in USER_FORM_HISTORY: USER_FORM_HISTORY[user_id] = []
@@ -361,7 +428,7 @@ async def on_message(message):
                 await send_myu(message, user_id, msg)
         return
     
-    # --- データ管理モード (省略せず) ---
+    # --- データ管理モード処理 (省略せず) ---
     if user_id in admin_data_mode:
         if content_body == "データ管理終了":
             admin_data_mode.discard(user_id)
@@ -720,7 +787,6 @@ async def on_message(message):
         await send_myu(message, user_id, msg)
         return
 
-    # 二つ名UI
     if any(k in content_body_lower for k in TITLE_KEYWORDS):
         waiting_for_title_change.add(user_id)
         
