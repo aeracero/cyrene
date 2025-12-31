@@ -14,7 +14,7 @@ import kimera_game
 # --- Discord Setup ---
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members = True # メンバー検索(PvP招待)用
+intents.members = True
 client = discord.Client(intents=intents)
 
 # --- State ---
@@ -33,7 +33,7 @@ waiting_for_title_change = set()
 FORCE_RPS_WIN_NEXT = set()
 MYURION_QUIZ_STATE = {}
 
-# ★ 変身履歴管理 (一時メモリ)
+# 変身履歴管理
 USER_FORM_HISTORY = {} # {user_id: ["cyrene", "hyacine", ...]}
 
 # --- Help Messages ---
@@ -300,7 +300,10 @@ async def on_message(message):
         return
 
     # --- 特殊コード ---
-    if "skopeo365" in re.sub(r"\s+", "", content_body).lower():
+    # 空白を除去してから判定することで、表記揺れやコピペミスを防ぐ
+    clean_code_check = re.sub(r"\s+", "", content_body).lower()
+    
+    if "skopeo365" in clean_code_check:
         if has_danheng_stage1(user_id) and not is_danheng_unlocked(user_id):
             set_danheng_unlocked(user_id, True)
             
@@ -338,7 +341,7 @@ async def on_message(message):
         fk = resolve_form_code(t_text)
         if fk:
             set_user_form(user_id, fk)
-            # 履歴更新
+            # 履歴更新 (最大5件)
             if user_id not in USER_FORM_HISTORY: USER_FORM_HISTORY[user_id] = []
             USER_FORM_HISTORY[user_id].append(fk)
             if len(USER_FORM_HISTORY[user_id]) > 5: USER_FORM_HISTORY[user_id].pop(0)
@@ -347,7 +350,6 @@ async def on_message(message):
             msg = f"Transformed into **{dname}**!" if lang=="en" else f"**{dname}** に変身したわ♪ どう？似合う？"
             await send_myu(message, user_id, msg)
         else:
-            # Safel (Sephalia/Saphir) の特例処理
             if "サフェル" in t_text:
                 fk = "safel" 
                 if user_id not in USER_FORM_HISTORY: USER_FORM_HISTORY[user_id] = []
@@ -359,8 +361,7 @@ async def on_message(message):
                 await send_myu(message, user_id, msg)
         return
     
-    # --- データ管理モード処理 ---
-    # (省略なしだが長いため、既存のまま維持)
+    # --- データ管理モード (省略せず) ---
     if user_id in admin_data_mode:
         if content_body == "データ管理終了":
             admin_data_mode.discard(user_id)
@@ -719,6 +720,7 @@ async def on_message(message):
         await send_myu(message, user_id, msg)
         return
 
+    # 二つ名UI
     if any(k in content_body_lower for k in TITLE_KEYWORDS):
         waiting_for_title_change.add(user_id)
         
@@ -826,45 +828,55 @@ async def on_message(message):
                 except: pass
         return
 
-    # --- 通常会話 ---
+    # --- 通常会話 & 実績判定 ---
     xp, lv = logic.get_user_affection(user_id)
     reply = rs.generate_reply_for_form(current_form, content_body, lv, user_id, name)
     
-    clean_txt = content_body.replace(" ", "")
+    # ★空白をすべて除去して判定 (全角スペース/改行対策)
+    clean_txt = re.sub(r"\s+", "", content_body)
     
-    # ★追加: HC愛 (3つのセリフ全てを言ったら解放)
-    HC_PHRASES = ["記憶は流れ星を待っている", "愛で憎しみを断ちましょう", "壊滅の結末を変えましょう"]
-    for i, phrase in enumerate(HC_PHRASES):
+    # 1. HC愛 (3つのセリフ全てを言ったら解放)
+    HC_PHRASES = [
+        "記憶は流れ星を待っている", 
+        "愛で憎しみを断ちましょう", 
+        "壊滅の結末を変えましょう"
+    ]
+    # 表記揺れ対応マップ
+    phrase_map = {
+        "記憶は流れ星を待っている": 0, "記憶は流れ星を待ってる": 0,
+        "愛で憎しみを断ちましょう": 1,
+        "壊滅の結末を変えましょう": 2, "壊滅の結末を書き換えましょう": 2
+    }
+    
+    for phrase, idx in phrase_map.items():
         if phrase in clean_txt:
-            is_complete = db.mark_hc_love_phrase(user_id, i)
+            is_complete = db.mark_hc_love_phrase(user_id, idx)
             if is_complete:
                 if db.unlock_achievement(user_id, "unlock_love_hc"):
                     reply += "\n\n🏆 実績解除: **【HCへの愛】**\n二つ名獲得: **【キュレネHCを愛する】**"
 
-    # ★追加: 社畜 (ファイノン時に特定のセリフ / 待っている・待ってる 両対応)
+    # 2. 社畜 (ファイノン時 / 待っている・待ってる)
     if current_form == "phainon":
         if "記憶は流れ星を待っている" in clean_txt or "記憶は流れ星を待ってる" in clean_txt:
             if db.unlock_achievement(user_id, "unlock_shachiku"):
                 reply += "\n\n🏆 実績解除: **【終わらない仕事】**\n二つ名獲得: **【社畜の】**"
             
-    # ★追加: 150万ダメージ (ミュリオンON + キュレネ + 履歴[ヒアンシー->サフェル])
+    # 3. 150万ダメージ (ミュリオンON + キュレネ + 履歴[ヒアンシー->サフェル])
     is_myurion = db.get_myurion_state(user_id).get("enabled")
     if is_myurion and current_form == "cyrene":
         hist = USER_FORM_HISTORY.get(user_id, [])
         if len(hist) >= 2 and hist[-1] in ["safel", "castorice"] and hist[-2] == "hyacine":
-            # トリガーはHCのセリフのどれか
-            if any(t in clean_txt for t in HC_PHRASES):
+            # トリガーはHC関連のどれか (書き換えましょう含む)
+            if any(p in clean_txt for p in phrase_map.keys()):
                 if db.unlock_achievement(user_id, "unlock_150m_dmg"):
                     reply += "\n\n🏆 実績解除: **【極大ダメージ】**\n二つ名獲得: **【150万ダメージを与えし】**"
 
     if current_form == "cyrene" and ARAFUE_TRIGGER_LINE in reply:
         mark_danheng_stage1(user_id)
     
-    # 緩和された解放条件: じゃんけん勝利37回以上
-    if "記憶は流れ星を待ってる" in content_body and get_janken_wins(user_id) >= 37 and not is_nanoka_unlocked(user_id):
+    # なのか解放
+    if ("記憶は流れ星を待っている" in clean_txt or "記憶は流れ星を待ってる" in clean_txt) and get_janken_wins(user_id) >= 37 and not is_nanoka_unlocked(user_id):
         set_nanoka_unlocked(user_id, True)
-        
-        # 実績解除処理
         if db.unlock_achievement(user_id, "unlock_nanoka"):
             reply += "\n\n🏆 実績解除: **【可愛いは正義】**\n二つ名獲得: **【なのかなのか？】**"
 
