@@ -26,7 +26,7 @@ def get_user_data(user_id):
             "trainer_level": 1,
             "challenge_stage": 1,
             "titles": [],
-            "dex": {}, # {base_id: "caught" or "seen"}
+            "dex": {},
             "battle_state": None
         }
         starter = create_chimera_instance(random.choice(list(BASE_CHIMERAS.keys())), level=5)
@@ -68,7 +68,6 @@ def register_dex(ud, base_id, caught=False):
 def heal_all_kimeras(ud):
     for c in ud["party"]:
         c["current_hp"] = c["stats"]["max_hp"]
-    # ボックス内も回復しておく
     for c in ud["box"]:
         c["current_hp"] = c["stats"]["max_hp"]
 
@@ -79,7 +78,6 @@ def swap_party_box(ud, party_idx, box_idx):
     return False
 
 def move_party_to_box(ud, party_idx):
-    # 手持ちが1体のときは預けられない
     if len(ud["party"]) <= 1: return False
     if 0 <= party_idx < len(ud["party"]):
         target = ud["party"].pop(party_idx)
@@ -88,14 +86,14 @@ def move_party_to_box(ud, party_idx):
     return False
 
 def move_box_to_party(ud, box_idx):
-    if len(ud["party"]) >= 3: return False # 手持ち最大3
+    if len(ud["party"]) >= 3: return False
     if 0 <= box_idx < len(ud["box"]):
         target = ud["box"].pop(box_idx)
         ud["party"].append(target)
         return True
     return False
 
-# --- アイテム効果 (データ操作のみ) ---
+# --- アイテム効果 (消耗品) ---
 def apply_item_effect_logic(ud, item_key, target_chimera):
     item = ITEMS.get(item_key)
     if not item or ud["items"].get(item_key, 0) <= 0: return "持っていないわ。"
@@ -125,13 +123,90 @@ def apply_item_effect_logic(ud, item_key, target_chimera):
     
     return "使えないわ。"
 
+# --- ★装備ロジック ---
+def equip_item_logic(ud, party_idx, item_key):
+    if not (0 <= party_idx < len(ud["party"])): return "指定したキメラがいないわ。"
+    if ud["items"].get(item_key, 0) <= 0: return "そのアイテムは持っていないわ。"
+    
+    target = ud["party"][party_idx]
+    item_data = ITEMS.get(item_key)
+    
+    # 装備可能かチェック (effect_type が equip_ で始まるもの)
+    if not item_data or not item_data["effect_type"].startswith("equip_"):
+        return "それは装備できないアイテムよ。"
+
+    # 既に持っているアイテムがあれば外してバッグに戻す
+    old_item = target.get("held_item")
+    if old_item:
+        ud["items"][old_item] = ud["items"].get(old_item, 0) + 1
+    
+    # 新しいアイテムをバッグから減らす
+    ud["items"][item_key] -= 1
+    if ud["items"][item_key] <= 0: del ud["items"][item_key]
+    
+    # 装備セット & ステータス再計算
+    target["held_item"] = item_key
+    update_chimera_stats(target)
+    
+    return f"{target['nickname']} に {item_data['name']} を持たせたわ！"
+
+def unequip_item_logic(ud, party_idx):
+    if not (0 <= party_idx < len(ud["party"])): return "指定したキメラがいないわ。"
+    target = ud["party"][party_idx]
+    
+    old_item = target.get("held_item")
+    if not old_item: return "何も持っていないわ。"
+    
+    # バッグに戻す
+    ud["items"][old_item] = ud["items"].get(old_item, 0) + 1
+    target["held_item"] = None
+    
+    # ステータス再計算
+    update_chimera_stats(target)
+    
+    return f"{target['nickname']} から道具を預かったわ。"
+
 # --- キメラ計算 ---
-def calculate_stat(base, level, is_hp=False):
-    val = math.floor((base * 2 * level) / 100)
+def calculate_base_stat(base_val, level, is_hp=False):
+    """装備補正なしの素のステータス計算"""
+    val = math.floor((base_val * 2 * level) / 100)
     if is_hp:
         return int(val * 2.5 + level * 5 + 100)
     else:
         return int(val + 5)
+
+def update_chimera_stats(instance):
+    """レベルと装備に基づいてステータスを最終決定する"""
+    base = BASE_CHIMERAS[instance["base_id"]]
+    bs = base["base_stats"]
+    lv = instance["level"]
+    
+    # 1. 素のステータスを計算
+    s = {
+        "max_hp": calculate_base_stat(bs["hp"], lv, True),
+        "atk": calculate_base_stat(bs["atk"], lv),
+        "def": calculate_base_stat(bs["def"], lv),
+        "spa": calculate_base_stat(bs["spa"], lv),
+        "spd": calculate_base_stat(bs["spd"], lv),
+        "spe": calculate_base_stat(bs["spe"], lv),
+    }
+    
+    # 2. 装備補正を適用
+    held = instance.get("held_item")
+    if held and held in ITEMS:
+        item_data = ITEMS[held]
+        effect = item_data.get("effect_type", "")
+        val = item_data.get("value", 1.0)
+        
+        if effect == "equip_atk":
+            s["atk"] = int(s["atk"] * val)
+        # 必要に応じて他のステータス補正もここに追加可能
+    
+    instance["stats"] = s
+    
+    # HPが最大値を超えていたら修正、0ならそのまま（瀕死）、それ以外なら比率維持などあるが今回は維持
+    if instance["current_hp"] > s["max_hp"]:
+        instance["current_hp"] = s["max_hp"]
 
 def create_chimera_instance(base_id, level=5, nickname=None):
     base = BASE_CHIMERAS.get(base_id)
@@ -144,30 +219,27 @@ def create_chimera_instance(base_id, level=5, nickname=None):
     if not moves: moves = ["tackle"]
     moves = moves[-4:]
 
-    bs = base["base_stats"]
-    stats = {
-        "max_hp": calculate_stat(bs["hp"], level, True),
-        "atk": calculate_stat(bs["atk"], level),
-        "def": calculate_stat(bs["def"], level),
-        "spa": calculate_stat(bs["spa"], level),
-        "spd": calculate_stat(bs["spd"], level),
-        "spe": calculate_stat(bs["spe"], level),
-    }
-    
-    return {
+    # インスタンス作成
+    instance = {
         "id": random.randint(100000, 999999),
         "base_id": base_id,
         "nickname": nickname or base["name"],
         "level": level,
         "xp": 0,
         "next_xp": level * 100,
-        "current_hp": stats["max_hp"],
-        "stats": stats,
+        "current_hp": 0, # update_chimera_statsで設定
+        "stats": {},     # update_chimera_statsで設定
         "moves": moves,
         "held_item": None,
         "friendship": 0,
         "rarity": base.get("rarity", 1)
     }
+    
+    # ステータス計算実行
+    update_chimera_stats(instance)
+    instance["current_hp"] = instance["stats"]["max_hp"]
+    
+    return instance
 
 def get_chimera_display_stats(instance):
     base = BASE_CHIMERAS[instance["base_id"]]
@@ -179,6 +251,7 @@ def get_chimera_display_stats(instance):
     return (
         f"**{instance['nickname']}** (Lv.{instance['level']}) {rarity_star}\n"
         f"種類: {base['name']} / {base['type']}\n"
+        f"特性: {base['ability']} / **持ち物**: {item_txt}\n"
         f"HP: {instance['current_hp']}/{s['max_hp']}\n"
         f"攻:{s['atk']} 防:{s['def']} 特攻:{s['spa']} 特防:{s['spd']} 素:{s['spe']}\n"
         f"技: {moves_txt}\n"
@@ -192,15 +265,12 @@ def level_up_chimera(instance):
     instance["next_xp"] = instance["level"] * 100
     
     base = BASE_CHIMERAS[instance["base_id"]]
-    bs = base["base_stats"]
     
-    instance["stats"]["max_hp"] = calculate_stat(bs["hp"], instance["level"], True)
-    instance["stats"]["atk"] = calculate_stat(bs["atk"], instance["level"])
-    instance["stats"]["def"] = calculate_stat(bs["def"], instance["level"])
-    instance["stats"]["spa"] = calculate_stat(bs["spa"], instance["level"])
-    instance["stats"]["spd"] = calculate_stat(bs["spd"], instance["level"])
-    instance["stats"]["spe"] = calculate_stat(bs["spe"], instance["level"])
-    instance["current_hp"] = instance["stats"]["max_hp"] # 全快
+    # ★ステータス再計算 (装備補正込み)
+    update_chimera_stats(instance)
+    
+    # レベルアップ回復
+    instance["current_hp"] = instance["stats"]["max_hp"]
     
     msg = f"**{instance['nickname']}** は Lv.{instance['level']} になった！"
     
