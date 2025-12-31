@@ -37,14 +37,12 @@ ACHIEVEMENTS = {
         "title_jp": "勝負師", "title_en": "Gambler",
         "type": "rps_win", "threshold": 50
     },
-    # キメラチャレンジ制覇 (手動解除のまま)
     "kimera_champion": {
         "name_jp": "キメラチャンピオン", "name_en": "Kimera Champion",
         "desc_jp": "チャレンジモードを完全制覇する", "desc_en": "Complete Challenge Mode",
         "title_jp": "ポ◯モンマスターの", "title_en": "Po*emon Master",
         "type": "manual", "threshold": 1
     },
-    # ★修正: 自動チェック用にタイプを変更
     "unlock_nanoka": {
         "name_jp": "可愛いは正義", "name_en": "Cute is Justice",
         "desc_jp": "三月なのかの姿を解放する", "desc_en": "Unlock March 7th form",
@@ -56,6 +54,27 @@ ACHIEVEMENTS = {
         "desc_jp": "丹恒の姿を解放する", "desc_en": "Unlock Dan Heng form",
         "title_jp": "皆を護りし者", "title_en": "The Guardian",
         "type": "danheng_flag", "threshold": 1
+    },
+    # ★追加: キュレネHC愛
+    "unlock_love_hc": {
+        "name_jp": "HCへの愛", "name_en": "Love for HC",
+        "desc_jp": "特定の言葉を紡ぐ", "desc_en": "Speak the keywords",
+        "title_jp": "キュレネHCを愛する", "title_en": "Loving Cyrene HC",
+        "type": "manual", "threshold": 1
+    },
+    # ★追加: 150万ダメージ
+    "unlock_150m_dmg": {
+        "name_jp": "極大ダメージ", "name_en": "Massive Damage",
+        "desc_jp": "特定の変身手順を経て言葉を紡ぐ", "desc_en": "Complex transformation sequence",
+        "title_jp": "150万ダメージを与えし", "title_en": "Dealt 1.5M Damage",
+        "type": "manual", "threshold": 1
+    },
+    # ★追加: 社畜
+    "unlock_shachiku": {
+        "name_jp": "終わらない仕事", "name_en": "Endless Work",
+        "desc_jp": "ファイノンの姿で特定の言葉を紡ぐ", "desc_en": "Speak keyword as Phainon",
+        "title_jp": "社畜の", "title_en": "Corporate Slave's",
+        "type": "manual", "threshold": 1
     },
 }
 
@@ -75,7 +94,6 @@ def check_all_achievements(user_id: int) -> list[str]:
     cyrene_copies = gacha_state.get("cyrene_copies", 0)
     rps_wins = get_janken_wins(user_id)
     
-    # 現在のステータスを辞書化
     current_values = {
         "affection": aff_lv,
         "xp": aff_xp,
@@ -91,7 +109,7 @@ def check_all_achievements(user_id: int) -> list[str]:
     for ach_id, data in ACHIEVEMENTS.items():
         if ach_id in unlocked_ids: continue
         
-        # manualタイプはここでは自動判定しない（ゲーム側でunlock_achievementを呼ぶ）
+        # manualタイプはここでは自動判定しない
         if data["type"] == "manual": continue
             
         req_type = data["type"]
@@ -161,7 +179,7 @@ def format_achievement_progress(user_id: int) -> str:
         else:
             check = "🔒"
             if data["type"] == "manual":
-                status = "(???)" # 隠し条件など
+                status = "(???)"
             else:
                 curr = vals.get(data["type"], 0)
                 status = f"({curr}/{req})"
@@ -181,7 +199,6 @@ def format_achievement_progress(user_id: int) -> str:
 
 # --- 好感度ロジック ---
 def get_level_from_xp(xp: int, cfg: dict) -> int:
-    # 閾値固定
     thresholds = [0, 1000, 2000, 3500, 7000, 10000]
     current_level = 1
     for i, th in enumerate(thresholds):
@@ -244,7 +261,6 @@ def format_all_affection_status(guild) -> str:
 def get_affection_status_message(user_id: int) -> str:
     lang = db.get_user_lang(user_id)
     xp, level = get_user_affection(user_id)
-    
     thresholds = [0, 1000, 2000, 3500, 7000, 10000]
     
     if level < len(thresholds):

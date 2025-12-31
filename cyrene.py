@@ -33,6 +33,9 @@ waiting_for_title_change = set()
 FORCE_RPS_WIN_NEXT = set()
 MYURION_QUIZ_STATE = {}
 
+# ★追加: 変身履歴管理 (一時メモリ)
+USER_FORM_HISTORY = {} # {user_id: ["cyrene", "hyacine", ...]}
+
 # --- Help Messages ---
 ADMIN_COMMANDS_LIST = (
     "【データ管理モードよ♪】\n"
@@ -331,15 +334,32 @@ async def on_message(message):
             else:
                 await send_myu(message, user_id, "Locked." if lang=="en" else "鍵が足りないみたい。")
             return
+        
+        # ★修正: 変身処理と履歴更新
         fk = resolve_form_code(t_text)
         if fk:
             set_user_form(user_id, fk)
+            
+            # 履歴更新
+            if user_id not in USER_FORM_HISTORY: USER_FORM_HISTORY[user_id] = []
+            USER_FORM_HISTORY[user_id].append(fk)
+            if len(USER_FORM_HISTORY[user_id]) > 5: USER_FORM_HISTORY[user_id].pop(0) # 最新5件
+            
             dname = get_form_display_name(fk)
             msg = f"Transformed into **{dname}**!" if lang=="en" else f"**{dname}** に変身したわ♪ どう？似合う？"
             await send_myu(message, user_id, msg)
         else:
-            msg = "Unknown code. Try again?" if lang=="en" else "そのコードは知らないみたい…。もう一度確認してくれる？"
-            await send_myu(message, user_id, msg)
+            # Safel (Sephalia/Saphir) の特例処理 (コードがsafelと仮定)
+            if "サフェル" in t_text:
+                fk = "safel" # 仮のコード
+                # ユーザーフォーム設定自体は失敗するかもしれないが、履歴には残す
+                if user_id not in USER_FORM_HISTORY: USER_FORM_HISTORY[user_id] = []
+                USER_FORM_HISTORY[user_id].append(fk)
+                msg = "Transformed into Safel...?" if lang=="en" else "サフェル…？ 特別な姿ね♪"
+                await send_myu(message, user_id, msg)
+            else:
+                msg = "Unknown code. Try again?" if lang=="en" else "そのコードは知らないみたい…。もう一度確認してくれる？"
+                await send_myu(message, user_id, msg)
         return
     
     # --- データ管理モード処理 ---
@@ -701,7 +721,6 @@ async def on_message(message):
         await send_myu(message, user_id, msg)
         return
 
-    # ★修正: 二つ名コマンドのUI改善
     if any(k in content_body_lower for k in TITLE_KEYWORDS):
         waiting_for_title_change.add(user_id)
         
@@ -813,6 +832,31 @@ async def on_message(message):
     xp, lv = logic.get_user_affection(user_id)
     reply = rs.generate_reply_for_form(current_form, content_body, lv, user_id, name)
     
+    # ★追加: トリガー判定ロジック
+    TRIGGERS = ["記憶は流れ星を待っている", "愛で憎しみを断ちましょう", "壊滅の結末を変えましょう"]
+    clean_txt = content_body.replace(" ", "")
+    
+    # 1. HC愛
+    if any(t in clean_txt for t in TRIGGERS):
+        if db.unlock_achievement(user_id, "unlock_love_hc"):
+            reply += "\n\n🏆 実績解除: **【HCへの愛】**\n二つ名獲得: **【キュレネHCを愛する】**"
+            
+    # 2. 社畜
+    if current_form == "phainon" and "記憶は流れ星を待っている" in clean_txt:
+        if db.unlock_achievement(user_id, "unlock_shachiku"):
+            reply += "\n\n🏆 実績解除: **【終わらない仕事】**\n二つ名獲得: **【社畜の】**"
+            
+    # 3. 150万ダメージ (ミュリオンON + キュレネ + 履歴[ヒアンシー->サフェル])
+    is_myurion = db.get_myurion_state(user_id).get("enabled")
+    if is_myurion and current_form == "cyrene":
+        hist = USER_FORM_HISTORY.get(user_id, [])
+        # 履歴の最後が safel(castorice), その前が hyacine か確認
+        # 最新履歴は今のcyreneの前なので、hist[-1]がsafel
+        if len(hist) >= 2 and hist[-1] in ["safel", "castorice"] and hist[-2] == "hyacine":
+            if any(t in clean_txt for t in TRIGGERS):
+                if db.unlock_achievement(user_id, "unlock_150m_dmg"):
+                    reply += "\n\n🏆 実績解除: **【極大ダメージ】**\n二つ名獲得: **【150万ダメージを与えし】**"
+
     if current_form == "cyrene" and ARAFUE_TRIGGER_LINE in reply:
         mark_danheng_stage1(user_id)
     
