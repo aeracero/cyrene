@@ -239,30 +239,15 @@ async def on_message(message):
         "新年おめでとう！", "よろしくね", "よろしくね", "ことよろ", "ことよろ！",
         "よろしくね！", "おめでとう", "おめでとう！", "2026", "2026年", "2026年!",
         "2026!", "happy 2026", "happy 2026!", "happy new year 2026",
-        "happy new year 2026!"
+        "happy new year 2026!","明けましておめでとうございます","明けましておめでとうございます！","明けおめ",
+        "明けおめ！","新年おめでとうございます","新年おめでとうございます！","今年もよろしくお願いします","今年もよろしくお願いします！","今年もよろしくね","今年もよろしくね！",
+        "あけおめことよろ","あけおめことよろ！","あけましておめでとうございます、今年もよろしくお願いします","あけましておめでとうございます、今年もよろしくお願いします！",
+        "happy new year 2026, happy 2026", "happy new year 2026, happy 2026!","明","今年","新年","お正月","謹賀新年","謹賀新年！","賀正","賀正！","迎春","迎春！",
+        "迎春2026","迎春2026！","謹賀新年2026","謹賀新年2026！","新年明けましておめでとうございます","新年明けましておめでとうございます！","新年あけましておめでとうございます","新年あけましておめでとうございます！",
+        "新年あけおめ","新年あけおめ！","新年あけおめことよろ","新年あけおめことよろ！","happy new year 2026, wishing you the best!"
     ]
     if content_body_lower in EXACT_GREETINGS:
         await message.channel.send(f"# {message.author.mention} あけましておめでとう♪ 今年もよろしくね！")
-        return
-    
-    # --- ★ お正月・挨拶の判定 (部分一致リスト) ---
-    NEW_YEAR_WORDS = [
-        "あけましておめでとう", 
-        "明けましておめでとう", 
-        "謹賀新年", 
-        "Happy New Year",
-        "ハッピーニューイヤー"
-    ]
-    
-    if any(word in content_body for word in NEW_YEAR_WORDS):
-        # お正月用の特別な返信
-        if lang == "en":
-            reply = "# Happy New Year! Let's make this a wonderful year together♪"
-        else:
-            reply = "# あけましておめでとう♪ 今年もあなたと一緒にいられて嬉しいわ。よろしくね！"
-        
-        await send_myu(message, user_id, f"{message.author.mention} {reply}")
-        logic.add_affection_xp(user_id, 5) # お正月なので少しボーナス
         return
 
     # ★ DM移動機能
