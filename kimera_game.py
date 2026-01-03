@@ -57,7 +57,6 @@ def handle_menu(user_id, content):
 
     # --- ★デバッグ機能 ---
     if content == "デバッグ解放":
-        # ノーマルデータのアイテムに証を追加
         normal_ud = core.get_user_data(user_id, hard_mode=False)
         normal_ud["items"]["story_page_2"] = 1
         core.save_user_data(user_id, normal_ud, hard_mode=False)
@@ -91,11 +90,9 @@ def handle_menu(user_id, content):
         if is_hard:
             return "既に修羅の道（ハードモード）にいるわ。心して挑みなさい。", []
         
-        # ノーマルデータのクリア証を確認（現在のモードに関わらずノーマルを読む）
         normal_ud = core.get_user_data(user_id, hard_mode=False)
         if "story_page_2" in normal_ud["items"]:
             session["is_hard_mode"] = True
-            # ハードデータをロード（なければ作成）
             core.get_user_data(user_id, hard_mode=True)
             return (
                 "【警告: 真なるキメラマスターロード解放】\n\n"
@@ -114,11 +111,11 @@ def handle_menu(user_id, content):
         return "今はノーマルモードよ。", []
 
     # --- バトル選択画面へ（ショートカット含む） ---
-    # 全角数字の正規化
+    # 全角数字を半角に変換
     norm_content = content.translate(str.maketrans({chr(0xFF10 + i): chr(0x30 + i) for i in range(10)}))
 
+    # ショートカット判定 ("3" や "チャレンジ" が含まれていれば直接遷移)
     if "バトル" in content or "チャレンジ" in content or "3" in norm_content:
-        # ショートカットで来た場合も考慮し、ここで遷移
         session["state"] = STATE_BATTLE_SELECT
         
         # もし「チャレンジ」や「3」が含まれていたら即座にバトル選択処理へ回す
@@ -126,10 +123,9 @@ def handle_menu(user_id, content):
              return handle_battle_select(user_id, content)
 
         # 通常の「バトル」コマンド時の表示
-        # 画面切り替え時に再度データをロードして最新状態を確認
         ud = core.get_user_data(user_id, hard_mode=is_hard)
-        
         mode_text = "【真・キメラマスターロード】" if is_hard else "チャレンジモード"
+        
         msg = (
             "どこに行く？\n"
             "1. **確保ゾーン** (野生捕獲)\n"
@@ -138,7 +134,6 @@ def handle_menu(user_id, content):
             "4. **対戦ゾーン** (PvP)"
         )
         
-        # ヒント表示 (ノーマルモードかつクリア証持ちの場合)
         if not is_hard:
             normal_ud = core.get_user_data(user_id, hard_mode=False)
             if "story_page_2" in normal_ud["items"]:
@@ -158,10 +153,8 @@ def handle_menu(user_id, content):
         msg = f"【トレーナー】Lv.{ud['trainer_level']} (Exp:{ud['trainer_xp']}) / {ud['money']}G\n"
         if is_hard:
             msg += "★ 現在『ハードモード』データ参照中 ★\n"
-        
         if not ud['party']:
             return msg + "キメラなし。", []
-        
         chimera = ud['party'][0]
         return f"{msg}【先頭】\n{core.get_chimera_display_stats(chimera)}", []
 
@@ -181,7 +174,6 @@ def handle_menu(user_id, content):
 
     # --- 図鑑機能 (強化版) ---
     if "図鑑" in content:
-        # 個別検索: "図鑑 ウルフパピー" のように入力された場合
         m_search = re.search(r"図鑑\s+(.+)", content)
         if m_search:
             target_name = m_search.group(1).strip()
@@ -200,7 +192,6 @@ def handle_menu(user_id, content):
             
             base = core.BASE_CHIMERAS[found_key]
             
-            # --- 発見のみの場合 ---
             if status == "seen":
                 return (
                     f"━━━━━━━━━━━━━━━\n"
@@ -211,7 +202,6 @@ def handle_menu(user_id, content):
                     f"━━━━━━━━━━━━━━━"
                 ), []
             
-            # --- 捕獲済み (詳細表示) ---
             elif status == "caught":
                 rarity = "★" * base.get('rarity', 1)
                 bs = base['base_stats']
@@ -240,7 +230,6 @@ def handle_menu(user_id, content):
                 )
                 return msg, []
 
-        # --- 一覧表示 (デフォルト) ---
         total = len(core.BASE_CHIMERAS)
         caught = sum(1 for v in ud["dex"].values() if v == "caught")
         seen = len(ud["dex"])
@@ -253,16 +242,15 @@ def handle_menu(user_id, content):
             status = ud["dex"].get(k)
             
             if status == "caught":
-                mark = "★" # 捕獲済み
+                mark = "★" 
                 display_name = base['name']
             elif status == "seen":
-                mark = "○" # 発見済み
+                mark = "○" 
                 display_name = base['name']
             else:
-                mark = "・" # 未発見
+                mark = "・" 
                 display_name = "？？？"
             
-            # 捕獲済みならレア度を表示
             rarity_disp = f"({'★'*base['rarity']})" if status == "caught" else ""
             lines.append(f"{mark} {display_name} {rarity_disp}")
         
@@ -288,7 +276,6 @@ def handle_menu(user_id, content):
             core.save_user_data(user_id, ud, hard_mode=is_hard)
             return res, []
 
-    # 通常メニュー表示
     return (
         "【キメラメニュー】\n"
         "・**バトル**: 野生/CPU/対戦\n"
@@ -450,7 +437,7 @@ def handle_battle_select(user_id, content):
     ud = core.get_user_data(user_id, hard_mode=is_hard)
     tlv = ud["trainer_level"]
     
-    # ★全角数字の正規化（3や３に対応）
+    # 全角数字の正規化（3や３に対応）
     content = content.translate(str.maketrans({chr(0xFF10 + i): chr(0x30 + i) for i in range(10)}))
 
     if "確保" in content or "1" in content:
@@ -496,7 +483,7 @@ def handle_battle_select(user_id, content):
     if "チャレンジ" in content or "3" in content:
         stage = ud.get("challenge_stage", 1)
         
-        # ★周回プレイ: ステージが13を超えている（クリア済み）場合、1に戻して保存
+        # ステージが13を超えている（クリア済み）場合、1に戻して周回プレイ
         if stage > 13:
             stage = 1
             ud["challenge_stage"] = 1
@@ -506,7 +493,8 @@ def handle_battle_select(user_id, content):
         
         # 該当ステージのデータ取得
         t_data = trainer_source.get(stage)
-        if not t_data: return "準備中よ。", []
+        if not t_data:
+            return "準備中よ。", []
         
         enemy_party = []
         for p in t_data["party"]:
@@ -525,7 +513,9 @@ def handle_battle_select(user_id, content):
             "potions": t_data.get("potions", 0) # ハードモード用
         }
         
+        # セリフデータが取得できない場合のフォールバック
         start_msg = t_data.get("dialogue_start", "勝負よ！")
+        
         first = enemy_party[0]
         return (
             f"【チャレンジモード Stage {stage}】\n"
@@ -719,7 +709,10 @@ def _resolve_pve_win(user_id, session, ud):
         trainer_source = core.CHALLENGE_TRAINERS_HARD if is_hard else core.CHALLENGE_TRAINERS
         t_data = trainer_source[st]
         
-        msg += f"\n**{t_data['name']}**: 「{t_data.get('dialogue_win', '見事だ…')}」\n"
+        # セリフデータフォールバック
+        win_msg = t_data.get("dialogue_win", "見事だ…")
+        msg += f"\n**{t_data['name']}**: 「{win_msg}」\n"
+        
         ud["challenge_stage"] = st + 1
         base_money = st * 5000
         trainer_xp = st * 1000
