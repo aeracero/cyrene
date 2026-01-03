@@ -101,7 +101,6 @@ def handle_menu(user_id, content):
             # ハードデータをロード（なければ作成）
             core.get_user_data(user_id, hard_mode=True)
             return (
-                "\n"
                 "【警告: 真なるキメラマスターロード解放】\n\n"
                 "世界が反転し、黄金裔たちの真の力が解放されたわ……。\n"
                 "これより『ハードモード』のセーブデータに切り替わるわ。\n"
@@ -157,8 +156,7 @@ def handle_menu(user_id, content):
             return msg + "キメラなし。", []
         
         chimera = ud['party'][0]
-        base_name = core.BASE_CHIMERAS[chimera['base_id']]['name']
-        return f"\n{msg}【先頭】\n{core.get_chimera_display_stats(chimera)}", []
+        return f"{msg}【先頭】\n{core.get_chimera_display_stats(chimera)}", []
 
     if "ショップ" in content:
         session["state"] = STATE_SHOP
@@ -167,7 +165,7 @@ def handle_menu(user_id, content):
         for k, v in core.ITEMS.items():
             if v["price"] > 0 and v.get("unlock_rank", 1) <= tlv:
                 lines.append(f"・**{v['name']}**: {v['price']}G")
-        return f"\n【ショップ】 (所持金: {ud['money']}G / Lv.{tlv})\n" + "\n".join(lines) + "\n\n『〇〇を買う』 / 『戻る』", []
+        return f"【ショップ】 (所持金: {ud['money']}G / Lv.{tlv})\n" + "\n".join(lines) + "\n\n『〇〇を買う』 / 『戻る』", []
 
     if "回復" in content:
         core.heal_all_kimeras(ud)
@@ -198,7 +196,6 @@ def handle_menu(user_id, content):
             # --- 発見のみの場合 ---
             if status == "seen":
                 return (
-                    f"} fantasy creature]\n"
                     f"━━━━━━━━━━━━━━━\n"
                     f"📖 **No.{found_key} {base['name']}**\n"
                     f"━━━━━━━━━━━━━━━\n"
@@ -215,7 +212,6 @@ def handle_menu(user_id, content):
                 total_bs = sum(bs.values())
                 
                 msg = (
-                    f"} fantasy creature]\n"
                     f"━━━━━━━━━━━━━━━\n"
                     f"📖 **No.{found_key} {base['name']}** {rarity}\n"
                     f"━━━━━━━━━━━━━━━\n"
@@ -277,6 +273,7 @@ def handle_menu(user_id, content):
         for k, v in core.ITEMS.items():
             if v["name"] == item_name:
                 item_key = k
+                break
         if item_key:
             if not ud["party"]:
                 return "手持ちがいないわ。", []
@@ -315,7 +312,7 @@ def _get_equip_menu_text(user_id):
             equipable.append(f"{idata['name']}")
             
     msg += "\n【持っている装備品】\n" + (", ".join(equipable) if equipable else "(なし)")
-    msg += "\n\n『1にちからのハチマキを持たせる』\n『2を外す』\n『戻る』"
+    msg += "\n\n『1にハチマキを持たせる』\n『2を外す』\n『戻る』"
     return msg
 
 def handle_equip_menu(user_id, content):
@@ -352,7 +349,7 @@ def handle_equip_menu(user_id, content):
         core.save_user_data(user_id, ud, hard_mode=is_hard)
         return res + "\n" + _get_equip_menu_text(user_id), []
 
-    return "『1にハチマキを持たせる』『1を外す』のように言ってね。", []
+    return "『1にハチマキを持たせる』のように言ってね。", []
 
 # --- ボックス操作 ---
 def _get_box_menu_text(user_id):
@@ -460,7 +457,6 @@ def handle_battle_select(user_id, content):
         wild_base = random.choice(candidates)
         w_lv = max(1, tlv + random.randint(-1, 3))
         wild = core.create_chimera_instance(wild_base, level=w_lv)
-        wild_name = core.BASE_CHIMERAS[wild['base_id']]['name']
         
         session["state"] = STATE_BATTLE_WILD
         session["context"] = {
@@ -472,7 +468,7 @@ def handle_battle_select(user_id, content):
         core.save_user_data(user_id, ud, hard_mode=is_hard)
         
         rarity_star = "★" * wild.get("rarity", 1)
-        return f"\n野生の **{wild['nickname']}** (Lv.{wild['level']}) {rarity_star} が飛び出してきた！\nどうする？ 『戦う』『道具』『入れ替え』『逃げる』", []
+        return f"野生の **{wild['nickname']}** (Lv.{wild['level']}) {rarity_star} が飛び出してきた！\n『戦う』『道具』『入れ替え』『逃げる』", []
 
     if "レベル上げ" in content or "2" in content:
         cpu_base = random.choice(list(core.BASE_CHIMERAS.keys()))
@@ -486,7 +482,7 @@ def handle_battle_select(user_id, content):
         }
         core.register_dex(ud, cpu_c["base_id"], caught=False)
         core.save_user_data(user_id, ud, hard_mode=is_hard)
-        return f"\n黄金裔の幻影が現れた！ **{cpu_c['nickname']}** (Lv.{cpu_c['level']} HP:{cpu_c['current_hp']}) を繰り出してきた！", []
+        return f"黄金裔の幻影が現れた！ **{cpu_c['nickname']}** (Lv.{cpu_c['level']} HP:{cpu_c['current_hp']}) を繰り出してきた！", []
 
     if "チャレンジ" in content or "3" in content:
         stage = ud.get("challenge_stage", 1)
@@ -524,7 +520,6 @@ def handle_battle_select(user_id, content):
         start_msg = t_data.get("dialogue_start", "勝負よ！")
         first = enemy_party[0]
         return (
-            f"} character]\n"
             f"【チャレンジモード Stage {stage}】\n"
             f"**{t_data['name']}**: 「{start_msg}」\n"
             f"相手は **{first['nickname']}** (Lv.{first['level']} HP:{first['current_hp']}) を繰り出してきた！"
@@ -752,7 +747,7 @@ def _resolve_pve_win(user_id, session, ud):
     msg += "\n(好感度XP +50)"
     
     end_session(user_id)
-    return f"\n{msg}\nメニューに戻るわね。", []
+    return f"{msg}\nメニューに戻るわね。", []
 
 # --- 共通ヘルパー ---
 def _generate_party_list(ud):
@@ -894,8 +889,7 @@ def handle_pvp_action(user_id, content):
     return "...", []
 
 def _check_pvp_turn_ready(battle):
-    p1, p2 = battle["p1"], battle["p2"]
-    if p1 in battle["actions"] and p2 in battle["actions"]:
+    if battle["p1"] in battle["actions"] and battle["p2"] in battle["actions"]:
         return _resolve_pvp_turn(battle)
     else:
         return "入力を受け付けたわ。相手を待っているわね。", []
@@ -960,8 +954,7 @@ def _resolve_pvp_turn(battle):
         _end_pvp(battle)
         winner = p2 if loser == p1 else p1
         msg = f"{full_log}\n\n勝負あり！ <@{winner}> の勝利よ！"
-        KIMERA_SESSIONS[p1]["state"] = STATE_MENU
-        KIMERA_SESSIONS[p2]["state"] = STATE_MENU
+        KIMERA_SESSIONS[p1]["state"] = STATE_MENU; KIMERA_SESSIONS[p2]["state"] = STATE_MENU
         KIMERA_SESSIONS[p1]["context"]["sub_state"] = BATTLE_SUB_MAIN
         KIMERA_SESSIONS[p2]["context"]["sub_state"] = BATTLE_SUB_MAIN
         return "", [(p1, msg), (p2, msg)]
@@ -978,8 +971,7 @@ def _resolve_pvp_end(battle, loser_id):
     winner_id = p2 if loser_id == p1 else p1
     _end_pvp(battle)
     msg = f"<@{loser_id}> が降参したわ。\n<@{winner_id}> の勝利よ！"
-    KIMERA_SESSIONS[p1]["state"] = STATE_MENU
-    KIMERA_SESSIONS[p2]["state"] = STATE_MENU
+    KIMERA_SESSIONS[p1]["state"] = STATE_MENU; KIMERA_SESSIONS[p2]["state"] = STATE_MENU
     return "", [(p1, msg), (p2, msg)]
 
 def _end_pvp(battle):
