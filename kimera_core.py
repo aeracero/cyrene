@@ -4,19 +4,27 @@ import math
 from pathlib import Path
 from kimera_data import BASE_CHIMERAS, MOVES, ITEMS
 
+# データ保存ディレクトリ
 DATA_DIR = Path("/data")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-# --- データ管理 ---
+# --- データ管理 (セーブデータ分離対応) ---
 
 def _get_user_file_path(user_id, hard_mode=False):
+    """モードに応じたファイルパスを返す"""
     suffix = "_hard" if hard_mode else ""
     return DATA_DIR / f"kimera_user_{user_id}{suffix}.json"
 
 def get_user_data(user_id, hard_mode=False):
+    """
+    ユーザーデータを取得する。
+    hard_mode=True の場合はハードモード用の別ファイルを読み込む。
+    """
     file_path = _get_user_file_path(user_id, hard_mode)
     
+    # 新規作成（ファイルがない場合）
     if not file_path.exists():
+        # 初期データ
         initial_data = {
             "party": [],
             "box": [],
@@ -28,32 +36,37 @@ def get_user_data(user_id, hard_mode=False):
             "titles": [],
             "dex": {},
             "battle_state": None,
-            "is_hard_mode": hard_mode
+            "is_hard_mode": hard_mode # フラグとしても保持
         }
-        # ハードモードは少し強い状態でスタートできないと詰む
+        
+        # 最初の1体（ハードモードなら少しレベル高め）
         starter_lv = 5 if not hard_mode else 10
-        starter = create_chimera_instance(random.choice(list(BASE_CHIMERAS.keys())), level=starter_lv)
+        starter_base = random.choice(list(BASE_CHIMERAS.keys()))
+        starter = create_chimera_instance(starter_base, level=starter_lv)
+        
         initial_data["party"].append(starter)
         register_dex(initial_data, starter["base_id"], caught=True)
+        
         save_user_data(user_id, initial_data, hard_mode)
         return initial_data
 
     try:
         data = json.loads(file_path.read_text(encoding="utf-8"))
-        # マイグレーション
+        # 簡易マイグレーション（キー不足対策）
         if "items" not in data: data["items"] = {}
         if "money" not in data: data["money"] = 1000
         if "box" not in data: data["box"] = []
         if "trainer_level" not in data: data["trainer_level"] = 1
-        if "trainer_xp" not in data: data["trainer_xp"] = 0
         if "challenge_stage" not in data: data["challenge_stage"] = 1
         if "dex" not in data: data["dex"] = {}
-        data["is_hard_mode"] = hard_mode # フラグ補完
+        data["is_hard_mode"] = hard_mode
         return data
     except Exception:
-        return {"party": [], "box": [], "items": {}, "money": 0, "dex": {}, "is_hard_mode": hard_mode}
+        # 読み込みエラー時は初期化（再帰）
+        return get_user_data(user_id, hard_mode)
 
 def save_user_data(user_id, user_data, hard_mode=False):
+    """モードに応じたファイルに保存する"""
     file_path = _get_user_file_path(user_id, hard_mode)
     file_path.write_text(json.dumps(user_data, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -114,8 +127,9 @@ def apply_item_effect_logic(ud, item_key, target_chimera):
         consumed = True
 
     elif item["effect_type"] == "exp":
-        if target_chimera["level"] >= 100 and not ud.get("is_hard_mode", False): return "レベルMAXよ。" # ハードは上限突破可
-        if target_chimera["level"] >= 200: return "これ以上は育たないわ。"
+        # レベル上限: ノーマル100, ハード200
+        limit = 200 if ud.get("is_hard_mode") else 100
+        if target_chimera["level"] >= limit: return "これ以上は育たないわ。"
 
         target_chimera["xp"] += item["value"]
         msg = f"{target_chimera['nickname']} に経験値 {item['value']} をあげた！"
@@ -164,9 +178,6 @@ def unequip_item_logic(ud, party_idx):
     old_item = target.get("held_item")
     if not old_item: return "何も持っていないわ。"
     
-    # HP装備を外す場合、最大HPが下がるので現在HPも調整
-    item_data = ITEMS.get(old_item)
-    
     ud["items"][old_item] = ud["items"].get(old_item, 0) + 1
     target["held_item"] = None
     
@@ -202,16 +213,14 @@ def update_chimera_stats(instance):
         "spe": calculate_base_stat(bs["spe"], lv),
     }
     
-    # 2. 装備補正・特性補正(静的)
-    held = instance.get("held_item")
-    
-    # 特性: 闘争心(攻撃UP), 大地獣(防御UP), 水流/ロケット/盗みの天才(素早さUP), 最愛(全UP)
+    # 2. 装備・特性補正
     if ability == "闘争心": s["atk"] = int(s["atk"] * 1.1)
     if ability == "大地獣": s["def"] = int(s["def"] * 1.1)
     if ability in ["水流", "ロケット", "盗みの天才"]: s["spe"] = int(s["spe"] * 1.1)
     if ability == "最愛":
          for k in s: s[k] = int(s[k] * 1.1)
 
+    held = instance.get("held_item")
     if held and held in ITEMS:
         item_data = ITEMS[held]
         effect = item_data.get("effect_type", "")
@@ -273,7 +282,6 @@ def get_chimera_display_stats(instance):
     )
 
 def level_up_chimera(instance, is_hard_mode=False):
-    # レベル上限: ノーマル100, ハード200
     limit = 200 if is_hard_mode else 100
     if instance["level"] >= limit: return ""
     
@@ -286,7 +294,6 @@ def level_up_chimera(instance, is_hard_mode=False):
     
     update_chimera_stats(instance)
     
-    # ハードモードではレベルアップ時の全回復なし（割合維持）
     if is_hard_mode:
         instance["current_hp"] = int(instance["stats"]["max_hp"] * old_hp_rate)
         hp_msg = ""
@@ -332,12 +339,9 @@ def check_survival_item(chimera, damage):
     return False
 
 def check_resist_berry(chimera, damage_type):
-    """半減実判定 (簡易実装: 効果抜群なら発動)"""
+    """半減実判定 (簡易実装)"""
     held = chimera.get("held_item")
     if held == "resist_berry":
-        # 本来はタイプ相性計算が必要だが、簡易的にランダムまたは常に発動させるのはバランス崩壊
-        # ここでは「ダメージが最大HPの50%を超える」場合に発動とする
-        if 0 < chimera["current_hp"]:
-             # 後ほどBattle側で判定しやすいよう、ここでは判定のみ
-             pass
+        # 簡易実装のため、常に判定対象として扱う（実際にはタイプ相性が必要）
+        return True 
     return False
