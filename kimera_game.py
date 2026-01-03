@@ -60,6 +60,25 @@ def handle_menu(user_id, content):
         core.save_user_data(user_id, ud)
         return "【デバッグ】クリア証を没収し、ノーマルモードの最初に戻したわ。", []
 
+    if content == "デバッグ実績":
+        try:
+            # データベースから直接ロードして書き換える（database.pyの実装に依存）
+            ach_data = db.load_achievements_data()
+            user_ach = ach_data.get(str(user_id), {"unlocked": [], "stats": {}})
+            
+            if "kimera_champion" in user_ach["unlocked"]:
+                user_ach["unlocked"].remove("kimera_champion")
+                res = "OFF"
+            else:
+                user_ach["unlocked"].append("kimera_champion")
+                res = "ON"
+            
+            ach_data[str(user_id)] = user_ach
+            db.save_achievements_data(ach_data)
+            return f"【デバッグ】実績『キメラチャンピオン』を {res} にしたわ。", []
+        except:
+            return "【エラー】データベースの操作に失敗したわ。database.pyを確認して。", []
+
     # --- バトル選択画面へ ---
     if "バトル" in content:
         session["state"] = STATE_BATTLE_SELECT
@@ -239,7 +258,7 @@ def handle_menu(user_id, content):
     if "ノーマルに戻る" in content:
         if ud.get("is_hard_mode"):
             ud["is_hard_mode"] = False
-            ud["challenge_stage"] = 13 
+            # ★修正: ステージを強制的に変更しない（クリア済みならbattle_selectでループ処理される）
             core.save_user_data(user_id, ud)
             return "平和な世界（ノーマルモード）に戻したわ。", []
         return "今はノーマルモードよ。", []
@@ -437,7 +456,12 @@ def handle_battle_select(user_id, content):
 
     if "チャレンジ" in content or "3" in content:
         stage = ud.get("challenge_stage", 1)
-        if stage > 13: return "チャレンジモードはすべてクリア済みよ！", []
+        
+        # ★修正: ステージが13を超えている（クリア済み）場合、1に戻して周回プレイさせる
+        if stage > 13:
+            stage = 1
+            ud["challenge_stage"] = 1
+            core.save_user_data(user_id, ud)
         
         is_hard = ud.get("is_hard_mode", False)
         trainer_source = core.CHALLENGE_TRAINERS_HARD if is_hard else core.CHALLENGE_TRAINERS
