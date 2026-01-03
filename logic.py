@@ -55,25 +55,29 @@ ACHIEVEMENTS = {
         "title_jp": "皆を護りし者", "title_en": "The Guardian",
         "type": "danheng_flag", "threshold": 1
     },
-    # ★追加: キュレネHC愛
     "unlock_love_hc": {
         "name_jp": "HCへの愛", "name_en": "Love for HC",
         "desc_jp": "特定の言葉を紡ぐ", "desc_en": "Speak the keywords",
         "title_jp": "キュレネHCを愛する", "title_en": "Loving Cyrene HC",
         "type": "manual", "threshold": 1
     },
-    # ★追加: 150万ダメージ
     "unlock_150m_dmg": {
         "name_jp": "極大ダメージ", "name_en": "Massive Damage",
         "desc_jp": "特定の変身手順を経て言葉を紡ぐ", "desc_en": "Complex transformation sequence",
         "title_jp": "150万ダメージを与えし", "title_en": "Dealt 1.5M Damage",
         "type": "manual", "threshold": 1
     },
-    # ★追加: 社畜
     "unlock_shachiku": {
         "name_jp": "終わらない仕事", "name_en": "Endless Work",
         "desc_jp": "ファイノンの姿で特定の言葉を紡ぐ", "desc_en": "Speak keyword as Phainon",
         "title_jp": "社畜の", "title_en": "Corporate Slave's",
+        "type": "manual", "threshold": 1
+    },
+    # ★追加: 真なるキメラマスター
+    "kimera_true_master": {
+        "name_jp": "真なるキメラマスター", "name_en": "True Kimera Master",
+        "desc_jp": "「真なるキメラマスターロード」をクリアする", "desc_en": "Complete True Kimera Master Road",
+        "title_jp": "キメラ遊びを極めし者", "title_en": "Supreme Kimera Master",
         "type": "manual", "threshold": 1
     },
 }
