@@ -33,7 +33,6 @@ def get_session(user_id):
 
 def start_session(user_id):
     # 初期状態は「ノーマルモード」としてセッション開始
-    # ユーザーがハードモード中かどうかは、セッション変数で管理する
     KIMERA_SESSIONS[user_id] = {
         "state": STATE_MENU, 
         "context": {},
@@ -75,14 +74,12 @@ def handle_menu(user_id, content):
         try:
             ach_data = db.load_achievements_data()
             user_ach = ach_data.get(str(user_id), {"unlocked": [], "stats": {}})
-            
             if "kimera_champion" in user_ach["unlocked"]:
                 user_ach["unlocked"].remove("kimera_champion")
                 res = "OFF"
             else:
                 user_ach["unlocked"].append("kimera_champion")
                 res = "ON"
-            
             ach_data[str(user_id)] = user_ach
             db.save_achievements_data(ach_data)
             return f"【デバッグ】実績『キメラチャンピオン』を {res} にしたわ。", []
@@ -94,7 +91,7 @@ def handle_menu(user_id, content):
         if is_hard:
             return "既に修羅の道（ハードモード）にいるわ。心して挑みなさい。", []
         
-        # ノーマルデータのクリア証を確認
+        # ノーマルデータのクリア証を確認（現在のモードに関わらずノーマルを読む）
         normal_ud = core.get_user_data(user_id, hard_mode=False)
         if "story_page_2" in normal_ud["items"]:
             session["is_hard_mode"] = True
@@ -117,8 +114,18 @@ def handle_menu(user_id, content):
         return "今はノーマルモードよ。", []
 
     # --- バトル選択画面へ（ショートカット含む） ---
-    if "バトル" in content or "チャレンジ" in content:
+    # 全角数字の正規化
+    norm_content = content.translate(str.maketrans({chr(0xFF10 + i): chr(0x30 + i) for i in range(10)}))
+
+    if "バトル" in content or "チャレンジ" in content or "3" in norm_content:
+        # ショートカットで来た場合も考慮し、ここで遷移
         session["state"] = STATE_BATTLE_SELECT
+        
+        # もし「チャレンジ」や「3」が含まれていたら即座にバトル選択処理へ回す
+        if "チャレンジ" in content or "3" in norm_content:
+             return handle_battle_select(user_id, content)
+
+        # 通常の「バトル」コマンド時の表示
         # 画面切り替え時に再度データをロードして最新状態を確認
         ud = core.get_user_data(user_id, hard_mode=is_hard)
         
@@ -312,7 +319,7 @@ def _get_equip_menu_text(user_id):
             equipable.append(f"{idata['name']}")
             
     msg += "\n【持っている装備品】\n" + (", ".join(equipable) if equipable else "(なし)")
-    msg += "\n\n『1にハチマキを持たせる』\n『2を外す』\n『戻る』"
+    msg += "\n\n『1にハチマキを持たせる』『2を外す』\n『戻る』"
     return msg
 
 def handle_equip_menu(user_id, content):
@@ -442,6 +449,9 @@ def handle_battle_select(user_id, content):
     is_hard = session.get("is_hard_mode", False)
     ud = core.get_user_data(user_id, hard_mode=is_hard)
     tlv = ud["trainer_level"]
+    
+    # ★全角数字の正規化（3や３に対応）
+    content = content.translate(str.maketrans({chr(0xFF10 + i): chr(0x30 + i) for i in range(10)}))
 
     if "確保" in content or "1" in content:
         rand = random.randint(1, 100)
@@ -449,7 +459,6 @@ def handle_battle_select(user_id, content):
         if rand > 98: target_rarity = 6
         elif rand > 90: target_rarity = 2
         elif rand > 60: target_rarity = 1
-        else: target_rarity = 1 
         
         candidates = [k for k, v in core.BASE_CHIMERAS.items() if v.get("rarity", 1) == target_rarity]
         if not candidates: candidates = [k for k, v in core.BASE_CHIMERAS.items() if v.get("rarity", 1) == 1]
@@ -487,13 +496,12 @@ def handle_battle_select(user_id, content):
     if "チャレンジ" in content or "3" in content:
         stage = ud.get("challenge_stage", 1)
         
-        # ★修正: ステージが13を超えている（クリア済み）場合、1に戻して周回プレイさせる
+        # ★周回プレイ: ステージが13を超えている（クリア済み）場合、1に戻して保存
         if stage > 13:
             stage = 1
             ud["challenge_stage"] = 1
             core.save_user_data(user_id, ud, hard_mode=is_hard)
         
-        is_hard = ud.get("is_hard_mode", False)
         trainer_source = core.CHALLENGE_TRAINERS_HARD if is_hard else core.CHALLENGE_TRAINERS
         
         # 該当ステージのデータ取得
