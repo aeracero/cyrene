@@ -3,7 +3,7 @@ import re
 import kimera_core as core
 import database as db
 import logic
-import kimera_data as data # dataモジュールとしてインポート
+import kimera_data as data
 
 # --- 状態定義 ---
 STATE_MENU = "menu"
@@ -93,28 +93,72 @@ def handle_menu(user_id, content):
         core.save_user_data(user_id, ud)
         return "キメラセンターで手持ちとボックスの子を全回復したわ♪", []
 
+    # --- 図鑑機能 (強化版) ---
     if "図鑑" in content:
         ud = core.get_user_data(user_id)
+        
+        # 個別検索: "図鑑 ウルフパピー" のように入力された場合
+        m_search = re.search(r"図鑑\s+(.+)", content)
+        if m_search:
+            target_name = m_search.group(1).strip()
+            found_key = None
+            for k, v in core.BASE_CHIMERAS.items():
+                if v["name"] == target_name:
+                    found_key = k
+                    break
+            
+            status = ud["dex"].get(found_key)
+            if found_key and status:
+                base = core.BASE_CHIMERAS[found_key]
+                rarity = "★" * base['rarity']
+                
+                # 基本情報（発見済みなら表示）
+                msg = f"【図鑑No.{found_key}】 **{base['name']}**\n"
+                msg += f"レアリティ: {rarity}\n"
+                msg += f"タイプ: {base['type']} / 特性: {base['ability']}\n"
+                
+                # 詳細情報（捕獲済みなら表示）
+                if status == "caught":
+                    bs = base["base_stats"]
+                    desc = base.get("description", "詳細不明。")
+                    msg += f"----------------\n"
+                    msg += f"📖 **生態**: {desc}\n"
+                    msg += f"📊 **種族値**: H{bs['hp']} A{bs['atk']} B{bs['def']} C{bs['spa']} D{bs['spd']} S{bs['spe']}\n"
+                else:
+                    msg += "\n(※ 捕まえると詳細な生態や能力が見れます)"
+                return msg, []
+            elif found_key:
+                return "そのキメラはまだ発見していないわ。", []
+            else:
+                return "そんな名前のキメラはいないみたい。", []
+
+        # 一覧表示
         total = len(core.BASE_CHIMERAS)
         caught = sum(1 for v in ud["dex"].values() if v == "caught")
         seen = len(ud["dex"])
         
         lines = [f"【キメラ図鑑】 捕獲: {caught}/{total} / 発見: {seen}/{total}"]
         sorted_keys = sorted(core.BASE_CHIMERAS.keys())
+        
         for k in sorted_keys:
             base = core.BASE_CHIMERAS[k]
             status = ud["dex"].get(k)
-            mark = "？"
-            if status == "caught": mark = "★"
-            elif status == "seen": mark = "○"
-            else: mark = "・"
             
-            if status:
-                rarity = "★"*base['rarity']
-                lines.append(f"{mark} {base['name']} ({rarity})")
+            if status == "caught":
+                mark = "★" # 捕獲済み
+                display_name = base['name']
+            elif status == "seen":
+                mark = "○" # 発見済み
+                display_name = base['name']
             else:
-                lines.append(f"{mark} ？？？")
+                mark = "・" # 未発見
+                display_name = "？？？"
+            
+            # 捕獲済みならレア度を表示
+            rarity_disp = f"({'★'*base['rarity']})" if status == "caught" else ""
+            lines.append(f"{mark} {display_name} {rarity_disp}")
         
+        lines.append("\n『図鑑 ウルフパピー』のように名前を入れると詳細が見れるわよ♪")
         return "\n".join(lines), []
 
     if "アイテム" in content:
@@ -161,7 +205,6 @@ def handle_menu(user_id, content):
         ud = core.get_user_data(user_id)
         if ud.get("is_hard_mode"):
             ud["is_hard_mode"] = False
-            # 戻した時のステージ管理は仕様によるが、一旦ノーマルクリア済みに戻す
             ud["challenge_stage"] = 13 
             core.save_user_data(user_id, ud)
             return "平和な世界（ノーマルモード）に戻したわ。", []
@@ -483,7 +526,7 @@ def _execute_pve_turn(user_id, session, player, enemy, move_id, ud):
     dmg = int(mdata["power"] * (player["stats"]["atk"] / enemy["stats"]["def"]) * 0.4 * random.uniform(0.85, 1.0))
     if dmg < 1: dmg = 1
     
-    # 半減の実 (core側でデータ定義、ここでロジック)
+    # 半減の実
     if core.check_resist_berry(enemy, mdata["type"]):
         dmg = int(dmg * 0.5)
         enemy["held_item"] = None
