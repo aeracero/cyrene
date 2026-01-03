@@ -45,19 +45,39 @@ def end_session(user_id):
 # --- メニュー ---
 def handle_menu(user_id, content):
     session = KIMERA_SESSIONS[user_id]
+    ud = core.get_user_data(user_id) # ユーザーデータを取得
+
+    # --- ★デバッグ機能 (テスト用) ---
+    if content == "デバッグ解放":
+        ud["items"]["story_page_2"] = 1
+        core.save_user_data(user_id, ud)
+        return "【デバッグ】ノーマルクリア証（story_page_2）を付与したわ。\nこれで『真なるキメラマスターロード』に入れるわよ。", []
     
-    # バトル選択画面へ
+    if content == "デバッグ封印":
+        if "story_page_2" in ud["items"]: del ud["items"]["story_page_2"]
+        ud["is_hard_mode"] = False
+        ud["challenge_stage"] = 1
+        core.save_user_data(user_id, ud)
+        return "【デバッグ】クリア証を没収し、ノーマルモードの最初に戻したわ。", []
+
+    # --- バトル選択画面へ ---
     if "バトル" in content:
         session["state"] = STATE_BATTLE_SELECT
-        ud = core.get_user_data(user_id)
         mode_text = "【真・キメラマスターロード】" if ud.get("is_hard_mode") else "チャレンジモード"
-        return (
+        
+        msg = (
             "どこに行く？\n"
             "1. **確保ゾーン** (野生捕獲)\n"
             "2. **レベル上げゾーン** (CPU戦)\n"
             f"3. **{mode_text}** (黄金裔13人抜き)\n"
             "4. **対戦ゾーン** (PvP)"
-        ), []
+        )
+
+        # ★ヒント表示: クリア証を持っていて、まだハードモードでない場合
+        if "story_page_2" in ud["items"] and not ud.get("is_hard_mode"):
+            msg += "\n\n★『真なるキメラマスターロード』と言えば、裏世界へ行けるわ。"
+
+        return msg, []
     
     # その他のメニュー遷移
     if "編成" in content or "ボックス" in content:
@@ -69,7 +89,6 @@ def handle_menu(user_id, content):
         return _get_equip_menu_text(user_id), []
 
     if "詳細" in content:
-        ud = core.get_user_data(user_id)
         msg = f"【トレーナー】Lv.{ud['trainer_level']} (Exp:{ud['trainer_xp']}) / {ud['money']}G\n"
         if ud.get("is_hard_mode"):
             msg += "★ 現在『ハードモード』挑戦中 ★\n"
@@ -79,7 +98,6 @@ def handle_menu(user_id, content):
 
     if "ショップ" in content:
         session["state"] = STATE_SHOP
-        ud = core.get_user_data(user_id)
         tlv = ud["trainer_level"]
         lines = []
         for k, v in core.ITEMS.items():
@@ -88,15 +106,12 @@ def handle_menu(user_id, content):
         return f"【ショップ】 (所持金: {ud['money']}G / Lv.{tlv})\n" + "\n".join(lines) + "\n\n『〇〇を買う』 / 『戻る』", []
 
     if "回復" in content:
-        ud = core.get_user_data(user_id)
         core.heal_all_kimeras(ud)
         core.save_user_data(user_id, ud)
         return "キメラセンターで手持ちとボックスの子を全回復したわ♪", []
 
     # --- 図鑑機能 (強化版) ---
     if "図鑑" in content:
-        ud = core.get_user_data(user_id)
-        
         # 個別検索: "図鑑 ウルフパピー" のように入力された場合
         m_search = re.search(r"図鑑\s+(.+)", content)
         if m_search:
@@ -107,32 +122,56 @@ def handle_menu(user_id, content):
                     found_key = k
                     break
             
-            status = ud["dex"].get(found_key)
-            if found_key and status:
-                base = core.BASE_CHIMERAS[found_key]
-                rarity = "★" * base['rarity']
-                
-                # 基本情報（発見済みなら表示）
-                msg = f"【図鑑No.{found_key}】 **{base['name']}**\n"
-                msg += f"レアリティ: {rarity}\n"
-                msg += f"タイプ: {base['type']} / 特性: {base['ability']}\n"
-                
-                # 詳細情報（捕獲済みなら表示）
-                if status == "caught":
-                    bs = base["base_stats"]
-                    desc = base.get("description", "詳細不明。")
-                    msg += f"----------------\n"
-                    msg += f"📖 **生態**: {desc}\n"
-                    msg += f"📊 **種族値**: H{bs['hp']} A{bs['atk']} B{bs['def']} C{bs['spa']} D{bs['spd']} S{bs['spe']}\n"
-                else:
-                    msg += "\n(※ 捕まえると詳細な生態や能力が見れます)"
-                return msg, []
-            elif found_key:
-                return "そのキメラはまだ発見していないわ。", []
-            else:
-                return "そんな名前のキメラはいないみたい。", []
+            if not found_key:
+                return "その名前のキメラはデータにないわ。", []
 
-        # 一覧表示
+            status = ud["dex"].get(found_key)
+            if not status:
+                return "そのキメラはまだ発見していないわ。", []
+            
+            base = core.BASE_CHIMERAS[found_key]
+            
+            # --- 発見のみの場合 ---
+            if status == "seen":
+                return (
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"📖 **No.{found_key} {base['name']}**\n"
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"【状態】 目撃のみ (詳細は捕獲後に解放)\n"
+                    f"【分類】 {base['type']}タイプ\n"
+                    f"━━━━━━━━━━━━━━━"
+                ), []
+            
+            # --- 捕獲済み (詳細表示) ---
+            elif status == "caught":
+                rarity = "★" * base.get('rarity', 1)
+                bs = base['base_stats']
+                desc = base.get('description', '詳細不明。')
+                total_bs = sum(bs.values())
+                
+                msg = (
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"📖 **No.{found_key} {base['name']}** {rarity}\n"
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"【分類】 {base['type']}タイプ\n"
+                    f"【特性】 **{base['ability']}**\n"
+                    f"-------------------------------\n"
+                    f"【生態】\n"
+                    f"{desc}\n"
+                    f"-------------------------------\n"
+                    f"【種族値 (Base Stats)】\n"
+                    f" 🟢 HP : **{bs['hp']}**\n"
+                    f" ⚔️ 攻撃: **{bs['atk']}**\n"
+                    f" 🛡️ 防御: **{bs['def']}**\n"
+                    f" ✨ 特攻: **{bs['spa']}**\n"
+                    f" 🔮 特防: **{bs['spd']}**\n"
+                    f" 💨 素早: **{bs['spe']}**\n"
+                    f" 📊 合計: **{total_bs}**\n"
+                    f"━━━━━━━━━━━━━━━"
+                )
+                return msg, []
+
+        # --- 一覧表示 (デフォルト) ---
         total = len(core.BASE_CHIMERAS)
         caught = sum(1 for v in ud["dex"].values() if v == "caught")
         seen = len(ud["dex"])
@@ -162,7 +201,6 @@ def handle_menu(user_id, content):
         return "\n".join(lines), []
 
     if "アイテム" in content:
-        ud = core.get_user_data(user_id)
         items_txt = ", ".join([f"{core.ITEMS[k]['name']}x{v}" for k, v in ud['items'].items()])
         return f"所持: {items_txt}\n(『けいけんアメSを使う』と言ってね)", []
         
@@ -173,7 +211,6 @@ def handle_menu(user_id, content):
         for k, v in core.ITEMS.items():
             if v["name"] == item_name: item_key = k
         if item_key:
-            ud = core.get_user_data(user_id)
             if not ud["party"]: return "手持ちがいないわ。", []
             res = core.apply_item_effect_logic(ud, item_key, ud["party"][0])
             core.save_user_data(user_id, ud)
@@ -181,8 +218,6 @@ def handle_menu(user_id, content):
 
     # --- 隠しコマンド: ハードモード突入 ---
     if "真なるキメラマスターロード" in content:
-        ud = core.get_user_data(user_id)
-        
         if ud.get("is_hard_mode"):
             return "既に修羅の道（ハードモード）にいるわ。心して挑みなさい。", []
 
@@ -202,7 +237,6 @@ def handle_menu(user_id, content):
             return "まだその扉を開く資格（ノーマルモードクリアの証）を持っていないみたい。", []
 
     if "ノーマルに戻る" in content:
-        ud = core.get_user_data(user_id)
         if ud.get("is_hard_mode"):
             ud["is_hard_mode"] = False
             ud["challenge_stage"] = 13 
