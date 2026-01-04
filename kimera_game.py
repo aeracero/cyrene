@@ -4,6 +4,7 @@ import kimera_core as core
 import database as db
 import logic
 import kimera_data as data
+from config import PRIMARY_ADMIN_ID # 管理者ID読み込み
 
 # --- 状態定義 ---
 STATE_MENU = "menu"
@@ -73,24 +74,51 @@ def handle_menu(user_id, content):
         try:
             ach_data = db.load_achievements_data()
             user_ach = ach_data.get(str(user_id), {"unlocked": [], "stats": {}})
+            
             if "kimera_champion" in user_ach["unlocked"]:
                 user_ach["unlocked"].remove("kimera_champion")
                 res = "OFF"
             else:
                 user_ach["unlocked"].append("kimera_champion")
                 res = "ON"
+            
             ach_data[str(user_id)] = user_ach
             db.save_achievements_data(ach_data)
             return f"【デバッグ】実績『キメラチャンピオン』を {res} にしたわ。", []
         except:
             return "エラー。", []
 
+    # --- ★管理者限定: 最強召喚 ---
+    if content == "デバッグ最強召喚" and user_id == PRIMARY_ADMIN_ID:
+        # ベース: キュヌレ (★6), Lv.200, ニックネーム: デバッグ神
+        god = core.create_chimera_instance("kyunure", level=200, nickname="デバッグ神")
+        
+        # 個体値を全31(MAX)に書き換え
+        god["ivs"] = {k: 31 for k in god["ivs"]}
+        
+        # 持ち物: たべのこし
+        god["held_item"] = "leftovers"
+        
+        # ステータス再計算 (個体値・装備反映)
+        core.update_chimera_stats(god)
+        god["current_hp"] = god["stats"]["max_hp"]
+        
+        # パーティまたはボックスに追加
+        if len(ud["party"]) < 3:
+            ud["party"].append(god)
+            loc = "手持ち"
+        else:
+            ud["box"].append(god)
+            loc = "ボックス"
+            
+        core.save_user_data(user_id, ud, hard_mode=is_hard)
+        return f"【管理者権限行使】\n最強個体『デバッグ神』(Lv.200/ALL31) を{loc}に召喚したわ。テストに使いなさい。", []
+
     # --- モード切替 ---
     if "真なるキメラマスターロード" in content:
         if is_hard:
             return "既に修羅の道（ハードモード）にいるわ。心して挑みなさい。", []
         
-        # ノーマルデータのクリア証を確認
         normal_ud = core.get_user_data(user_id, hard_mode=False)
         if "story_page_2" in normal_ud["items"]:
             session["is_hard_mode"] = True
@@ -437,7 +465,7 @@ def handle_battle_select(user_id, content):
     ud = core.get_user_data(user_id, hard_mode=is_hard)
     tlv = ud["trainer_level"]
     
-    # 全角数字の正規化（3や３に対応）
+    # 全角数字の正規化
     content = content.translate(str.maketrans({chr(0xFF10 + i): chr(0x30 + i) for i in range(10)}))
 
     if "確保" in content or "1" in content:
@@ -629,15 +657,22 @@ def _execute_pve_turn(user_id, session, player, enemy, move_id, ud):
         enemy["current_hp"] = 0
         msg += f"\n相手の {enemy['nickname']} は倒れた！"
         
-        base_xp = (enemy["level"] * 150) + random.randint(0, enemy["level"] * 50)
+        # ハードモードなら獲得経験値減少(1/5)
+        xp_mult = 150
+        is_hard = session.get("is_hard_mode", False)
+        if is_hard:
+            xp_mult = 30
+            
+        base_xp = (enemy["level"] * xp_mult) + random.randint(0, enemy["level"] * 10)
+        
         for p in ud["party"]:
             if p["current_hp"] > 0:
                 p["xp"] += base_xp
                 if p["xp"] >= p["next_xp"]:
-                    msg += "\n" + core.level_up_chimera(p, is_hard_mode=session.get("is_hard_mode", False))
+                    msg += "\n" + core.level_up_chimera(p, is_hard_mode=is_hard)
         
         msg += f"\nパーティ全員に {base_xp} の経験値が入ったわ！"
-        core.save_user_data(user_id, ud, hard_mode=session.get("is_hard_mode", False))
+        core.save_user_data(user_id, ud, hard_mode=is_hard)
         
         ctx = session["context"]
         next_enemy = next((c for c in ctx["enemy_party"] if c["current_hp"] > 0), None)
