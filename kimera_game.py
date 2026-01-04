@@ -578,8 +578,12 @@ def handle_battle_action(user_id, content):
     if sub == BATTLE_SUB_MAIN:
         if "逃" in content:
             if session["state"] == STATE_BATTLE_CHALLENGE: return "チャレンジモードからは逃げられないわ！", []
-            end_session(user_id)
-            return "逃げ出したわ。", []
+            
+            # 【変更点】逃走時、セッション終了ではなくメニューに戻す
+            session["state"] = STATE_MENU
+            session["context"] = {}
+            return "逃げ出したわ。\n\n(メニューに戻りました)", []
+            
         if "道具" in content:
             ctx["sub_state"] = BATTLE_SUB_ITEM
             items = [f"{data.ITEMS[k]['name']}x{v}" for k, v in ud['items'].items()]
@@ -716,8 +720,13 @@ def _enemy_attack_phase(user_id, session, player, enemy, ud):
             ud["money"] -= lost
             core.heal_all_kimeras(ud)
             core.save_user_data(user_id, ud, hard_mode=session.get("is_hard_mode", False))
-            end_session(user_id)
-            msg += f"\n手持ちが全滅したわ… (所持金 -{lost}G)"
+            
+            # 【変更点】全滅時、セッション終了ではなくメニューに戻す
+            # end_session(user_id) 
+            session["state"] = STATE_MENU
+            session["context"] = {}
+            
+            msg += f"\n手持ちが全滅したわ… (所持金 -{lost}G)\n\n(キメラセンターで回復してメニューに戻りました)"
     else:
         # 食べ残し
         if player.get("held_item") == "leftovers":
@@ -779,8 +788,12 @@ def _resolve_pve_win(user_id, session, ud):
     logic.add_affection_xp(user_id, 50)
     msg += "\n(好感度XP +50)"
     
-    end_session(user_id)
-    return f"{msg}\nメニューに戻るわね。", []
+    # 【変更点】勝利時、セッション終了ではなくメニューに戻す
+    # end_session(user_id)
+    session["state"] = STATE_MENU
+    session["context"] = {}
+    
+    return f"{msg}\n\n(メニューに戻りました。次はどうする？)", []
 
 # --- 共通ヘルパー ---
 def _generate_party_list(ud):
@@ -833,8 +846,13 @@ def use_item_in_battle(user_id, session, item_key, ud, player, enemy):
             core.register_dex(ud, enemy["base_id"], caught=True)
             core.save_user_data(user_id, ud, hard_mode=is_hard)
             logic.add_affection_xp(user_id, 50)
-            end_session(user_id)
-            return f"やった！ {enemy['nickname']} を捕まえたわ！\n(好感度XP +50)", []
+            
+            # 【変更点】捕獲成功時、セッション終了ではなくメニューに戻す
+            # end_session(user_id)
+            session["state"] = STATE_MENU
+            session["context"] = {}
+            
+            return f"やった！ {enemy['nickname']} を捕まえたわ！\n(好感度XP +50)\n\n(メニューに戻りました)", []
         else:
             core.save_user_data(user_id, ud, hard_mode=is_hard)
             return "ボールから抜け出された！\n" + _enemy_attack_phase(user_id, session, player, enemy, ud)
@@ -1025,6 +1043,7 @@ def process_kimera_command(user_id, content):
             ), []
         return None
     
+    # 【追加点】ここでだけセッション終了を受け付ける
     if content in ["終了", "やめる", "もう遊び疲れたよ"]:
         end_session(user_id)
         return "また遊びましょ♪", []
