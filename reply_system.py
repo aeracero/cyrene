@@ -27,18 +27,15 @@ MODULE_MAP = {
 
 def generate_reply_for_form(form_key: str, message_text: str, affection_level: int, user_id: int, name: str) -> str:
     module = MODULE_MAP.get(form_key, lines_cyrene)
-    lang = db.get_user_lang(user_id) # 言語取得
+    lang = db.get_user_lang(user_id) 
     
     if hasattr(module, "get_reply"):
         try:
-            # 優先1: 言語引数つき (get_reply(msg, lv, name, lang))
             base = module.get_reply(message_text, affection_level, name, lang)
         except TypeError:
             try:
-                # 優先2: 言語なし (get_reply(msg, lv, name))
                 base = module.get_reply(message_text, affection_level, name)
             except TypeError:
-                # 優先3: 古い形式
                 try:
                     base = module.get_reply(message_text, affection_level)
                 except TypeError:
@@ -64,13 +61,11 @@ def get_nickname_message_for_form(form_key: str, action: str, name: str, user_id
                 return line.replace("{name}", name)
             except: pass
 
-    # デフォルトメッセージ
     if lang == "en":
         return "What should I call you?" if action == "ask" else f"Okay, I'll call you '{name}' from now on."
     else:
         return "あたし、どう呼べばいいの？" if action == "ask" else f"ふふ…これからは「{name}」って呼ぶわね♪"
 
-# ★修正: user_id を受け取るように変更 (エラー箇所)
 def get_rps_flavor(form_key: str, result: str, name: str, user_id: int) -> str:
     module = MODULE_MAP.get(form_key, lines_cyrene)
     lang = db.get_user_lang(user_id)
@@ -83,7 +78,6 @@ def get_rps_flavor(form_key: str, result: str, name: str, user_id: int) -> str:
                 return module.get_rps_flavor(result, name)
             except: pass
 
-    # フォールバック (LINES_EN / LINES 直接参照)
     target_lines = getattr(module, "LINES_EN" if lang == "en" else "LINES", getattr(module, "LINES", {}))
     key = f"rps_{result}"
     if key in target_lines:
@@ -91,24 +85,18 @@ def get_rps_flavor(form_key: str, result: str, name: str, user_id: int) -> str:
             
     return ""
 
-# ★修正: user_id を受け取るように変更 (エラー箇所)
 def get_rps_prompt_for_form(form_key: str, name: str, user_id: int) -> str:
     module = MODULE_MAP.get(form_key, lines_cyrene)
     lang = db.get_user_lang(user_id)
-    
     target_lines = getattr(module, "LINES_EN" if lang == "en" else "LINES", getattr(module, "LINES", {}))
-    
     if "rps_start" in target_lines:
         return random.choice(target_lines["rps_start"]).replace("{name}", name)
-    
     return "Let's play RPS! Rock, Paper, or Scissors?" if lang == "en" else "じゃんけんをしましょう♪ グー / チョキ / パー、どれにするかしら？"
 
-# ★修正: user_id を受け取るように変更 (エラー箇所)
 def format_rps_result(form_key: str, name: str, user_hand: str, bot_hand: str, flavor: str, wins: int, user_id: int) -> str:
     module = MODULE_MAP.get(form_key, lines_cyrene)
     lang = db.get_user_lang(user_id)
     
-    # 手の翻訳 (ENモード時)
     if lang == "en":
         hand_map = {"グー": "Rock", "チョキ": "Scissors", "パー": "Paper"}
         user_hand = hand_map.get(user_hand, user_hand)
@@ -138,3 +126,12 @@ def format_rps_result(form_key: str, name: str, user_hand: str, bot_hand: str, f
         stats_msg = f"(Wins: {wins})"
 
     return f"{duel_msg}\n{flavor}\n{stats_msg}"
+
+# ★新規追加: シークレットボイス取得
+def get_secret_voice(form_key: str, lang: str = "jp") -> str:
+    module = MODULE_MAP.get(form_key, lines_cyrene)
+    # LINES_*.py 側で SECRET_VOICE_JP / SECRET_VOICE_EN を定義してください
+    if lang == "en":
+        return getattr(module, "SECRET_VOICE_EN", getattr(module, "SECRET_VOICE", "I love you... secret."))
+    else:
+        return getattr(module, "SECRET_VOICE_JP", getattr(module, "SECRET_VOICE", "あなただけを、愛してる…♡"))

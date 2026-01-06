@@ -264,6 +264,10 @@ HIGH_AFFECTION_LINES_EN = {
     ],
 }
 
+# ファイルの末尾に追加
+SECRET_VOICE_JP = "ずっとずっと、あなただけを見ていたわ…♡"
+SECRET_VOICE_EN = "I have always been looking only at you..."
+
 # ─────────────────────────
 # ロジック関数
 # ─────────────────────────
