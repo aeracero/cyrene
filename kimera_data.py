@@ -1,25 +1,70 @@
-# キメラ、技、アイテム、トレーナーのデータを管理します。
+# kimera_data.py
+# キメラ、技、アイテム、トレーナー、タイプ相性等のデータを管理します。
 
+# --- タイプ定義と相性表 ---
 TYPES = ["Normal", "Fire", "Water", "Grass", "Light", "Dark", "Fairy"]
 
+# 攻撃側をキー、防御側をキーとして倍率を定義 (定義なき場合は1.0)
+TYPE_CHART = {
+    "Normal": {"Light": 0.5, "Dark": 0.5},
+    "Fire":   {"Grass": 2.0, "Water": 0.5, "Fire": 0.5, "Fairy": 1.0},
+    "Water":  {"Fire": 2.0, "Grass": 0.5, "Water": 0.5},
+    "Grass":  {"Water": 2.0, "Fire": 0.5, "Grass": 0.5, "Light": 1.0},
+    "Light":  {"Dark": 2.0, "Grass": 2.0, "Light": 0.5, "Fairy": 0.5},
+    "Dark":   {"Light": 2.0, "Fairy": 2.0, "Dark": 0.5, "Normal": 2.0},
+    "Fairy":  {"Dark": 2.0, "Fire": 0.5, "Light": 2.0, "Fairy": 0.5}
+}
+
+# --- 状態異常定義 ---
+STATUS_CONDITIONS = {
+    "poison": {"name": "毒", "desc": "毎ターンHPが減るわ。"},
+    "paralysis": {"name": "麻痺", "desc": "素早さが下がり、たまに動けないわ。"},
+    "sleep": {"name": "眠り", "desc": "数ターン動けないわ。"},
+    "burn": {"name": "火傷", "desc": "毎ターンHPが減り、物理攻撃が下がるわ。"},
+    "confusion": {"name": "混乱", "desc": "たまに自分を攻撃してしまうわ。"},
+    # 以下は特殊状態
+    "oblivion": {"name": "忘却", "desc": "直前の技が使えず、命中率ダウン。"},
+    "submission": {"name": "屈服", "desc": "与えるダメージ低下。捕獲されやすい。"},
+}
+
 # --- 技データ (MOVES) ---
+# category: Physical(物理), Special(特殊), Status(変化)
+# target: Enemy, Self
+# effect: {type: "buff", stat: "atk", stage: 1}, {type: "status", status: "poison"} 等
 MOVES = {
-    "scratch": {"name": "ひっかく", "type": "Normal", "category": "Physical", "power": 40, "accuracy": 100, "max_pp": 35},
-    "tackle": {"name": "たいあたり", "type": "Normal", "category": "Physical", "power": 40, "accuracy": 100, "max_pp": 35},
-    "ember": {"name": "火の粉", "type": "Fire", "category": "Special", "power": 40, "accuracy": 100, "max_pp": 25},
-    "water_gun": {"name": "水鉄砲", "type": "Water", "category": "Special", "power": 40, "accuracy": 100, "max_pp": 25},
-    "leaf_blade": {"name": "リーフブレード", "type": "Grass", "category": "Physical", "power": 90, "accuracy": 100, "max_pp": 15},
-    "shining_ray": {"name": "光の矢", "type": "Light", "category": "Special", "power": 60, "accuracy": 100, "max_pp": 20},
-    "shadow_claw": {"name": "シャドークロー", "type": "Dark", "category": "Physical", "power": 70, "accuracy": 100, "max_pp": 15},
-    "flamethrower": {"name": "火炎放射", "type": "Fire", "category": "Special", "power": 90, "accuracy": 100, "max_pp": 15},
-    "hydro_pump": {"name": "ハイドロポンプ", "type": "Water", "category": "Special", "power": 110, "accuracy": 80, "max_pp": 5},
-    "solar_beam": {"name": "ソーラービーム", "type": "Grass", "category": "Special", "power": 120, "accuracy": 100, "max_pp": 10},
-    "hyper_beam": {"name": "破壊光線", "type": "Normal", "category": "Special", "power": 150, "accuracy": 90, "max_pp": 5},
-    "dark_pulse": {"name": "悪の波動", "type": "Dark", "category": "Special", "power": 80, "accuracy": 100, "max_pp": 15},
-    "flash_cannon": {"name": "ラスターカノン", "type": "Light", "category": "Special", "power": 80, "accuracy": 100, "max_pp": 10},
-    "dragon_breath": {"name": "竜の息吹", "type": "Light", "category": "Special", "power": 60, "accuracy": 100, "max_pp": 20},
-    "dragon_claw": {"name": "ドラゴンクロー", "type": "Normal", "category": "Physical", "power": 80, "accuracy": 100, "max_pp": 15},
-    "dazzling_gleam": {"name": "マジカルシャイン", "type": "Fairy", "category": "Special", "power": 80, "accuracy": 100, "max_pp": 10},
+    # 物理技
+    "scratch": {"name": "ひっかく", "type": "Normal", "category": "Physical", "power": 40, "accuracy": 100, "max_pp": 35, "target": "Enemy"},
+    "tackle": {"name": "たいあたり", "type": "Normal", "category": "Physical", "power": 40, "accuracy": 100, "max_pp": 35, "target": "Enemy"},
+    "leaf_blade": {"name": "リーフブレード", "type": "Grass", "category": "Physical", "power": 90, "accuracy": 100, "max_pp": 15, "target": "Enemy"},
+    "shadow_claw": {"name": "シャドークロー", "type": "Dark", "category": "Physical", "power": 70, "accuracy": 100, "max_pp": 15, "target": "Enemy"},
+    "dragon_claw": {"name": "ドラゴンクロー", "type": "Normal", "category": "Physical", "power": 80, "accuracy": 100, "max_pp": 15, "target": "Enemy"},
+    "quick_attack": {"name": "電光石火", "type": "Normal", "category": "Physical", "power": 40, "accuracy": 100, "max_pp": 30, "priority": 1, "target": "Enemy"},
+
+    # 特殊技
+    "ember": {"name": "火の粉", "type": "Fire", "category": "Special", "power": 40, "accuracy": 100, "max_pp": 25, "target": "Enemy"},
+    "water_gun": {"name": "水鉄砲", "type": "Water", "category": "Special", "power": 40, "accuracy": 100, "max_pp": 25, "target": "Enemy"},
+    "shining_ray": {"name": "光の矢", "type": "Light", "category": "Special", "power": 60, "accuracy": 100, "max_pp": 20, "target": "Enemy"},
+    "flamethrower": {"name": "火炎放射", "type": "Fire", "category": "Special", "power": 90, "accuracy": 100, "max_pp": 15, "target": "Enemy", "effect": {"type": "chance_status", "status": "burn", "chance": 0.1}},
+    "hydro_pump": {"name": "ハイドロポンプ", "type": "Water", "category": "Special", "power": 110, "accuracy": 80, "max_pp": 5, "target": "Enemy"},
+    "solar_beam": {"name": "ソーラービーム", "type": "Grass", "category": "Special", "power": 120, "accuracy": 100, "max_pp": 10, "target": "Enemy"},
+    "hyper_beam": {"name": "破壊光線", "type": "Normal", "category": "Special", "power": 150, "accuracy": 90, "max_pp": 5, "target": "Enemy"},
+    "dark_pulse": {"name": "悪の波動", "type": "Dark", "category": "Special", "power": 80, "accuracy": 100, "max_pp": 15, "target": "Enemy"},
+    "flash_cannon": {"name": "ラスターカノン", "type": "Light", "category": "Special", "power": 80, "accuracy": 100, "max_pp": 10, "target": "Enemy"},
+    "dragon_breath": {"name": "竜の息吹", "type": "Light", "category": "Special", "power": 60, "accuracy": 100, "max_pp": 20, "target": "Enemy", "effect": {"type": "chance_status", "status": "paralysis", "chance": 0.3}},
+    "dazzling_gleam": {"name": "マジカルシャイン", "type": "Fairy", "category": "Special", "power": 80, "accuracy": 100, "max_pp": 10, "target": "Enemy"},
+
+    # 変化技 (バフ・デバフ・状態異常)
+    "growl": {"name": "鳴き声", "type": "Normal", "category": "Status", "power": 0, "accuracy": 100, "max_pp": 40, "target": "Enemy", "effect": {"type": "debuff", "stat": "atk", "stage": 1}},
+    "tail_whip": {"name": "しっぽをふる", "type": "Normal", "category": "Status", "power": 0, "accuracy": 100, "max_pp": 40, "target": "Enemy", "effect": {"type": "debuff", "stat": "def", "stage": 1}},
+    "sharpen": {"name": "つるぎのまい", "type": "Normal", "category": "Status", "power": 0, "accuracy": 100, "max_pp": 20, "target": "Self", "effect": {"type": "buff", "stat": "atk", "stage": 2}},
+    "growth": {"name": "成長", "type": "Normal", "category": "Status", "power": 0, "accuracy": 100, "max_pp": 20, "target": "Self", "effect": {"type": "buff", "stat": "spa", "stage": 1}},
+    "poison_powder": {"name": "毒の粉", "type": "Grass", "category": "Status", "power": 0, "accuracy": 75, "max_pp": 35, "target": "Enemy", "effect": {"type": "status", "status": "poison"}},
+    "thunder_wave": {"name": "電磁波", "type": "Light", "category": "Status", "power": 0, "accuracy": 90, "max_pp": 20, "target": "Enemy", "effect": {"type": "status", "status": "paralysis"}},
+    "sing": {"name": "歌う", "type": "Normal", "category": "Status", "power": 0, "accuracy": 55, "max_pp": 15, "target": "Enemy", "effect": {"type": "status", "status": "sleep"}},
+    "recover": {"name": "自己再生", "type": "Normal", "category": "Status", "power": 0, "accuracy": 100, "max_pp": 10, "target": "Self", "effect": {"type": "heal", "percent": 0.5}},
+
+    # 特殊個体用（変身後など）
+    "star_burst": {"name": "スターバースト", "type": "Fire", "category": "Physical", "power": 999, "accuracy": 200, "max_pp": 1, "target": "Enemy", "desc": "必中・一撃必殺"},
 }
 
 # --- キメラのベースデータ (BASE_CHIMERAS) ---
@@ -28,175 +73,183 @@ BASE_CHIMERAS = {
     "wolf_pup": {
         "name": "ウルフパピー", "type": "Normal", "rarity": 1,
         "base_stats": {"hp": 45, "atk": 60, "def": 40, "spa": 30, "spd": 40, "spe": 65},
-        "ability": "闘争心", # 同性なら攻撃UP
-        "learnset": {1: "scratch", 5: "shadow_claw", 15: "tackle", 30: "hyper_beam"},
+        "ability": "闘争心",
+        "learnset": {1: "scratch", 5: "growl", 10: "quick_attack", 15: "sharpen", 30: "hyper_beam"},
         "description": "元気な狼の子供。物理攻撃が得意。"
     },
     "aqua_bird": {
         "name": "アクアバード", "type": "Water", "rarity": 1,
         "base_stats": {"hp": 40, "atk": 30, "def": 35, "spa": 65, "spd": 50, "spe": 70},
-        "ability": "激流", # ピンチで水技強化
-        "learnset": {1: "scratch", 3: "water_gun", 15: "hydro_pump"},
+        "ability": "激流",
+        "learnset": {1: "scratch", 3: "water_gun", 8: "sing", 15: "hydro_pump"},
         "description": "水を操る小鳥。素早さと魔法攻撃が高い。"
     },
     "leaf_golem": {
         "name": "リーフゴーレム", "type": "Grass", "rarity": 1,
         "base_stats": {"hp": 60, "atk": 50, "def": 70, "spa": 40, "spd": 60, "spe": 30},
-        "ability": "深緑", # ピンチで草技強化
-        "learnset": {1: "scratch", 8: "leaf_blade", 20: "solar_beam"},
+        "ability": "深緑",
+        "learnset": {1: "tackle", 5: "growth", 8: "leaf_blade", 15: "poison_powder", 25: "solar_beam"},
         "description": "森の守り人。防御力が自慢。"
     },
     "fire_lizard": {
         "name": "フレアリザード", "type": "Fire", "rarity": 1,
         "base_stats": {"hp": 39, "atk": 52, "def": 43, "spa": 60, "spd": 50, "spe": 65},
-        "ability": "猛火", # ピンチで炎技強化
-        "learnset": {1: "scratch", 6: "ember", 25: "flamethrower"},
+        "ability": "猛火",
+        "learnset": {1: "scratch", 6: "ember", 12: "tail_whip", 25: "flamethrower"},
         "description": "尻尾に炎を宿したトカゲ。"
     },
+    # ★2
     "light_fairy": {
         "name": "ライトフェアリー", "type": "Light", "rarity": 2,
         "base_stats": {"hp": 50, "atk": 40, "def": 40, "spa": 70, "spd": 70, "spe": 60},
-        "ability": "発光", # 命中率UP
-        "learnset": {1: "shining_ray", 10: "flash_cannon"},
-        "description": "光り輝く妖精。"
+        "ability": "発光",
+        "learnset": {1: "shining_ray", 8: "thunder_wave", 15: "flash_cannon", 20: "recover"},
+        "description": "光り輝く妖精。回復技も覚える。"
     },
     "dark_hound": {
         "name": "ダークハウンド", "type": "Dark", "rarity": 2,
         "base_stats": {"hp": 60, "atk": 80, "def": 50, "spa": 40, "spd": 50, "spe": 70},
-        "ability": "威圧", # 登場時相手の攻撃ダウン
-        "learnset": {1: "shadow_claw", 12: "dark_pulse"},
+        "ability": "威圧",
+        "learnset": {1: "shadow_claw", 5: "growl", 12: "dark_pulse"},
         "description": "闇夜に潜む黒い犬。"
-    },
-    "cheribis":{
-        "name": "チェリビス", "type": "Light", "rarity": 6,
-        "base_stats": {"hp": 55, "atk": 45, "def": 50, "spa": 75, "spd": 65, "spe": 55},
-        "ability": "癒しの光", # 毎ターン回復
-        "learnset": {1: "shining_ray", 10: "flash_cannon", 20: "hyper_beam"},
-        "description": "癒しの力を持つ光のキメラ。"
-    },
-    "cho_cho_cake":{
-        "name": "チョウチョウケーキ", "type": "Normal", "rarity": 6,
-        "base_stats": {"hp": 70, "atk": 30, "def": 60, "spa": 50, "spd": 65, "spe": 25},
-        "ability": "甘美な誘惑", # 相手の攻撃ダウン
-        "learnset": {1: "tackle", 5: "hyper_beam"},
-        "description": "甘くて美味しいケーキのキメラ。"
-    },
-    "ringo_ame":{
-        "name": "リンゴアメ", "type": "Grass", "rarity": 6,
-        "base_stats": {"hp": 65, "atk": 55, "def": 55, "spa": 45, "spd": 50, "spe": 40},
-        "ability": "ロケット", # 素早さUP
-        "learnset": {1: "tackle", 7: "leaf_blade"},
-        "description": "リンゴ飴のキメラ。"
-    },
-    "harapekono_sakana":{
-        "name": "腹ペコの魚", "type": "Water", "rarity": 6,
-        "base_stats": {"hp": 50, "atk": 60, "def": 40, "spa": 55, "spd": 45, "spe": 70},
-        "ability": "食いしん坊", # きのみの効果UP
-        "learnset": {1: "scratch", 4: "water_gun"},
-        "description": "いつもお腹を空かせている魚のキメラ。"
-    },
-    "candy_roll":{
-        "name": "キャンディーロール", "type": "Fire", "rarity": 6,
-        "base_stats": {"hp": 55, "atk": 50, "def": 45, "spa": 65, "spd": 50, "spe": 60},
-        "ability": "忘却", # 相手の防御無視
-        "learnset": {1: "ember", 9: "flamethrower"},
-        "description": "キャンディーのように甘い炎を操るキメラ。"
-    },
-    "honey_fruit_soup":{
-        "name": "ハニーフルーツスープ", "type": "Dark", "rarity": 6,
-        "base_stats": {"hp": 60, "atk": 55, "def": 50, "spa": 60, "spd": 55, "spe": 45},
-        "ability": "蘇り", # HP自動回復
-        "learnset": {1: "shadow_claw", 11: "dark_pulse"},
-        "description": "甘い果実と蜂蜜でできたスープのキメラ。"
-    },
-    "oatmeal":{
-        "name": "オートミール", "type": "Normal", "rarity": 6,
-        "base_stats": {"hp": 65, "atk": 55, "def": 60, "spa": 50, "spd": 55, "spe": 40},
-        "ability": "金糸雀", # 歌声で相手の攻撃ダウン
-        "learnset": {1: "tackle", 6: "hyper_beam"},
-        "description": "健康に良いオートミールのキメラ。"
-    },
-    "nunusu":{
-        "name": "ヌヌス", "type": "Grass", "rarity": 6,
-        "base_stats": {"hp": 75, "atk": 65, "def": 70, "spa": 80, "spd": 75, "spe": 55},
-        "ability": "大地獣", # 防御UP
-        "learnset": {1: "leaf_blade", 12: "solar_beam"},
-        "description": "地龍を愛するキメラ。"
-    },
-    "nyanko_dorobou":{
-        "name": "ニャンコ泥棒", "type": "Dark", "rarity": 6,
-        "base_stats": {"hp": 50, "atk": 70, "def": 45, "spa": 40, "spd": 50, "spe": 80},
-        "ability": "盗みの天才", # 素早さUP
-        "learnset": {1: "scratch", 5: "shadow_claw", 15: "dark_pulse"},
-        "description": "素早く物を盗む猫のキメラ。"
-    },
-    "biguruyashi":{
-        "name": "ビ-グルヤシ", "type": "Fire", "rarity": 6,
-        "base_stats": {"hp": 60, "atk": 80, "def": 50, "spa": 70, "spd": 55, "spe": 65},
-        "ability": "炎の守護者", # 炎技威力UP
-        "learnset": {1: "ember", 8: "flamethrower"},
-        "description": "火種を操るキメラ。"
     },
     "uriu":{
         "name": "ウリウ", "type": "Water", "rarity": 2,
         "base_stats": {"hp": 55, "atk": 60, "def": 50, "spa": 65, "spd": 55, "spe": 60},
-        "ability": "水流", # 素早さUP
-        "learnset": {1: "water_gun", 7: "hydro_pump"},
+        "ability": "水流",
+        "learnset": {1: "water_gun", 7: "hydro_pump", 15: "sing"},
         "description": "水中を自在に泳ぐキメラ。"
     },
     "tanki":{
         "name": "短気", "type": "Fire", "rarity": 2,
         "base_stats": {"hp": 60, "atk": 70, "def": 55, "spa": 65, "spd": 50, "spe": 75},
-        "ability": "短気", # 攻撃UPだが防御DOWN
-        "learnset": {1: "ember", 8: "flamethrower"},
-        "description": "短気な火のキメラ。"
+        "ability": "短気",
+        "learnset": {1: "ember", 5: "sharpen", 15: "flamethrower"},
+        "description": "短気な火のキメラ。攻撃が高い。"
     },
     "skape_goat":{
-        "name": "スケープゴート", "type": "Grass"," rarity": 2,
+        "name": "スケープゴート", "type": "Grass", "rarity": 2,
         "base_stats": {"hp": 70, "atk": 60, "def": 65, "spa": 55, "spd": 60, "spe": 50},
-        "ability": "犠牲者", # HPが高い
-        "learnset": {1: "leaf_blade", 10: "solar_beam"},
+        "ability": "犠牲者",
+        "learnset": {1: "leaf_blade", 10: "poison_powder", 20: "solar_beam"},
         "description": "犠牲を厭わない草のキメラ。"
     },
-    "onkouna_ryu":{
-        "name": "温厚な竜", "type": "Light", "rarity": 6,
-        "base_stats": {"hp": 90, "atk": 80, "def": 85, "spa": 100, "spd": 95, "spe": 70}, # ステータス強化
-        "ability": "皆を守る者", # 味方全体の防御UP
-        "learnset": {1: "dragon_breath", 15: "dragon_claw"},
-        "description": "温厚な竜のキメラ。"
+
+    # --- 黄金裔モチーフ (★6) 特殊能力持ち ---
+    "oatmeal":{
+        "name": "オートミール", "type": "Normal", "rarity": 6,
+        "base_stats": {"hp": 65, "atk": 55, "def": 60, "spa": 50, "spd": 55, "spe": 40},
+        "ability": "金糸雀", # 攻撃毎S上昇。倒されると次へSバフ引継ぎ
+        "learnset": {1: "tackle", 5: "sing", 10: "sharpen", 20: "hyper_beam"},
+        "description": "アグライアの相棒。攻撃するたび加速し、想いを次へ託す。"
+    },
+    "ringo_ame":{
+        "name": "リンゴアメ", "type": "Grass", "rarity": 6,
+        "base_stats": {"hp": 65, "atk": 55, "def": 55, "spa": 45, "spd": 50, "spe": 40},
+        "ability": "ロケット", # 補助技で搭乗、攻撃で追撃
+        "learnset": {1: "tackle", 5: "growth", 10: "leaf_blade", 15: "poison_powder"},
+        "description": "トリスビアスの相棒。ロケットに乗って戦場を駆ける。"
+    },
+    "nunusu":{
+        "name": "ヌヌス", "type": "Grass", "rarity": 6,
+        "base_stats": {"hp": 75, "atk": 65, "def": 70, "spa": 80, "spd": 75, "spe": 55},
+        "ability": "大地獣", # 攻撃時デバフ付与。退場時デバフ深化
+        "learnset": {1: "leaf_blade", 5: "poison_powder", 12: "solar_beam"},
+        "description": "アナクサゴラスの相棒。相手を解析し弱体化させる。"
+    },
+    "cheribis":{
+        "name": "チェリビス", "type": "Light", "rarity": 6,
+        "base_stats": {"hp": 55, "atk": 45, "def": 50, "spa": 75, "spd": 65, "spe": 55},
+        "ability": "癒しの光", # 補助技でイカルン召喚(毎ターン回復)
+        "learnset": {1: "shining_ray", 5: "recover", 10: "flash_cannon", 20: "hyper_beam"},
+        "description": "ヒアシンシアの相棒。イカルンと共に味方を癒やす。"
+    },
+    "honey_fruit_soup":{
+        "name": "ハニーフルーツスープ", "type": "Dark", "rarity": 6,
+        "base_stats": {"hp": 60, "atk": 55, "def": 50, "spa": 60, "spd": 55, "spe": 45},
+        "ability": "蘇り", # HP0時、半分で復活（1回のみ）
+        "learnset": {1: "shadow_claw", 5: "growth", 11: "dark_pulse"},
+        "description": "メデイモスの相棒。何度でも蘇る不屈の魂。"
+    },
+    "nyanko_dorobou":{
+        "name": "ニャンコ泥棒", "type": "Dark", "rarity": 6,
+        "base_stats": {"hp": 50, "atk": 70, "def": 45, "spa": 40, "spd": 50, "spe": 80},
+        "ability": "盗みの天才", # 攻撃時50%で盗む
+        "learnset": {1: "scratch", 5: "tail_whip", 10: "shadow_claw", 15: "dark_pulse"},
+        "description": "セファリアの相棒。素早く相手の道具を奪う。"
+    },
+    "cho_cho_cake":{
+        "name": "チョウチョウケーキ", "type": "Normal", "rarity": 6,
+        "base_stats": {"hp": 70, "atk": 30, "def": 60, "spa": 50, "spd": 65, "spe": 25},
+        "ability": "甘美な誘惑", # 被弾時10%反射
+        "learnset": {1: "tackle", 5: "sing", 10: "recover", 20: "hyper_beam"},
+        "description": "キャストリスの相棒。攻撃した相手に甘いお返しをする。"
+    },
+    "biguruyashi":{
+        "name": "ビ-グルヤシ", "type": "Fire", "rarity": 6,
+        "base_stats": {"hp": 60, "atk": 80, "def": 50, "spa": 70, "spd": 55, "spe": 65},
+        "ability": "炎の守護者", # 火種スタック12で変身
+        "learnset": {1: "ember", 5: "sharpen", 10: "flamethrower", 30: "star_burst"},
+        "description": "ファイノンの相棒。火種を集め、伝説の姿へと覚醒する。"
+    },
+    "harapekono_sakana":{
+        "name": "腹ペコの魚", "type": "Water", "rarity": 6,
+        "base_stats": {"hp": 50, "atk": 60, "def": 40, "spa": 55, "spd": 45, "spe": 70},
+        "ability": "食いしん坊", # 補助技でメーレを飲み回復
+        "learnset": {1: "scratch", 5: "tail_whip", 10: "water_gun"},
+        "description": "セイレンスの相棒。メーレを飲んで体力を回復する。"
     },
     "kijyukyou":{
         "name": "奇獣卿", "type": "Dark", "rarity": 6,
-        "base_stats": {"hp": 100, "atk": 90, "def": 85, "spa": 80, "spd": 75, "spe": 70}, # ステータス強化
-        "ability": "王の風格", # 相手の全ステータスダウン効果
-        "learnset": {1: "shadow_claw", 10: "dark_pulse", 20: "hyper_beam"},
-        "description": "奇妙な力を持つキメラ。"
+        "base_stats": {"hp": 100, "atk": 90, "def": 85, "spa": 80, "spd": 75, "spe": 70},
+        "ability": "王の風格", # 補助技→攻撃で「屈服」付与
+        "learnset": {1: "shadow_claw", 5: "growl", 10: "dark_pulse", 20: "hyper_beam"},
+        "description": "ケリュドラの相棒。圧倒的な風格で相手を屈服させる。"
+    },
+    "candy_roll":{
+        "name": "キャンディーロール", "type": "Fire", "rarity": 6,
+        "base_stats": {"hp": 55, "atk": 50, "def": 45, "spa": 65, "spd": 50, "spe": 60},
+        "ability": "忘却", # 被弾時相手を「忘却」に（CD3ターン）
+        "learnset": {1: "ember", 5: "sing", 9: "flamethrower"},
+        "description": "三月なのかの相棒。攻撃してきた相手の記憶を奪う。"
+    },
+    "onkouna_ryu":{
+        "name": "温厚な竜", "type": "Light", "rarity": 6,
+        "base_stats": {"hp": 90, "atk": 80, "def": 85, "spa": 100, "spd": 95, "spe": 70},
+        "ability": "皆を守る者", # 場に出るとバリア。補助技で補充
+        "learnset": {1: "dragon_breath", 5: "recover", 15: "dragon_claw"},
+        "description": "丹恒の相棒。仲間を守る強固なバリアを展開する。"
     },
     "kyunure":{
         "name": "キュヌレ", "type": "Fairy", "rarity": 6,
-        "base_stats": {"hp": 85, "atk": 70, "def": 75, "spa": 90, "spd": 80, "spe": 95}, # ステータス強化
-        "ability": "最愛", # 全ステータスUP
-        "learnset": {1: "tackle", 10: "dazzling_gleam"},
-        "description": "愛の力を操るキメラ。"
+        "base_stats": {"hp": 85, "atk": 70, "def": 75, "spa": 90, "spd": 80, "spe": 95},
+        "ability": "最愛", # 追憶スタック。倒されるとゴースト化し追撃
+        "learnset": {1: "tackle", 5: "sing", 10: "dazzling_gleam"},
+        "description": "キュレネの相棒。愛の記憶は消えず、永遠に共に戦う。"
     }
 }
 
 # --- アイテムデータ (ITEMS) ---
 ITEMS = {
+    # 捕獲
     "monster_ball": {"name": "モンスターボール", "effect_type": "capture", "value": 1.0, "price": 200, "unlock_rank": 1, "desc": "野生のキメラを捕まえるボール。"},
     "super_ball": {"name": "スーパーボール", "effect_type": "capture", "value": 1.5, "price": 600, "unlock_rank": 10, "desc": "モンスターボールより捕まえやすいボール。"},
     "hyper_ball": {"name": "ハイパーボール", "effect_type": "capture", "value": 2.0, "price": 1200, "unlock_rank": 20, "desc": "かなり捕まえやすい高性能なボール。"},
     
+    # 回復
     "potion": {"name": "キズぐすり", "effect_type": "heal", "value": 50, "price": 100, "unlock_rank": 1, "desc": "HPを50回復する。"},
     "super_potion": {"name": "いいキズぐすり", "effect_type": "heal", "value": 150, "price": 500, "unlock_rank": 5, "desc": "HPを150回復する。"},
     "hyper_potion": {"name": "すごいキズぐすり", "effect_type": "heal", "value": 400, "price": 1500, "unlock_rank": 15, "desc": "HPを400回復する。"},
-    
+    "antidote": {"name": "毒消し", "effect_type": "heal_status", "status": "poison", "price": 100, "unlock_rank": 1, "desc": "毒状態を治す。"},
+    "paralyze_heal": {"name": "麻痺直し", "effect_type": "heal_status", "status": "paralysis", "price": 100, "unlock_rank": 1, "desc": "麻痺状態を治す。"},
+    "full_heal": {"name": "なんでも直し", "effect_type": "heal_status", "status": "all", "price": 600, "unlock_rank": 10, "desc": "すべての状態異常を治す。"},
+
     # 育成
     "exp_candy_s": {"name": "けいけんアメS", "effect_type": "exp", "value": 5000, "price": 500, "unlock_rank": 1, "desc": "キメラに5000の経験値を与える。"},
     "exp_candy_m": {"name": "けいけんアメM", "effect_type": "exp", "value": 20000, "price": 2000, "unlock_rank": 5, "desc": "キメラに20000の経験値を与える。"},
     "exp_candy_l": {"name": "けいけんアメL", "effect_type": "exp", "value": 100000, "price": 8000, "unlock_rank": 15, "desc": "キメラに100000の経験値を与える。"},
     
-    # 新規装備アイテム
+    # 装備
     "power_band": {"name": "ちからのハチマキ", "effect_type": "equip_atk", "value": 1.2, "price": 1000, "unlock_rank": 1, "desc": "持たせると物理攻撃が上がる。"},
     "wise_glasses": {"name": "ものしりメガネ", "effect_type": "equip_spa", "value": 1.2, "price": 1000, "unlock_rank": 1, "desc": "持たせると特殊攻撃が上がる。"},
     "vitality_belt": {"name": "あつぞこブーツ", "effect_type": "equip_hp", "value": 1.2, "price": 1500, "unlock_rank": 5, "desc": "持たせると最大HPが増える。"},
@@ -295,7 +348,6 @@ CHALLENGE_TRAINERS = {
 }
 
 # --- 真なるキメラマスターロード用 (Hard Mode) ---
-# レベル100超え、全員持ち物あり、AI用ポーション所持
 CHALLENGE_TRAINERS_HARD = {
     1: {
         "name": "真・アグライア",

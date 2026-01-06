@@ -1,8 +1,9 @@
+# kimera_core.py
 import json
 import random
 import math
 from pathlib import Path
-from kimera_data import BASE_CHIMERAS, MOVES, ITEMS
+from kimera_data import BASE_CHIMERAS, MOVES, ITEMS, TYPES, TYPE_CHART
 
 # データ保存ディレクトリ
 DATA_DIR = Path("/data")
@@ -18,13 +19,11 @@ def _get_user_file_path(user_id, hard_mode=False):
 def get_user_data(user_id, hard_mode=False):
     """
     ユーザーデータを取得する。
-    hard_mode=True の場合はハードモード用の別ファイルを読み込む。
     """
     file_path = _get_user_file_path(user_id, hard_mode)
     
     # 新規作成（ファイルがない場合）
     if not file_path.exists():
-        # 初期データ
         initial_data = {
             "party": [],
             "box": [],
@@ -39,7 +38,6 @@ def get_user_data(user_id, hard_mode=False):
             "is_hard_mode": hard_mode
         }
         
-        # 最初の1体
         starter_lv = 5 if not hard_mode else 10
         starter_base = random.choice(list(BASE_CHIMERAS.keys()))
         starter = create_chimera_instance(starter_base, level=starter_lv)
@@ -52,7 +50,7 @@ def get_user_data(user_id, hard_mode=False):
 
     try:
         data = json.loads(file_path.read_text(encoding="utf-8"))
-        # 簡易マイグレーション
+        # マイグレーション
         if "items" not in data: data["items"] = {}
         if "money" not in data: data["money"] = 1000
         if "box" not in data: data["box"] = []
@@ -65,7 +63,6 @@ def get_user_data(user_id, hard_mode=False):
         return get_user_data(user_id, hard_mode)
 
 def save_user_data(user_id, user_data, hard_mode=False):
-    """モードに応じたファイルに保存する"""
     file_path = _get_user_file_path(user_id, hard_mode)
     file_path.write_text(json.dumps(user_data, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -80,10 +77,12 @@ def register_dex(ud, base_id, caught=False):
 
 # --- パーティ・回復 ---
 def heal_all_kimeras(ud):
-    for c in ud["party"]:
+    for c in ud["party"] + ud["box"]:
         c["current_hp"] = c["stats"]["max_hp"]
-    for c in ud["box"]:
-        c["current_hp"] = c["stats"]["max_hp"]
+        c["status_condition"] = None
+        c["stat_stages"] = {"atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0}
+        c["battle_state"] = {} # バトル中の一時状態クリア
+        c["form"] = None # 変身解除
 
 def swap_party_box(ud, party_idx, box_idx):
     if 0 <= party_idx < len(ud["party"]) and 0 <= box_idx < len(ud["box"]):
@@ -107,6 +106,31 @@ def move_box_to_party(ud, box_idx):
         return True
     return False
 
+# --- 配合 (Breeding) ---
+def breed_chimeras(parent1, parent2):
+    """
+    2体の親から新しいキメラ(Lv1)を生成する。
+    ベースはparent1(母親役)を継承、個体値は両親の平均+ランダム変異。
+    """
+    base_id = parent1["base_id"]
+    
+    # 個体値遺伝: 両親の平均 + ランダム(-2~+2)
+    new_ivs = {}
+    for k in ["hp", "atk", "def", "spa", "spd", "spe"]:
+        p1_iv = parent1.get("ivs", {}).get(k, 15)
+        p2_iv = parent2.get("ivs", {}).get(k, 15)
+        avg = (p1_iv + p2_iv) // 2
+        mutation = random.randint(-2, 4) # 少し良くなりやすい
+        new_iv = max(0, min(31, avg + mutation))
+        new_ivs[k] = new_iv
+        
+    child = create_chimera_instance(base_id, level=1)
+    child["ivs"] = new_ivs
+    update_chimera_stats(child)
+    child["current_hp"] = child["stats"]["max_hp"]
+    
+    return child
+
 # --- アイテム効果 ---
 def apply_item_effect_logic(ud, item_key, target_chimera):
     item = ITEMS.get(item_key)
@@ -124,15 +148,27 @@ def apply_item_effect_logic(ud, item_key, target_chimera):
         msg = f"{target_chimera['nickname']} の体力が {recov} 回復した！"
         consumed = True
 
+    elif item["effect_type"] == "heal_status":
+        status_to_heal = item.get("status")
+        current_status = target_chimera.get("status_condition")
+        
+        if not current_status:
+             return "健康そのものよ。"
+             
+        if status_to_heal == "all" or status_to_heal == current_status:
+            target_chimera["status_condition"] = None
+            msg = f"{target_chimera['nickname']} の状態異常が治ったわ！"
+            consumed = True
+        else:
+            return "その薬じゃ治らないみたい。"
+
     elif item["effect_type"] == "exp":
         is_hard = ud.get("is_hard_mode", False)
         limit = 200 if is_hard else 100
         if target_chimera["level"] >= limit: return "これ以上は育たないわ。"
 
-        # ハードモードはアメ効果0.1倍
         exp_val = item["value"]
-        if is_hard:
-            exp_val = int(exp_val * 0.1)
+        if is_hard: exp_val = int(exp_val * 0.1)
 
         target_chimera["xp"] += exp_val
         msg = f"{target_chimera['nickname']} に経験値 {exp_val} をあげた！"
@@ -187,10 +223,9 @@ def unequip_item_logic(ud, party_idx):
 
     return f"{target['nickname']} から道具を預かったわ。"
 
-# --- キメラ計算 (個体値実装) ---
+# --- キメラステータス計算 ---
 
 def generate_ivs():
-    """0〜31の個体値をランダムに生成"""
     return {
         "hp": random.randint(0, 31),
         "atk": random.randint(0, 31),
@@ -201,33 +236,23 @@ def generate_ivs():
     }
 
 def calculate_stat(base_val, iv, level, is_hp=False):
-    """
-    ステータス計算式 (個体値込み)
-    HP: ( (種族値*2 + 個体値) * Lv / 100 ) + Lv + 10
-    他: ( (種族値*2 + 個体値) * Lv / 100 ) + 5
-    """
     core_val = (base_val * 2) + iv
     val = math.floor((core_val * level) / 100)
-    
     if is_hp:
         return int(val + level + 10)
     else:
         return int(val + 5)
 
 def update_chimera_stats(instance):
-    """レベル、装備、特性、個体値に基づいてステータスを最終決定する"""
     base = BASE_CHIMERAS[instance["base_id"]]
     bs = base["base_stats"]
     lv = instance["level"]
     ability = base["ability"]
     
-    # 既存データに個体値がない場合の補完 (Migration)
-    if "ivs" not in instance:
-        instance["ivs"] = generate_ivs()
-    
+    if "ivs" not in instance: instance["ivs"] = generate_ivs()
     ivs = instance["ivs"]
     
-    # 1. 素のステータス (個体値反映)
+    # 素のステータス
     s = {
         "max_hp": calculate_stat(bs["hp"], ivs["hp"], lv, True),
         "atk": calculate_stat(bs["atk"], ivs["atk"], lv),
@@ -237,7 +262,7 @@ def update_chimera_stats(instance):
         "spe": calculate_stat(bs["spe"], ivs["spe"], lv),
     }
     
-    # 2. 装備・特性補正
+    # 装備・特性補正 (バトル外で計算できるもの)
     if ability == "闘争心": s["atk"] = int(s["atk"] * 1.1)
     if ability == "大地獣": s["def"] = int(s["def"] * 1.1)
     if ability in ["水流", "ロケット", "盗みの天才"]: s["spe"] = int(s["spe"] * 1.1)
@@ -270,7 +295,6 @@ def create_chimera_instance(base_id, level=5, nickname=None, held_item=None):
     if not moves: moves = ["tackle"]
     moves = moves[-4:]
 
-    # インスタンス生成 (個体値含む)
     instance = {
         "id": random.randint(100000, 999999),
         "base_id": base_id,
@@ -279,12 +303,18 @@ def create_chimera_instance(base_id, level=5, nickname=None, held_item=None):
         "xp": 0,
         "next_xp": level * 100,
         "current_hp": 0,
-        "ivs": generate_ivs(), # 個体値を生成
+        "ivs": generate_ivs(),
         "stats": {},
         "moves": moves,
         "held_item": held_item,
         "friendship": 0,
-        "rarity": base.get("rarity", 1)
+        "rarity": base.get("rarity", 1),
+        
+        # 新規追加項目
+        "status_condition": None, # poison, paralysis etc.
+        "stat_stages": {"atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0}, # -6 to +6
+        "battle_state": {}, # バトル中の一時的な状態フラグ(スタックなど)
+        "form": None, # 変身形態
     }
     update_chimera_stats(instance)
     instance["current_hp"] = instance["stats"]["max_hp"]
@@ -293,13 +323,13 @@ def create_chimera_instance(base_id, level=5, nickname=None, held_item=None):
 def get_chimera_display_stats(instance):
     base = BASE_CHIMERAS[instance["base_id"]]
     s = instance["stats"]
-    ivs = instance.get("ivs", generate_ivs()) # 表示用安全策
+    ivs = instance.get("ivs", generate_ivs())
     
     moves_txt = ", ".join([MOVES[m]["name"] for m in instance["moves"]])
     item_txt = ITEMS[instance["held_item"]]["name"] if instance.get("held_item") else "なし"
     rarity_star = "★" * base.get("rarity", 1)
+    status_txt = f"[{instance['status_condition']}]" if instance.get('status_condition') else ""
     
-    # 個体値合計によるランク判定 (最大: 31*6 = 186)
     total_iv = sum(ivs.values())
     if total_iv >= 170: rank = "S (神個体)"
     elif total_iv >= 150: rank = "A (素晴らしい)"
@@ -309,7 +339,7 @@ def get_chimera_display_stats(instance):
     else: rank = "E (平凡)"
 
     return (
-        f"**{instance['nickname']}** (Lv.{instance['level']}) {rarity_star}\n"
+        f"**{instance['nickname']}** (Lv.{instance['level']}) {rarity_star} {status_txt}\n"
         f"種類: {base['name']} / {base['type']}\n"
         f"特性: {base['ability']} / 持ち物: {item_txt}\n"
         f"才能ランク: **{rank}** (合計{total_iv})\n"
@@ -330,10 +360,8 @@ def level_up_chimera(instance, is_hard_mode=False):
     instance["level"] += 1
     instance["xp"] = max(0, instance["xp"] - instance["next_xp"])
     
-    # ハードモードは必要経験値3倍
     base_req = 100
-    if is_hard_mode:
-        base_req = 300
+    if is_hard_mode: base_req = 300
     instance["next_xp"] = instance["level"] * base_req
     
     base = BASE_CHIMERAS[instance["base_id"]]
@@ -361,21 +389,20 @@ def level_up_chimera(instance, is_hard_mode=False):
             msg += f"\n『{MOVES[forgot]['name']}』を忘れて『{MOVES[new_move]['name']}』を覚えた！"
     return msg
 
-def migrate_old_data():
-    old_path = DATA_DIR / "kimera_save.json"
-    if not old_path.exists(): return "ファイルなし"
-    try:
-        all_data = json.loads(old_path.read_text(encoding="utf-8"))
-        c = 0
-        for uid, d in all_data.items():
-            save_user_data(uid, d)
-            c += 1
-        old_path.rename(DATA_DIR / "kimera_save.json.bak")
-        return f"移行完了: {c}件"
-    except Exception as e:
-        return f"エラー: {e}"
-
 # --- 戦闘用ロジック ---
+def calculate_type_effectiveness(move_type, defender_type):
+    """タイプ相性倍率を返す"""
+    if move_type in TYPE_CHART and defender_type in TYPE_CHART[move_type]:
+        return TYPE_CHART[move_type][defender_type]
+    return 1.0
+
+def calculate_stat_with_stage(stat_value, stage):
+    """ランク補正後のステータスを計算 (-6 ~ +6)"""
+    if stage >= 0:
+        return int(stat_value * (2 + stage) / 2)
+    else:
+        return int(stat_value * 2 / (2 + abs(stage)))
+
 def check_survival_item(chimera, damage):
     if chimera["current_hp"] == chimera["stats"]["max_hp"] and damage >= chimera["current_hp"]:
         held = chimera.get("held_item")
@@ -387,5 +414,6 @@ def check_survival_item(chimera, damage):
 def check_resist_berry(chimera, damage_type):
     held = chimera.get("held_item")
     if held == "resist_berry":
+        # ここで本来は相性計算が必要だが、簡易的に発動フラグだけ返す
         return True 
     return False
