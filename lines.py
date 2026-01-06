@@ -346,7 +346,6 @@ def get_reply(message: str, affection_level: int, user_name: str, lang: str = "j
     encourage_keywords = ["励まして", "encourage", "cheer me up", "慰めて", "辛い", "悲しい"]
     if any(w in msg for w in encourage_keywords):
         base = random.choice(target_lines.get("encouragement", target_lines["normal"]))
-        return _maybe_high_affection_override(base, affection_level, lang).replace("{name}", user_name)
 
     # ⑤ みんなについて
     others_keywords = ["みんなについて", "tell me about everyone", "others", "誰"]
