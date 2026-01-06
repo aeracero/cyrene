@@ -142,7 +142,8 @@ async def on_message(message):
     CMD_KEYWORDS = ["コマンド", "ヘルプ", "command", "help"]
     RPS_KEYWORDS = ["じゃんけん", "rps", "rock paper scissors"]
     TRANS_KEYWORDS = ["変身", "transform"]
-    GACHA_KEYWORDS = ["ガチャ", "gacha"]
+    # ★修正: ここに「ピックアップ」と「pickup」を追加しました
+    GACHA_KEYWORDS = ["ガチャ", "gacha", "ピックアップ", "pickup"]
     DAILY_KEYWORDS = ["デイリー", "daily"]
     NICK_KEYWORDS = ["あだ名", "nickname"]
     MYU_KEYWORDS = ["ミュリオン", "myurion"]
