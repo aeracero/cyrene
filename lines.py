@@ -345,7 +345,7 @@ def get_reply(message: str, affection_level: int, user_name: str, lang: str = "j
     # ★追加: ④ 励まし
     encourage_keywords = ["励まして", "encourage", "cheer me up", "慰めて", "辛い", "悲しい"]
     if any(w in msg for w in encourage_keywords):
-        base = random.choice(target_lines.get("encouragement", target_lines["normal"]))
+        return random.choice(target_lines.get("encouragement", ["..."])).replace("{name}", user_name)
 
     # ⑤ みんなについて
     others_keywords = ["みんなについて", "tell me about everyone", "others", "誰"]
