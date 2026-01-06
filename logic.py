@@ -1,6 +1,6 @@
 import random
 import re
-from config import today_str
+from config import today_str, PRIMARY_ADMIN_ID
 import database as db
 import kimera_core as k_core
 import kimera_data as k_data
@@ -8,7 +8,7 @@ from special_unlocks import get_janken_wins, is_nanoka_unlocked, is_danheng_unlo
 
 # --- ガチャ設定＆キャラクターデータ ---
 
-# 現在開催中のピックアップキャラ
+# 現在開催中のピックアップキャラ (デフォルト)
 # "cyrene", "aglaia", "trisbeas", "anaxagoras", "medimos", "sepharia" などに切り替え可能
 CURRENT_BANNER_KEY = "cyrene"
 
@@ -450,7 +450,7 @@ async def send_myurion_question(message, user_id, correct_count, state_dict):
     state_dict[user_id] = {"question": q, "options": [c for _, c in indexed], "correct_index": correct_index}
     await message.channel.send(apply_myurion_filter(user_id, f"{message.author.mention} {body}"))
 
-# --- 新・ガチャロジック ---
+# --- 新・ガチャロジック (アップデート版) ---
 
 def calc_main_5star_rate(pity_5: int) -> float:
     base = 0.0006
@@ -464,7 +464,13 @@ def perform_gacha_pulls(user_id: int, num_pulls: int, use_ticket: bool = False) 
     lang = db.get_user_lang(user_id)
     user_kimera_data = k_core.get_user_data(user_id, hard_mode=False)
 
-    pickup_char = LIMITED_CHARACTERS.get(CURRENT_BANNER_KEY, LIMITED_CHARACTERS["cyrene"])
+    # ★ ユーザーが選択したピックアップを取得 (なければデフォルト)
+    pickup_key = state.get("selected_pickup", CURRENT_BANNER_KEY)
+    # もし無効なキーが入っていたらデフォルトに戻す
+    if pickup_key not in LIMITED_CHARACTERS:
+        pickup_key = CURRENT_BANNER_KEY
+    
+    pickup_char = LIMITED_CHARACTERS[pickup_key]
 
     # コスト支払い & セファリア効果（キャッシュバック）
     if use_ticket:
@@ -529,7 +535,7 @@ def perform_gacha_pulls(user_id: int, num_pulls: int, use_ticket: bool = False) 
                 guaranteed = True
             
             if is_pickup_win:
-                char_key = CURRENT_BANNER_KEY
+                char_key = pickup_key # ★ユーザー選択のピックアップキーを使用
                 char_info = pickup_char
                 
                 count = state["characters"].get(char_key, 0) + 1
@@ -619,7 +625,12 @@ def format_gacha_status(user_id: int) -> str:
     aff_mult = 1.0 + get_gacha_buff_multiplier(user_id, "affection_boost")
     
     chars = state.get("characters", {})
-    pickup_char = LIMITED_CHARACTERS.get(CURRENT_BANNER_KEY, {})
+    
+    # ★ユーザーの選択ピックアップを表示
+    pickup_key = state.get("selected_pickup", CURRENT_BANNER_KEY)
+    if pickup_key not in LIMITED_CHARACTERS: pickup_key = CURRENT_BANNER_KEY
+    
+    pickup_char = LIMITED_CHARACTERS.get(pickup_key, {})
     pickup_name = pickup_char.get("name", "Unknown")
 
     if lang == "en":
@@ -651,6 +662,54 @@ def format_gacha_status(user_id: int) -> str:
             f"・所持キャラ: {char_str}\n\n"
             "『単発ガチャ』『10連ガチャ』で運試しよ！"
         )
+
+# ★ ピックアップ変更機能
+def change_pickup_banner(user_id: int, target_name: str) -> tuple[bool, str]:
+    """1600石消費で個人のピックアップ対象を変更する"""
+    
+    # 1. 対象キャラの特定
+    target_key = None
+    # キー直接一致チェック
+    if target_name in LIMITED_CHARACTERS:
+        target_key = target_name
+    else:
+        # 名前一致チェック
+        for k, v in LIMITED_CHARACTERS.items():
+            if v["name"] == target_name:
+                target_key = k
+                break
+    
+    if not target_key:
+        return False, "そのキャラクターはピックアップ対象にいないみたい。"
+        
+    # 2. 権限とコストチェック
+    is_main_admin = (user_id == PRIMARY_ADMIN_ID)
+    cost = 1600
+    
+    state = db.get_gacha_state(user_id)
+    
+    if is_main_admin:
+        # 管理者は無料
+        pass
+    else:
+        # 一般ユーザーは1600石消費
+        if state.get("stones", 0) < cost:
+            return False, f"石が足りないわ。（必要: {cost}個）"
+        state["stones"] -= cost
+        
+    # 3. 変更適用
+    state["selected_pickup"] = target_key
+    db.save_gacha_state(user_id, state)
+    
+    char_name = LIMITED_CHARACTERS[target_key]['name']
+    msg = f"ピックアップを **{char_name}** に変更したわ♪"
+    
+    if is_main_admin:
+        msg += "\n(デバッグ権限: 消費なし)"
+    else:
+        msg += f"\n({cost}石 消費 / 残り: {state['stones']}個)"
+        
+    return True, msg
 
 # --- じゃんけんロジック ---
 JANKEN_HANDS = ["グー", "チョキ", "パー"]

@@ -79,7 +79,8 @@ GENERAL_COMMANDS_LIST_JP = (
     "- `ガチャメニュー`: 石やチケットの確認よ\n"
     "- `単発ガチャ` / `10連ガチャ`: 運試し、してみない？\n"
     "- `チケット10連`: すり抜けチケットを使って回すわ\n"
-    "- `デイリー受け取り`: 1日1回、石をプレゼントするわ♪\n\n"
+    "- `デイリー受け取り`: 1日1回、石をプレゼントするわ♪\n"
+    "- `ピックアップ変更 [キャラ名]`: 1600石で狙いを変更できるわ\n\n"
     "**★ キメラ**\n"
     "- `キメラと遊びたい`: ミニゲームを始めるわ♪"
 )
@@ -104,7 +105,8 @@ GENERAL_COMMANDS_LIST_EN = (
     "- `Gacha`: Check gems and tickets\n"
     "- `Pull 1` / `Pull 10`: Try your luck?\n"
     "- `Ticket 10`: Use an off-banner ticket for 10 pulls\n"
-    "- `Daily`: Get your daily gems♪\n\n"
+    "- `Daily`: Get your daily gems♪\n"
+    "- `Change Pickup [Name]`: Change target for 1600 gems\n\n"
     "**★ Kimera**\n"
     "- `Play with Kimera`: Start the minigame♪"
 )
@@ -683,6 +685,19 @@ async def on_message(message):
 
     # --- ガチャ ---
     if any(k in content_body_lower for k in GACHA_KEYWORDS):
+        # ★ ピックアップ変更コマンド (Change Pickup / ピックアップ変更)
+        change_cmd = ["ピックアップ変更", "change pickup"]
+        if any(c in content_body_lower for c in change_cmd):
+            # 例: ピックアップ変更 アグライア -> アグライア抽出
+            target_name = re.sub(r"^(ピックアップ変更|change pickup)\s*", "", content_body, flags=re.IGNORECASE).strip()
+            if not target_name:
+                await send_myu(message, user_id, "誰に変更するの？ 名前を教えてちょうだい。")
+                return
+            
+            success, res_msg = logic.change_pickup_banner(user_id, target_name)
+            await send_myu(message, user_id, res_msg)
+            return
+
         if "ticket" in content_body_lower or "チケット" in content_body_lower:
             is_10 = "10" in content_body_lower or "ten" in content_body_lower
             if not is_10: is_10 = True 
