@@ -2,7 +2,85 @@ import random
 import re
 from config import today_str
 import database as db
+import kimera_core as k_core
+import kimera_data as k_data
 from special_unlocks import get_janken_wins, is_nanoka_unlocked, is_danheng_unlocked
+
+# --- ガチャ設定＆キャラクターデータ ---
+
+# 現在開催中のピックアップキャラ
+# "cyrene", "aglaia", "trisbeas", "anaxagoras", "medimos", "sepharia" などに切り替え可能
+CURRENT_BANNER_KEY = "cyrene"
+
+# 黄金裔（全員限定キャラ扱い）の定義
+# buff_base: 本体(1体目)の効果量
+# buff_scale: 1凸(2体目以降)ごとの追加効果量
+LIMITED_CHARACTERS = {
+    "cyrene": {
+        "name": "キュレネ", 
+        "title": "愛の",
+        "secret_voice_id": "voice_cyrene_secret_love",
+        "buff_type": "affection_boost", 
+        "buff_base": 0.20, # 本体で +20%
+        "buff_scale": 0.10, # 1凸ごとに +10%
+        "desc": "【愛の加護】好感度XP獲得量UP (完凸: +80%)"
+    },
+    "aglaia": {
+        "name": "アグライア", 
+        "title": "美の",
+        "secret_voice_id": "voice_aglaia_aria",
+        "buff_type": "training_crit", 
+        "buff_base": 0.05, # 本体で 5%
+        "buff_scale": 0.02, # 1凸ごとに +2%
+        "desc": "【審美眼】キメラトレーニングで「大成功」が出る確率UP (完凸: 17%)"
+    },
+    "trisbeas": {
+        "name": "トリスビアス", 
+        "title": "富豪の",
+        "secret_voice_id": "voice_trisbeas_scold",
+        "buff_type": "daily_income", 
+        "buff_base": 2000, # 本体で +2000
+        "buff_scale": 500, # 1凸ごとに +500
+        "desc": "【パトロン】デイリー配布石が増加 (完凸: +5000)"
+    },
+    "anaxagoras": {
+        "name": "アナクサゴラス", 
+        "title": "論理の",
+        "secret_voice_id": "voice_anax_logic",
+        "buff_type": "rps_win_bonus", 
+        "buff_base": 5,    # 本体で XP+5
+        "buff_scale": 2,   # 1凸ごとに XP+2
+        "desc": "【演算】じゃんけん勝利時の獲得XPボーナス (完凸: +17)"
+    },
+    "medimos": {
+        "name": "メデイモス", 
+        "title": "戦神の",
+        "secret_voice_id": "voice_medimos_shout",
+        "buff_type": "trainer_xp_mult", 
+        "buff_base": 0.1,  # 本体で +10% (1.1倍)
+        "buff_scale": 0.05, # 1凸ごとに +5%
+        "desc": "【スパルタ】キメラ育成XPの倍率UP (完凸: +40%)"
+    },
+    "sepharia": {
+        "name": "セファリア", 
+        "title": "怪盗の",
+        "secret_voice_id": "voice_sepharia_steal",
+        "buff_type": "gacha_refund", 
+        "buff_base": 0.05, # 本体で 5%
+        "buff_scale": 0.02, # 1凸ごとに +2%
+        "desc": "【キャッシュバック】石消費時に確率で一部還元 (完凸: 17%)"
+    },
+    # 必要に応じて追加: castoris(夢/あいこXP), electra(歌/リラックス効果)など
+}
+
+# 恒常（すり抜け）★5枠
+STANDARD_POOL_5 = [
+    {"name": "量産型メカキュレネ", "type": "item", "id": "mecha_cyrene_doll", "desc": "高値で売れるフィギュア"},
+    {"name": "太古の記憶データ", "type": "item", "id": "ancient_memory", "desc": "キメラのステータスを大幅強化する"}
+]
+
+GACHA_ITEMS_R4 = ["hyper_ball", "exp_candy_m", "super_potion", "wise_glasses", "power_band", "full_heal"]
+GACHA_ITEMS_R3 = ["monster_ball", "super_ball", "potion", "antidote", "paralyze_heal"]
 
 # --- アチーブメント定義 ---
 ACHIEVEMENTS = {
@@ -73,7 +151,6 @@ ACHIEVEMENTS = {
         "title_jp": "社畜の", "title_en": "Corporate Slave's",
         "type": "manual", "threshold": 1
     },
-    # ★追加: 真なるキメラマスター
     "kimera_true_master": {
         "name_jp": "真なるキメラマスター", "name_en": "True Kimera Master",
         "desc_jp": "「真なるキメラマスターロード」をクリアする", "desc_en": "Complete True Kimera Master Road",
@@ -82,10 +159,44 @@ ACHIEVEMENTS = {
     },
 }
 
+def get_gacha_buff_multiplier(user_id: int, buff_type: str) -> float:
+    """指定されたタイプのバフ値を、凸数を考慮して計算して返す"""
+    state = db.get_gacha_state(user_id)
+    # 互換性: characters がない場合は cyrene_copies から生成
+    chars = state.get("characters", {})
+    if "cyrene" not in chars and "cyrene_copies" in state:
+        chars["cyrene"] = state["cyrene_copies"]
+    
+    total_val = 0.0
+    
+    for char_key, count in chars.items():
+        if count > 0 and char_key in LIMITED_CHARACTERS:
+            c_data = LIMITED_CHARACTERS[char_key]
+            
+            # バフの種類が一致する場合のみ計算
+            if c_data.get("buff_type") == buff_type:
+                base = c_data.get("buff_base", 0)
+                scale = c_data.get("buff_scale", 0)
+                
+                # 凸数 (最大6凸まで計算)
+                eidolon_count = min(count - 1, 6) # 最大6凸でキャップ
+                
+                val = base + (eidolon_count * scale)
+                total_val += val
+
+    return total_val
+
+def check_secret_voice(user_id: int, char_key: str) -> bool:
+    """特定のキャラのシークレットボイスが解放されているか確認"""
+    state = db.get_gacha_state(user_id)
+    unlocked = state.get("unlocked_voices", [])
+    
+    if char_key in LIMITED_CHARACTERS:
+        target_id = LIMITED_CHARACTERS[char_key]["secret_voice_id"]
+        return target_id in unlocked
+    return False
+
 def check_all_achievements(user_id: int) -> list[str]:
-    """
-    ユーザーの全ステータスを確認し、解除条件を満たした実績があれば解除して通知を返す。
-    """
     newly_unlocked = []
     lang = db.get_user_lang(user_id)
     
@@ -95,7 +206,12 @@ def check_all_achievements(user_id: int) -> list[str]:
     
     aff_xp, aff_lv = get_user_affection(user_id)
     gacha_state = db.get_gacha_state(user_id)
+    
+    # 新旧データの統合
     cyrene_copies = gacha_state.get("cyrene_copies", 0)
+    if "characters" in gacha_state and "cyrene" in gacha_state["characters"]:
+        cyrene_copies = max(cyrene_copies, gacha_state["characters"]["cyrene"])
+
     rps_wins = get_janken_wins(user_id)
     
     current_values = {
@@ -112,8 +228,6 @@ def check_all_achievements(user_id: int) -> list[str]:
 
     for ach_id, data in ACHIEVEMENTS.items():
         if ach_id in unlocked_ids: continue
-        
-        # manualタイプはここでは自動判定しない
         if data["type"] == "manual": continue
             
         req_type = data["type"]
@@ -142,7 +256,6 @@ def get_title_prefix(user_id: int) -> str:
     return f"{title} "
 
 def format_achievement_progress(user_id: int) -> str:
-    # 閲覧時に最新状態をチェックして更新
     new_unlocks = check_all_achievements(user_id)
     
     ach_data = db.get_user_achievements(user_id)
@@ -154,8 +267,13 @@ def format_achievement_progress(user_id: int) -> str:
     xp, lv = get_user_affection(user_id)
     gacha = db.get_gacha_state(user_id)
     
+    # Cyrene Copies count safe retrieval
+    cyrene_cnt = gacha.get("cyrene_copies", 0)
+    if "characters" in gacha and "cyrene" in gacha["characters"]:
+        cyrene_cnt = max(cyrene_cnt, gacha["characters"]["cyrene"])
+
     vals = {
-        "affection": lv, "xp": xp, "cyrene_copies": gacha.get("cyrene_copies", 0),
+        "affection": lv, "xp": xp, "cyrene_copies": cyrene_cnt,
         "rps_win": get_janken_wins(user_id), "talk_count": stats.get("talk_count", 0),
         "gacha_count": stats.get("gacha_count", 0), "guardian": 1 if db.get_guardian_level(user_id) else 0,
         "nanoka_flag": 1 if is_nanoka_unlocked(user_id) else 0,
@@ -219,21 +337,20 @@ def get_user_affection(user_id: int):
     xp = int(info.get("xp", 0))
     return xp, get_level_from_xp(xp, cfg)
 
-def get_cyrene_affection_multiplier(user_id: int) -> float:
-    try:
-        state = db.get_gacha_state(user_id)
-        copies = int(state.get("cyrene_copies", 0))
-        mult = 1.0 + 0.2 * copies
-        return min(2.4, mult)
-    except: return 1.0
-
 def add_affection_xp(user_id: int, delta: int, reason: str = ""):
     if delta == 0: return
     if delta > 0:
-        mult = get_cyrene_affection_multiplier(user_id)
-        if mult != 1.0:
-            delta = int(delta * mult)
-            if delta < 1: delta = 1
+        # 新しいバフシステムで倍率計算
+        # キュレネの凸数ボーナスもここで計算される
+        buff_mult = get_gacha_buff_multiplier(user_id, "affection_boost")
+        mult = 1.0 + buff_mult
+        
+        # 既存のロジックとの互換性チェック（念の為）
+        # もしLIMITED_CHARACTERSにcyreneがいない場合のフォールバック（今回は必ずある）
+        
+        delta = int(delta * mult)
+        if delta < 1: delta = 1
+
     data = db.load_affection_data()
     info = data.get(str(user_id), {})
     xp = max(0, int(info.get("xp", 0)) + delta)
@@ -333,7 +450,8 @@ async def send_myurion_question(message, user_id, correct_count, state_dict):
     state_dict[user_id] = {"question": q, "options": [c for _, c in indexed], "correct_index": correct_index}
     await message.channel.send(apply_myurion_filter(user_id, f"{message.author.mention} {body}"))
 
-# --- ガチャロジック ---
+# --- 新・ガチャロジック ---
+
 def calc_main_5star_rate(pity_5: int) -> float:
     base = 0.0006
     if pity_5 <= 73: return base
@@ -344,73 +462,127 @@ def calc_main_5star_rate(pity_5: int) -> float:
 def perform_gacha_pulls(user_id: int, num_pulls: int, use_ticket: bool = False) -> tuple[bool, str]:
     state = db.get_gacha_state(user_id)
     lang = db.get_user_lang(user_id)
+    user_kimera_data = k_core.get_user_data(user_id, hard_mode=False)
 
-    msg_ticket_10only = "Tickets are for 10-pulls only." if lang == "en" else "チケットは10連専用みたい。"
-    msg_ticket_lack = "Not enough tickets." if lang == "en" else "チケットが足りないみたい。"
-    msg_stone_lack = "Not enough stones (Need: {cost})" if lang == "en" else "石が足りないみたい（必要: {cost}）"
-    
+    pickup_char = LIMITED_CHARACTERS.get(CURRENT_BANNER_KEY, LIMITED_CHARACTERS["cyrene"])
+
+    # コスト支払い & セファリア効果（キャッシュバック）
     if use_ticket:
-        if num_pulls != 10: return False, msg_ticket_10only
-        if state.get("offbanner_tickets", 0) <= 0: return False, msg_ticket_lack
+        if num_pulls != 10: return False, "チケットは10連専用です。"
+        if state.get("offbanner_tickets", 0) <= 0: return False, "チケットが足りません。"
         state["offbanner_tickets"] -= 1
-        cost_str = "(1 Ticket consumed)" if lang == "en" else "（すり抜けチケット1枚消費）"
+        cost_str = "(チケット消費)"
     else:
         cost = 160 * num_pulls
-        if state.get("stones", 0) < cost: return False, msg_stone_lack.format(cost=cost)
+        
+        # セファリアの確率発動判定
+        refund_chance = get_gacha_buff_multiplier(user_id, "gacha_refund")
+        if refund_chance > 0 and random.random() < refund_chance:
+             # 当選したらコスト半額
+             cost = int(cost * 0.5)
+             cost_str = f"({cost} 個消費 - 怪盗の還元発動!)"
+        else:
+             cost_str = f"({cost} 個消費)"
+
+        if state.get("stones", 0) < cost: return False, f"石が足りません（必要: {cost}）"
         state["stones"] -= cost
-        cost_str = f"({cost} stones consumed)" if lang == "en" else f"（石 {cost} 個消費）"
 
     pity_5 = state.get("pity_5", 0)
     pity_4 = state.get("pity_4", 0)
-    guaranteed = state.get("guaranteed_cyrene", False)
-    results, cyrene_hit, off_hit, page_hits = [], 0, 0, 0
+    guaranteed = state.get("guaranteed_pickup", False)
+    
+    if "characters" not in state: state["characters"] = {}
+    if "unlocked_voices" not in state: state["unlocked_voices"] = []
+    
+    # 既存データの移行（初回のみ）
+    if "cyrene_copies" in state and "cyrene" not in state["characters"]:
+        if state["cyrene_copies"] > 0:
+            state["characters"]["cyrene"] = state["cyrene_copies"]
 
-    txt_cyrene = "★5 [Cyrene]" if lang == "en" else "★5【キュレネ】"
-    txt_off = "★5 [Off-Banner (Ticket)]" if lang == "en" else "★5【すり抜け（チケット獲得）】"
-    txt_page = " + ★5 [Page: Part 1]" if lang == "en" else " ＋ ★5【??? その1】"
+    results = []
+    new_features = []
 
     for _ in range(num_pulls):
-        page_got = False
-        if random.random() < 0.0006:
-            state["page1_count"] = state.get("page1_count", 0) + 1
-            page_hits += 1
-            page_got = True
-        
-        main5_rate = calc_main_5star_rate(pity_5)
-        if random.random() < main5_rate:
-            pity_5, pity_4 = 0, 0
-            if guaranteed or random.random() < 0.5:
-                state["cyrene_copies"] = state.get("cyrene_copies", 0) + 1
-                guaranteed, cyrene_hit = False, cyrene_hit + 1
-                txt = txt_cyrene
-            else:
-                state["offbanner_tickets"] = state.get("offbanner_tickets", 0) + 1
-                guaranteed, off_hit = True, off_hit + 1
-                txt = txt_off
-            if page_got: txt += txt_page
+        rank = 3
+        if random.random() < calc_main_5star_rate(pity_5):
+            rank = 5
         else:
             pity_5 += 1
-            if pity_4 >= 9 or random.random() < 0.24:
+            if pity_4 >= 9 or random.random() < 0.051:
+                rank = 4
                 pity_4 = 0
-                txt = "★4"
             else:
                 pity_4 += 1
-                txt = "★3"
-            if page_got: txt += txt_page
-        results.append(txt)
+        
+        if rank == 5:
+            pity_5 = 0
+            is_pickup_win = False
+            
+            if guaranteed:
+                is_pickup_win = True
+                guaranteed = False
+            elif random.random() < 0.5:
+                is_pickup_win = True
+                guaranteed = False
+            else:
+                is_pickup_win = False
+                guaranteed = True
+            
+            if is_pickup_win:
+                char_key = CURRENT_BANNER_KEY
+                char_info = pickup_char
+                
+                count = state["characters"].get(char_key, 0) + 1
+                state["characters"][char_key] = count
+                
+                # 互換性のため cyrene の場合はコピー数も更新
+                if char_key == "cyrene":
+                    state["cyrene_copies"] = count
 
-    state["pity_5"], state["pity_4"], state["guaranteed_cyrene"] = pity_5, pity_4, guaranteed
+                # シークレットボイス解放（初獲得時）
+                if char_info["secret_voice_id"] not in state["unlocked_voices"]:
+                    state["unlocked_voices"].append(char_info["secret_voice_id"])
+                    new_features.append(f"🔓 シークレットボイス解放: {char_info['name']}")
+                
+                # 凸数表示
+                eidolon = count - 1 # 凸数 (0～6)
+                if count == 1:
+                    res_txt = f"**★5 [限定] {char_info['name']}** (New!)"
+                    new_features.append(f"✨ バフ獲得: {char_info['desc']}")
+                else:
+                    res_txt = f"**★5 [限定] {char_info['name']}** ({eidolon}凸)"
+            else:
+                spook_item = random.choice(STANDARD_POOL_5)
+                res_txt = f"★5 {spook_item['name']} ({spook_item['desc']})"
+                # ここですり抜けチケットをあげるかどうかは仕様次第だが、今回はチケット無しでアイテムにする
+            
+            results.append(res_txt)
+
+        elif rank == 4:
+            item_key = random.choice(GACHA_ITEMS_R4)
+            item_name = k_data.ITEMS[item_key]["name"]
+            user_kimera_data["items"][item_key] = user_kimera_data["items"].get(item_key, 0) + 1
+            results.append(f"★4 {item_name}")
+
+        else: 
+            item_key = random.choice(GACHA_ITEMS_R3)
+            item_name = k_data.ITEMS[item_key]["name"]
+            user_kimera_data["items"][item_key] = user_kimera_data["items"].get(item_key, 0) + 1
+            results.append(f"★3 {item_name}")
+
+    state["pity_5"] = pity_5
+    state["pity_4"] = pity_4
+    state["guaranteed_pickup"] = guaranteed
     db.save_gacha_state(user_id, state)
+    k_core.save_user_data(user_id, user_kimera_data, hard_mode=False)
 
-    summary = []
-    if cyrene_hit: summary.append(f"★5 Cyrene: {cyrene_hit}" if lang=="en" else f"★5キュレネ: {cyrene_hit}")
-    if off_hit: summary.append(f"★5 Off-Banner: {off_hit}" if lang=="en" else f"★5すり抜け: {off_hit}")
-    if page_hits: summary.append(f"★5 Page: {page_hits}" if lang=="en" else f"★5ページ: {page_hits}")
-    sum_text = " / ".join(summary) if summary else ("No ★5" if lang=="en" else "★5なし")
-    
-    body = "\n".join([f"{i+1}: {r}" for i, r in enumerate(results)])
-    footer = f"Stones: {state['stones']} / Tickets: {state['offbanner_tickets']}" if lang == "en" else f"現在の石: {state['stones']} / チケット: {state['offbanner_tickets']}"
-    return True, f"{cost_str}\n{body}\n\n{sum_text}\n{footer}"
+    header = f"【ガチャ結果】PickUp: {pickup_char['name']}\n"
+    body = "\n".join(results)
+    footer = f"\n\n{cost_str} / 残り石: {state['stones']}"
+    if new_features:
+        footer += "\n\n" + "\n".join(new_features)
+
+    return True, header + body + footer
 
 def grant_daily_stones(user_id: int) -> tuple[bool, int, str]:
     state = db.get_gacha_state(user_id)
@@ -418,13 +590,20 @@ def grant_daily_stones(user_id: int) -> tuple[bool, int, str]:
     
     if state.get("last_daily") == today_str():
         msg = "You already received today's reward." if lang == "en" else "今日はもう受け取っているみたい。"
-        return False, state["stones"], msg
+        return False, state.get("stones", 0), msg
     
-    state["stones"] = state.get("stones", 0) + 16000
+    base = 16000
+    # トリスビアスのバフ（凸数に応じて増加）
+    bonus = int(get_gacha_buff_multiplier(user_id, "daily_income"))
+    
+    total = base + bonus
+    state["stones"] = state.get("stones", 0) + total
     state["last_daily"] = today_str()
     db.save_gacha_state(user_id, state)
     
-    msg = "Daily Reward: 16000 stones granted♪" if lang == "en" else "デイリー報酬 16000個 を付与したわ♪"
+    msg = f"デイリー報酬 {total}個 を付与しました。"
+    if bonus > 0:
+        msg += f"\n(富豪のバフ効果で +{bonus}個 ボーナス！)"
     return True, state["stones"], msg
 
 def format_gacha_status(user_id: int) -> str:
@@ -433,30 +612,44 @@ def format_gacha_status(user_id: int) -> str:
     
     stones = state.get("stones", 0)
     pity_5 = state.get("pity_5", 0)
-    cyrene_copies = state.get("cyrene_copies", 0)
     tickets = state.get("offbanner_tickets", 0)
-    guaranteed = state.get("guaranteed_cyrene", False)
-    mult = get_cyrene_affection_multiplier(user_id)
+    guaranteed = state.get("guaranteed_pickup", False)
     
+    # バフ倍率
+    aff_mult = 1.0 + get_gacha_buff_multiplier(user_id, "affection_boost")
+    
+    chars = state.get("characters", {})
+    pickup_char = LIMITED_CHARACTERS.get(CURRENT_BANNER_KEY, {})
+    pickup_name = pickup_char.get("name", "Unknown")
+
     if lang == "en":
-        next_up = "Guaranteed Cyrene" if guaranteed else "50/50 Chance"
         return (
             "【Gacha Menu】\n"
             f"- Stones: {stones}\n"
-            f"- Cyrene Copies: {cyrene_copies} (Affection x{mult:.1f})\n"
-            f"- Tickets: {tickets}\n"
-            f"- Pity Count: {pity_5} (Next ★5 is {next_up})\n\n"
-            "Use `Pull 1` or `Pull 10` (or `Ticket 10`) to play♪"
+            f"- Current Banner: {pickup_name}\n"
+            f"- Pity Count: {pity_5}\n"
+            f"- Affection Bonus: x{aff_mult:.2f}\n"
         )
     else:
-        next_up = "キュレネ確定" if guaranteed else "50%でキュレネ"
+        # 所持キャラ一覧（簡易）
+        char_list = []
+        for k, v in chars.items():
+            if k in LIMITED_CHARACTERS and v > 0:
+                name = LIMITED_CHARACTERS[k]["name"]
+                eidolon = v - 1
+                char_list.append(f"{name}({eidolon}凸)")
+        
+        char_str = ", ".join(char_list) if char_list else "なし"
+        next_up = f"{pickup_name}確定" if guaranteed else f"50%で{pickup_name}"
+
         return (
             "【ガチャメニュー】\n"
+            f"・開催中: {pickup_name} ピックアップ\n"
             f"・所持石: {stones} 個\n"
-            f"・キュレネ所持: {cyrene_copies} 枚 (好感度倍率 x{mult:.1f})\n"
-            f"・すり抜けチケット: {tickets} 枚\n"
-            f"・天井カウント: {pity_5} 連 (次の★5は {next_up})\n\n"
-            "『単発ガチャ』『10連ガチャ』(または『チケット10連』)で引けるわよ♪"
+            f"・天井: {pity_5} / 次の★5: {next_up}\n"
+            f"・好感度倍率: x{aff_mult:.2f}\n"
+            f"・所持キャラ: {char_str}\n\n"
+            "『単発ガチャ』『10連ガチャ』で運試しよ！"
         )
 
 # --- じゃんけんロジック ---
