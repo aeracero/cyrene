@@ -79,6 +79,16 @@ LINES = {
         "このまま一緒にいましょう、ね？",
         "安心して。あたしたちなら、何だってできるんだから。",
     ],
+    # ★追加: 励ましボイス (JP)
+    "encouragement": [
+        "大丈夫、あたしはいつでもあなたの味方よ♪",
+        "無理しないでね。たまにはゆっくり休むのも大切よ？あたしがよしよししてあげるから♪",
+        "あなたは十分頑張ってるわ。えらいえらい♪ 頭を撫でてあげましょうか？",
+        "辛いことがあったの？…大丈夫、あたしでよければ朝まで話を聞くわよ。",
+        "明日はきっといい日になるわ。記憶の妖精がそう言ってるもの。あたしが保証するわ♪",
+        "深呼吸して？…そう。世界はあなたに優しいはずよ。少なくとも、あたしはね♪",
+        "元気出して？あなたが笑ってないと、あたしの物語もハッピーエンドにならないのよ♪",
+    ],
     "nagayozuki1": [
         "もうすぐ夜が来る…ふふ、しーっ、おやすみ♭",
         "アタシのことは「長夜月」って呼んで。歳月の隙間に隠れれば時間はたっぷりあるから、しっかり記憶に刻んでおいてね♭",
@@ -206,6 +216,16 @@ LINES_EN = {
         "Let's stay together like this, okay?",
         "Don't worry. Together, we can do anything."
     ],
+    # ★追加: Encouragement (EN)
+    "encouragement": [
+        "It's okay, I'm always on your side♪",
+        "Don't push yourself too hard. Resting is important too, you know? I can pat your head if you like♪",
+        "You're doing great. I'm proud of you♪ Want me to praise you more?",
+        "Did something bad happen? ...It's okay. I'm here to listen, all night if needed.",
+        "Tomorrow will surely be a better day. The memory fairies say so. I promise♪",
+        "Take a deep breath... There. The world should be kind to you. At least, I am♪",
+        "Cheer up! If you don't smile, my story won't have a happy ending♪",
+    ],
     "nagayozuki1": [
         "Night is coming soon... Hehe, shh, good night♭",
         "Call me 'Nagayozuki'.",
@@ -322,36 +342,42 @@ def get_reply(message: str, affection_level: int, user_name: str, lang: str = "j
         base = random.choice(target_lines.get("amaeru", target_lines["normal"]))
         return _maybe_high_affection_override(base, affection_level, lang).replace("{name}", user_name)
 
-    # ④ みんなについて
+    # ★追加: ④ 励まし
+    encourage_keywords = ["励まして", "encourage", "cheer me up", "慰めて", "辛い", "悲しい"]
+    if any(w in msg for w in encourage_keywords):
+        base = random.choice(target_lines.get("encouragement", target_lines["normal"]))
+        return _maybe_high_affection_override(base, affection_level, lang).replace("{name}", user_name)
+
+    # ⑤ みんなについて
     others_keywords = ["みんなについて", "tell me about everyone", "others", "誰"]
     if any(w in msg for w in others_keywords):
         return random.choice(target_lines.get("askaboutothers", ["..."])).replace("{name}", user_name)
 
-    # ⑤ 戦闘ボイス
+    # ⑥ 戦闘ボイス
     battle_keywords = ["戦闘", "battle voice", "fight"]
     if any(w in msg for w in battle_keywords):
         return random.choice(target_lines.get("battlevoices", ["..."])).replace("{name}", user_name)
 
-    # ⑥ EC：長夜月 (日本語のみ特殊結合ロジック)
+    # ⑦ EC：長夜月 (日本語のみ特殊結合ロジック)
     if ("ec" in msg and "長夜月" in msg) or ("ec" in msg and "nagayozuki" in msg):
         part1 = random.choice(target_lines.get("nagayozuki1", ["..."]))
         part2 = random.choice(target_lines.get("nagayozuki2", ["..."]))
         return f"{part1}\n{part2}".replace("{name}", user_name)
 
-    # ⑦ 楽しいね (固定セリフ)
+    # ⑧ 楽しいね (固定セリフ)
     if "楽しいね" in msg or "fun" in msg:
         if lang == "en":
             return "Time flies when I'm alone with you♪ Do you want to talk a bit more?"
         else:
             return "あなたと2人きりでいると時間があっという間にすぎてしまうわ♪ あなたの時間がまだあるならもう少しお話ししないかしら♪"
 
-    # ⑧ 自己紹介
+    # ⑨ 自己紹介
     if "自己紹介" in msg or "introduce yourself" in msg:
         if lang == "en":
             return (
                 "Hi, I'm Cyrene♪\n"
                 "Ask me 'Tell me about everyone' or 'Battle voice'!\n"
-                "You can also say 'Spoil me'♪\n"
+                "You can also say 'Spoil me' or 'Cheer me up'♪\n"
                 "Let's be good friends♪"
             )
         else:
@@ -360,7 +386,7 @@ def get_reply(message: str, affection_level: int, user_name: str, lang: str = "j
                 "みんなについて教えてと言ってくれればあたしなりの意見を言うわ♪\n"
                 "戦闘中のやつやってよと言ってくれればあたしの戦闘ボイスを聞かせてあげるわ♪\n"
                 "甘えていいんだよと言ってくれればあたしは甘えちゃうわ♪\n"
-                "ecのために長夜月やってと言ってくれれば、あたしの渾身の長夜月の真似を披露するわ♪\n"
+                "『励まして』と言ってくれたら、あたしが元気づけてあげるわね♪\n"
                 "みんな、あたしともっと仲良くしてね♪"
             )
 
@@ -370,7 +396,7 @@ def get_reply(message: str, affection_level: int, user_name: str, lang: str = "j
     if "記憶は流れ星" in msg or "memories are shooting stars" in msg:
         return "Carve me into your heart with love. At the moment that beautiful tomorrow arrives♪" if lang == "en" else "愛であたしを心に刻んで。あの美しい明日が訪れた瞬間に♪"
 
-    # ⑨ 既定（知らないセリフ）
+    # ⑩ 既定（知らないセリフ）
     if lang == "en":
         return "I'm not fully restored yet...♪ Try greeting me or asking 'Tell me about everyone'♪"
     else:

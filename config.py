@@ -8,12 +8,14 @@ from dotenv import load_dotenv
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
 if not DISCORD_TOKEN:
-    raise RuntimeError("DISCORD_TOKEN is not set")
+    # ローカル実行時などのために空文字許容、あるいはエラー送出
+    # raise RuntimeError("DISCORD_TOKEN is not set")
+    pass
 
 # 管理者設定
 PRIMARY_ADMIN_ID = 916106297190019102  # あなたのID
 
-# ディレクトリ設定
+# ディレクトリ設定 (Railwayの永続ボリューム /data を使用)
 DATA_DIR = Path("/data")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -29,6 +31,11 @@ MESSAGE_LIMIT_CONFIG_FILE = DATA_DIR / "message_limit_config.json"
 GACHA_FILE = DATA_DIR / "gacha.json"
 MYURION_FILE = DATA_DIR / "myurion_mode.json"
 SPECIAL_UNLOCKS_FILE = DATA_DIR / "special_unlocks.json"
+
+# ★追加: これらが未定義だったためリセットされていました
+LANGUAGE_FILE = DATA_DIR / "language.json"
+REPLY_MODE_FILE = DATA_DIR / "reply_mode.json"
+ACHIEVEMENTS_FILE = DATA_DIR / "achievements.json"  # 二つ名・実績
 
 # タイムゾーン
 JST = timezone(timedelta(hours=9))

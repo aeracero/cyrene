@@ -4,12 +4,11 @@ from config import (
     NICKNAMES_FILE, ADMINS_FILE, GUARDIAN_FILE, AFFECTION_FILE,
     AFFECTION_CONFIG_FILE, MESSAGE_LIMIT_FILE, MESSAGE_USAGE_FILE,
     MESSAGE_LIMIT_CONFIG_FILE, GACHA_FILE, MYURION_FILE, SPECIAL_UNLOCKS_FILE,
+    LANGUAGE_FILE, REPLY_MODE_FILE, ACHIEVEMENTS_FILE,  # 追加したパスをインポート
     PRIMARY_ADMIN_ID, today_str
 )
 
-LANGUAGE_FILE = Path("data/language.json")
-REPLY_MODE_FILE = Path("data/reply_mode.json")
-ACHIEVEMENTS_FILE = Path("data/achievements.json")
+# 以前のハードコードされたパス定義を削除し、configからインポートしたものを使用します
 
 # --- 共通ユーティリティ ---
 def _load_json(path: Path, default=None):
