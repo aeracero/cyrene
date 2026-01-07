@@ -287,7 +287,7 @@ async def on_message(message):
     # --- ★ Geminiモード切替コマンド ---
     if content_lower == "!chat on":
         GEMINI_MODE_USERS.add(user_id)
-        msg = "ふふっ、これからはもっと自由にお話ししましょう？ AI対話モード、起動よ♪" if lang != "en" else "Hehe, let's talk more freely. AI Chat Mode ON♪"
+        msg = "ふふっ、これからはもっと自由にお話ししましょう？ AI対話モード、起動よ♪ (メンションして話しかけてね)" if lang != "en" else "Hehe, let's talk more freely. AI Chat Mode ON♪ (Please mention me)"
         await message.channel.send(msg)
         return
 
@@ -329,7 +329,8 @@ async def on_message(message):
     # Geminiモード中は自動的に返信対象とする（ただしコマンド優先）
     is_gemini_active = (user_id in GEMINI_MODE_USERS)
     
-    should_reply = (is_mentioned or is_active_mode or is_auto_reply or is_playing_kimera or is_gemini_active)
+    # ★修正: is_gemini_active をトリガーから外し、メンションかAutoモードでないと反応しないように変更
+    should_reply = (is_mentioned or is_active_mode or is_auto_reply or is_playing_kimera)
 
     # 隠しコマンド
     if content_body in ["死ぬ", "しぬ", "死にます", "しにます", "die", "kill myself"]:
@@ -1025,8 +1026,14 @@ async def on_message(message):
 
     # --- ★ Gemini 対話モード処理 ---
     if is_gemini_active and not is_command_query:
+        # メンションされていない場合は無視する（ただしAutoモードなら通す、あるいは厳格にメンション必須にする）
+        # ご要望通り「メンション必須」にするため、is_auto_reply は考慮せず弾きます
+        if not is_mentioned:
+            return
+
         # 入力中であることを表示
         async with message.channel.typing():
+            # 既に上で取得済みの raw_name (ニックネーム) を渡します
             ai_reply = await gemini_chat.get_gemini_reply(user_id, raw_name, content_body)
         
         await send_myu(message, user_id, f"{message.author.mention} {ai_reply}")

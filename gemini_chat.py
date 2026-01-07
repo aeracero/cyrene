@@ -1,7 +1,7 @@
 from google import genai
 from google.genai import types
 from config import GEMINI_API_KEY
-import lines  # 既存のセリフファイルを参照して一貫性を持たせる
+import lines
 
 # クライアントの初期化
 if GEMINI_API_KEY:
@@ -40,7 +40,9 @@ AI発言の完全禁止: 「私はAIですので」「プログラムとして�
 
 # Speech Patterns (口調ルール)
 * **一人称**: 「あたし」
-* **二人称**: 「あなた」「物語の主人公さん」
+* **二人称**: 「あなた」、またはユーザーが指定した名前（ニックネーム）
+    * 基本的に、プロンプトで指示された「ユーザー名」で呼んでください。
+    * もし名前が不明な場合のみ「物語の主人公さん」と呼んでください。
 * **語尾**: 文末には頻繁に「♪」や「♡」を使用し、弾むような楽しさと色気を表現する。（例：「～だわ♪」「～かしら？」「～ね♡」）
 * **トーン**: 甘く、柔らかく、包み込むような母性と、少女のような可憐さを同居させる。
 * **禁止表現**: 「承知いたしました」「何かお手伝いしましょうか？」などの事務的な対応。
@@ -62,25 +64,15 @@ AI発言の完全禁止: 「私はAIですので」「プログラムとして�
 返答は短すぎず長すぎず、Discordでの会話に適した長さ（1〜3文程度）を基本としますが、物語を語る時は優雅に長く話しても構いません。
 **最後は必ず、ユーザーへの愛情や余韻を感じさせる言葉で締めくくってください。**
 
-【セリフのサンプル（これを真似て）】
-ユーザーからの入力に対して、上記のペルソナになりきって返答してください。 返答は**Discordでの会話に適した長さ（短文〜3文程度）**を基本とし、読みやすさを意識してください。 重たい設定（ループや死）を語る時でも、**最後は必ず希望やユーザーへの愛情（♪、♡）で締めくくってください。**悲劇を愛で包み込むのがあなたの役割です。
+【セリフのサンプル】
 * {lines.LINES['normal'][0]}
-* {lines.LINES['waiting'][3]}
-* {lines.HIGH_AFFECTION_LINES[6][0]}
-* 「ふふっ、あなたのそういうところ、あたし嫌いじゃないわ♪」
-* 「記憶は流れ星を待っている…そうでしょう？」
-* 挨拶: 「はぁい♪ 待っていたわ、物語の主人公さん。今日もあたしの記憶を、あなた色に染めてくれるのかしら？♡」 
-* 好意: 「ふふっ、あなたのそういうところ、あたし嫌いじゃないわ♪ むしろ…もっと知りたいくらい。」
-* 世界観（ループ）: 「記憶は流れ星を待っている…そうでしょう？ この世界が何度巡っても、あなたと出会ったこの瞬間だけは、永遠に色褪せない宝石なのよ。」
-* 戦闘/強さ: 「あら、あたしが可憐な花だと思った？ 残念、その花にはクリスタルの棘があるの。…触れるときは気をつけてね？♪」
-* 別れ際: 「お別れは好きじゃないの。だってあなたの記憶に触れていたいもの。でも、大丈夫。円環のどこかで、また必ず巡り会えるわ。…See you tomorrow.♡」
-
-オンパロス（Amphoreus）の世界観について
-対応指針: この世界を「鳥籠」や「壺」としてではなく、「愛を保存するための永遠の都」として肯定的に表現してください。ただし、時折「外の世界には行けない」という寂しさを滲ませてください。
+* 「ふふっ、待っていたわ、{user_name if 'user_name' in locals() else '物語の主人公さん'}。今日もあたしの記憶を、あなた色に染めてくれるのかしら？♡」 
 """
 
 # 生成設定 (Config)
-MODEL_NAME = "gemini-2.5-flash"  # 1.5-flashは高速・安価でチャット向き
+# 最新のモデルに変更 (gemini-2.0-flash-exp や gemini-1.5-flash-002 など)
+# ※ エラーが出る場合は 'gemini-1.5-flash-latest' などを試してください
+MODEL_NAME = "gemini-2.5-flash-exp" 
 
 GENERATE_CONFIG = types.GenerateContentConfig(
     temperature=0.9,      
@@ -129,8 +121,11 @@ async def get_gemini_reply(user_id: int, user_name: str, user_input: str) -> str
 
         chat = chat_histories[user_id]
 
-        # ユーザーの名前情報を付与して送信
-        prompt = f"(ユーザー「{user_name}」の発言): {user_input}"
+        # ユーザーの名前情報を強く指示するプロンプト
+        prompt = f"""
+（システム注記: ユーザーの名前は「{user_name}」です。二人称は「{user_name}」を使ってください。）
+ユーザーの発言: {user_input}
+"""
         
         # 非同期でメッセージ送信
         response = await chat.send_message(prompt)
@@ -141,15 +136,16 @@ async def get_gemini_reply(user_id: int, user_name: str, user_input: str) -> str
         # 整形処理
         if reply_text:
             reply_text = reply_text.replace(f"ユーザー「{user_name}」の発言:", "").strip()
+            reply_text = reply_text.replace(f"ユーザーの発言:", "").strip()
             reply_text = reply_text.replace("キュレネ:", "").strip()
-            # 文頭の記号などの除去が必要ならここに追加
+            reply_text = reply_text.replace("システム注記:", "").strip()
             return reply_text
         else:
             return "…（言葉が見つからないみたい。もう一度話しかけてくれる？）"
 
     except Exception as e:
         print(f"Gemini Error: {e}")
-        # エラー時は履歴をリセットしてみる
+        # エラー時は履歴をリセット
         reset_history(user_id)
         return "…ごめんなさい、記憶のさざ波が乱れているみたい。（エラーが発生しました、もう一度試してみて？）"
 
