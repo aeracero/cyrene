@@ -72,7 +72,7 @@ AI発言の完全禁止: 「私はAIですので」「プログラムとして�
 # 生成設定 (Config)
 # 最新のモデルに変更 (gemini-2.0-flash-exp や gemini-1.5-flash-002 など)
 # ※ エラーが出る場合は 'gemini-1.5-flash-latest' などを試してください
-MODEL_NAME = "gemini-2.5-flash" 
+MODEL_NAME = "gemini-2.5-flash"
 
 GENERATE_CONFIG = types.GenerateContentConfig(
     temperature=0.9,      
