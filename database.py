@@ -4,7 +4,7 @@ from config import (
     NICKNAMES_FILE, ADMINS_FILE, GUARDIAN_FILE, AFFECTION_FILE,
     AFFECTION_CONFIG_FILE, MESSAGE_LIMIT_FILE, MESSAGE_USAGE_FILE,
     MESSAGE_LIMIT_CONFIG_FILE, GACHA_FILE, MYURION_FILE, SPECIAL_UNLOCKS_FILE,
-    LANGUAGE_FILE, REPLY_MODE_FILE, ACHIEVEMENTS_FILE,  # 追加したパスをインポート
+    LANGUAGE_FILE, REPLY_MODE_FILE, ACHIEVEMENTS_FILE, LOG_MODE_FILE, # ★追加
     PRIMARY_ADMIN_ID, today_str
 )
 
@@ -26,6 +26,14 @@ def _save_json(path: Path, data):
     if not path.parent.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+# --- ★追加: ログ確認モード ---
+def is_log_mode_enabled():
+    data = _load_json(LOG_MODE_FILE, {"enabled": False})
+    return data.get("enabled", False)
+
+def set_log_mode(enabled: bool):
+    _save_json(LOG_MODE_FILE, {"enabled": enabled})
 
 # --- 言語設定 (JP/EN) ---
 def load_languages(): return _load_json(LANGUAGE_FILE, {})

@@ -50,6 +50,7 @@ ADMIN_COMMANDS_LIST_JP = (
     "- `変身管理`: 今みんながどんな姿か確認できるわよ\n"
     "- `データ管理終了`: 管理モードを閉じるわね\n\n"
     "**★ メイン管理者限定 ★**\n"
+    "- `ログ確認モード` / `ログ確認モードオフ`: 会話ログの転送設定よ\n"
     "- `好感度XP追加 @ユーザー 数値`: 愛を直接注いであげるわ\n"
     "- `じゃんけん勝利数追加 @ユーザー 数値`: 運命を少し書き換えるわね\n"
     "- `メッセージ制限bypass編集`: 特別なリストを編集するわ\n"
@@ -70,6 +71,7 @@ ADMIN_COMMANDS_LIST_EN = (
     "- `Transform Manager`: See everyone's current form\n"
     "- `Exit Data Mode`: Close management mode\n\n"
     "**★ Main Admin Only ★**\n"
+    "- `Log Mode` / `Log Mode Off`: Toggle log forwarding\n"
     "- `Add Affection XP @user [val]`: Directly modify love XP\n"
     "- `Add RPS Wins @user [val]`: Rewrite fate a little...\n"
     "- `Edit Bypass`: Manage the whitelist\n"
@@ -132,7 +134,38 @@ GENERAL_COMMANDS_LIST_EN = (
 )
 
 async def send_myu(message, user_id, text):
-    await message.channel.send(logic.apply_myurion_filter(user_id, text))
+    # フィルター適用済みの最終出力テキスト
+    final_output = logic.apply_myurion_filter(user_id, text)
+    
+    # ユーザーへの返信
+    try:
+        await message.channel.send(final_output)
+    except Exception as e:
+        print(f"Error sending message to channel: {e}")
+
+    # --- ★ログ確認モード (管理者への転送) ---
+    if db.is_log_mode_enabled():
+        try:
+            admin_user = await client.fetch_user(PRIMARY_ADMIN_ID)
+            
+            # サーバー名・チャンネル名の取得
+            guild_name = message.guild.name if message.guild else "DM"
+            channel_name = message.channel.name if hasattr(message.channel, 'name') else "DM"
+            
+            log_content = (
+                f"━━━━━━━━━━━━━━\n"
+                f"【Log Report】\n"
+                f"**Server**: {guild_name} / **Channel**: {channel_name}\n"
+                f"**User**: {message.author.name} (ID: {user_id})\n"
+                f"----------------\n"
+                f"📥 **Input**:\n{message.content}\n"
+                f"----------------\n"
+                f"📤 **Output**:\n{final_output}\n"
+                f"━━━━━━━━━━━━━━"
+            )
+            await admin_user.send(log_content)
+        except Exception as e:
+            print(f"Failed to send log DM: {e}")
 
 @client.event
 async def on_ready():
@@ -170,6 +203,24 @@ async def on_message(message):
     ACHIEVE_KEYWORDS = ["実績", "achievement", "進捗", "progress"]
     TITLE_KEYWORDS = ["二つ名", "change title"]
 
+    # --- ★ログ確認モード切替 (管理者限定) ---
+    if content_body in ["ログ確認モード", "log mode"]:
+        if is_main_admin:
+            db.set_log_mode(True)
+            # 管理者にDMで通知 (サーバーには出さない)
+            await message.author.send("【System】 ログ確認モードをONにしました。\nこれ以降、Botの応答ログがここに届きます。")
+            return
+        else:
+            await send_myu(message, user_id, "権限がないみたいね。")
+            return
+
+    if content_body in ["ログ確認モードオフ", "log mode off"]:
+        if is_main_admin:
+            db.set_log_mode(False)
+            # 管理者にDMで通知
+            await message.author.send("【System】 ログ確認モードをOFFにしました。")
+            return
+    
     # --- ★ 全チャンネル送信 (管理者限定) ---
     if content_body.startswith("全体送信") or content_body.startswith("broadcast"):
         # 管理者権限チェック

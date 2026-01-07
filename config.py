@@ -37,6 +37,9 @@ LANGUAGE_FILE = DATA_DIR / "language.json"
 REPLY_MODE_FILE = DATA_DIR / "reply_mode.json"
 ACHIEVEMENTS_FILE = DATA_DIR / "achievements.json"  # 二つ名・実績
 
+# ★追加: ログ確認モードの状態保存用
+LOG_MODE_FILE = DATA_DIR / "log_mode.json"
+
 # タイムゾーン
 JST = timezone(timedelta(hours=9))
 
