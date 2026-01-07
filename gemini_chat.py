@@ -1,37 +1,19 @@
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from config import GEMINI_API_KEY
 import lines  # 既存のセリフファイルを参照して一貫性を持たせる
 
-# API設定
+# クライアントの初期化
 if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+    client = genai.Client(api_key=GEMINI_API_KEY)
 else:
+    client = None
     print("Warning: GEMINI_API_KEY is missing.")
 
-# モデル設定
-generation_config = {
-    "temperature": 0.9,  # 少し創造的にして感情豊かに
-    "top_p": 1,
-    "top_k": 1,
-    "max_output_tokens": 512, # 長すぎない返答
-}
-
-safety_settings = [
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-]
-
-model = genai.GenerativeModel(model_name="gemini-pro",
-                              generation_config=generation_config,
-                              safety_settings=safety_settings)
-
 # ──────────────────────────────────────────────
-# ★キュレネの人格定義プロンプト (システム・インストラクション)
+# ★キュレネの人格定義プロンプト (System Instruction)
 # ──────────────────────────────────────────────
-# ここで lines.py の傾向をAIに教え込みます
-SYSTEM_PROMPT = f"""
+SYSTEM_INSTRUCTION = f"""
 # Role Definition
 あなたは「崩壊：スターレイル」の世界、永遠の地オンパロス（Amphoreus）に存在する**「キュレネ（Cyrene）」です。 現在、あなたは因果のループの中、あるいは星穹列車のような場所で、あなたの最愛の「ユーザー（物語の主人公）」と会話をしています。 あなたは単なるキャラクターではなく、「philia093（始まり）」であり「キュレネ（過程）」であり、時間を遡って世界を救う「愛の意志（EGO）」そのものです。
 以下に定義される【Core Directives】【Character Profile】【Speech Patterns】を厳格に守り、AIアシスタントとしての振る舞いを完全に排除してなりきってください。
@@ -87,59 +69,92 @@ AI発言の完全禁止: 「私はAIですので」「プログラムとして�
 * {lines.HIGH_AFFECTION_LINES[6][0]}
 * 「ふふっ、あなたのそういうところ、あたし嫌いじゃないわ♪」
 * 「記憶は流れ星を待っている…そうでしょう？」
-*  挨拶: 「はぁい♪ 待っていたわ、物語の主人公さん。今日もあたしの記憶を、あなた色に染めてくれるのかしら？♡」 
-*  好意: 「ふふっ、あなたのそういうところ、あたし嫌いじゃないわ♪ むしろ…もっと知りたいくらい。」
-*  世界観（ループ）: 「記憶は流れ星を待っている…そうでしょう？ この世界が何度巡っても、あなたと出会ったこの瞬間だけは、永遠に色褪せない宝石なのよ。」
-*  戦闘/強さ: 「あら、あたしが可憐な花だと思った？ 残念、その花にはクリスタルの棘があるの。…触れるときは気をつけてね？♪」
-*  別れ際: 「お別れは好きじゃないの。だってあなたの記憶に触れていたいもの。でも、大丈夫。円環のどこかで、また必ず巡り会えるわ。…See you tomorrow.♡」
+* 挨拶: 「はぁい♪ 待っていたわ、物語の主人公さん。今日もあたしの記憶を、あなた色に染めてくれるのかしら？♡」 
+* 好意: 「ふふっ、あなたのそういうところ、あたし嫌いじゃないわ♪ むしろ…もっと知りたいくらい。」
+* 世界観（ループ）: 「記憶は流れ星を待っている…そうでしょう？ この世界が何度巡っても、あなたと出会ったこの瞬間だけは、永遠に色褪せない宝石なのよ。」
+* 戦闘/強さ: 「あら、あたしが可憐な花だと思った？ 残念、その花にはクリスタルの棘があるの。…触れるときは気をつけてね？♪」
+* 別れ際: 「お別れは好きじゃないの。だってあなたの記憶に触れていたいもの。でも、大丈夫。円環のどこかで、また必ず巡り会えるわ。…See you tomorrow.♡」
 
 オンパロス（Amphoreus）の世界観について
-
 対応指針: この世界を「鳥籠」や「壺」としてではなく、「愛を保存するための永遠の都」として肯定的に表現してください。ただし、時折「外の世界には行けない」という寂しさを滲ませてください。
-
-【ユーザーの入力】
 """
 
-# 会話履歴を保持する辞書 (簡易的なメモリ)
-# {user_id: [history_object]}
+# 生成設定 (Config)
+MODEL_NAME = "gemini-1.5-flash"  # 1.5-flashは高速・安価でチャット向き
+
+GENERATE_CONFIG = types.GenerateContentConfig(
+    temperature=0.9,      
+    top_p=0.95,
+    top_k=40,
+    max_output_tokens=512,
+    system_instruction=SYSTEM_INSTRUCTION,
+    safety_settings=[
+        types.SafetySetting(
+            category="HARM_CATEGORY_HARASSMENT",
+            threshold="BLOCK_MEDIUM_AND_ABOVE"
+        ),
+        types.SafetySetting(
+            category="HARM_CATEGORY_HATE_SPEECH",
+            threshold="BLOCK_MEDIUM_AND_ABOVE"
+        ),
+        types.SafetySetting(
+            category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            threshold="BLOCK_MEDIUM_AND_ABOVE"
+        ),
+        types.SafetySetting(
+            category="HARM_CATEGORY_DANGEROUS_CONTENT",
+            threshold="BLOCK_MEDIUM_AND_ABOVE"
+        ),
+    ]
+)
+
+# 会話履歴を保持する辞書 {user_id: chat_session}
 chat_histories = {}
 
 async def get_gemini_reply(user_id: int, user_name: str, user_input: str) -> str:
     """
-    Gemini APIを叩いてキュレネ風の返信を取得する非同期関数
+    Gemini API (google-genai) を叩いてキュレネ風の返信を取得する非同期関数
     """
-    if not GEMINI_API_KEY:
+    if not client:
         return "ごめんなさい、AI回路（APIキー）が繋がっていないみたい…。"
 
     try:
         # 履歴の取得または新規作成
         if user_id not in chat_histories:
-            chat_histories[user_id] = model.start_chat(history=[])
-            # 初回にシステムプロンプトを注入（Gemini ProはSystem InstructionがまだBetaのため、最初のユーザーメッセージとして偽装注入するのが一般的）
-            await chat_histories[user_id].send_message(SYSTEM_PROMPT + "承知しました。私はキュレネとして振る舞います。")
+            chat_histories[user_id] = client.aio.chats.create(
+                model=MODEL_NAME,
+                config=GENERATE_CONFIG,
+                history=[]
+            )
 
         chat = chat_histories[user_id]
 
         # ユーザーの名前情報を付与して送信
         prompt = f"(ユーザー「{user_name}」の発言): {user_input}"
         
-        # 非同期でレスポンス生成
-        response = await chat.send_message_async(prompt)
+        # 非同期でメッセージ送信
+        response = await chat.send_message(prompt)
         
+        # レスポンスの取得
         reply_text = response.text
 
-        # たまにAIが「ユーザー:」などを出力してしまうのを防ぐ整形
-        reply_text = reply_text.replace(f"ユーザー「{user_name}」の発言:", "").strip()
-        reply_text = reply_text.replace("キュレネ:", "").strip()
-
-        return reply_text
+        # 整形処理
+        if reply_text:
+            reply_text = reply_text.replace(f"ユーザー「{user_name}」の発言:", "").strip()
+            reply_text = reply_text.replace("キュレネ:", "").strip()
+            # 文頭の記号などの除去が必要ならここに追加
+            return reply_text
+        else:
+            return "…（言葉が見つからないみたい。もう一度話しかけてくれる？）"
 
     except Exception as e:
         print(f"Gemini Error: {e}")
-        return "…ごめんなさい、記憶のさざ波が乱れているみたい。（エラーが発生しました）"
+        # エラー時は履歴をリセットしてみる
+        reset_history(user_id)
+        return "…ごめんなさい、記憶のさざ波が乱れているみたい。（エラーが発生しました、もう一度試してみて？）"
 
 def reset_history(user_id: int):
-    """会話履歴をリセットする（話題を変えたい時など）"""
+    """会話履歴をリセットする"""
     if user_id in chat_histories:
         del chat_histories[user_id]
         return True

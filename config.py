@@ -1,4 +1,3 @@
-# config.py
 import os
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -11,8 +10,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 
 if not DISCORD_TOKEN:
-    # ローカル実行時などのために空文字許容、あるいはエラー送出
-    # raise RuntimeError("DISCORD_TOKEN is not set")
+    # ローカル実行時などのために空文字許容
     pass
 
 # 管理者設定
@@ -34,13 +32,9 @@ MESSAGE_LIMIT_CONFIG_FILE = DATA_DIR / "message_limit_config.json"
 GACHA_FILE = DATA_DIR / "gacha.json"
 MYURION_FILE = DATA_DIR / "myurion_mode.json"
 SPECIAL_UNLOCKS_FILE = DATA_DIR / "special_unlocks.json"
-
-# ★追加: これらが未定義だったためリセットされていました
 LANGUAGE_FILE = DATA_DIR / "language.json"
 REPLY_MODE_FILE = DATA_DIR / "reply_mode.json"
-ACHIEVEMENTS_FILE = DATA_DIR / "achievements.json"  # 二つ名・実績
-
-# ★追加: ログ確認モードの状態保存用
+ACHIEVEMENTS_FILE = DATA_DIR / "achievements.json"
 LOG_MODE_FILE = DATA_DIR / "log_mode.json"
 
 # タイムゾーン
