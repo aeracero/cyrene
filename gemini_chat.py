@@ -1,3 +1,4 @@
+import asyncio
 from google import genai
 from google.genai import types
 from config import GEMINI_API_KEY
@@ -70,9 +71,9 @@ AI発言の完全禁止: 「私はAIですので」「プログラムとして�
 """
 
 # 生成設定 (Config)
-# 最新のモデルに変更 (gemini-2.0-flash-exp や gemini-1.5-flash-002 など)
-# ※ エラーが出る場合は 'gemini-1.5-flash-latest' などを試してください
-MODEL_NAME = "gemini-2.5-flash"
+# もし 'gemini-2.5-flash' で503エラーが頻発する場合、
+# 'gemini-2.5-flash-lite' (軽量版) や 'gemini-2.0-flash' (旧安定版) を試してください。
+MODEL_NAME = "gemini-2.5-flash-lite"
 
 GENERATE_CONFIG = types.GenerateContentConfig(
     temperature=0.9,      
@@ -103,9 +104,13 @@ GENERATE_CONFIG = types.GenerateContentConfig(
 # 会話履歴を保持する辞書 {user_id: chat_session}
 chat_histories = {}
 
+# ★リトライ回数の設定
+MAX_RETRIES = 3
+
 async def get_gemini_reply(user_id: int, user_name: str, user_input: str) -> str:
     """
     Gemini API (google-genai) を叩いてキュレネ風の返信を取得する非同期関数
+    (503エラー時の自動リトライ機能付き)
     """
     if not client:
         return "ごめんなさい、AI回路（APIキー）が繋がっていないみたい…。"
@@ -127,21 +132,34 @@ async def get_gemini_reply(user_id: int, user_name: str, user_input: str) -> str
 ユーザーの発言: {user_input}
 """
         
-        # 非同期でメッセージ送信
-        response = await chat.send_message(prompt)
-        
-        # レスポンスの取得
-        reply_text = response.text
-
-        # 整形処理
-        if reply_text:
-            reply_text = reply_text.replace(f"ユーザー「{user_name}」の発言:", "").strip()
-            reply_text = reply_text.replace(f"ユーザーの発言:", "").strip()
-            reply_text = reply_text.replace("キュレネ:", "").strip()
-            reply_text = reply_text.replace("システム注記:", "").strip()
-            return reply_text
-        else:
-            return "…（言葉が見つからないみたい。もう一度話しかけてくれる？）"
+        # ★ リトライループ
+        for attempt in range(MAX_RETRIES):
+            try:
+                response = await chat.send_message(prompt)
+                
+                # 成功したらループを抜ける
+                reply_text = response.text
+                if reply_text:
+                    reply_text = reply_text.replace(f"ユーザー「{user_name}」の発言:", "").strip()
+                    reply_text = reply_text.replace(f"ユーザーの発言:", "").strip()
+                    reply_text = reply_text.replace("キュレネ:", "").strip()
+                    reply_text = reply_text.replace("システム注記:", "").strip()
+                    return reply_text
+                else:
+                    return "…（言葉が見つからないみたい。もう一度話しかけてくれる？）"
+            
+            except Exception as e:
+                # 503 (Overloaded) または 429 (Rate Limit) の場合はリトライ
+                error_str = str(e)
+                if "503" in error_str or "overloaded" in error_str.lower() or "429" in error_str:
+                    if attempt < MAX_RETRIES - 1:
+                        wait_time = 2 ** attempt  # 1秒, 2秒, 4秒... と待機時間を増やす
+                        print(f"Gemini overloaded (503). Retrying in {wait_time}s... (Attempt {attempt+1}/{MAX_RETRIES})")
+                        await asyncio.sleep(wait_time)
+                        continue
+                
+                # その他のエラー、またはリトライ回数切れの場合
+                raise e
 
     except Exception as e:
         print(f"Gemini Error: {e}")
