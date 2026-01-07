@@ -7,6 +7,9 @@ from dotenv import load_dotenv
 # 環境変数の読み込み
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
+# ★追加: Gemini APIキー
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+
 if not DISCORD_TOKEN:
     # ローカル実行時などのために空文字許容、あるいはエラー送出
     # raise RuntimeError("DISCORD_TOKEN is not set")

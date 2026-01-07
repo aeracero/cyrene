@@ -10,6 +10,7 @@ from lines import ARAFUE_TRIGGER_LINE
 from forms import get_user_form, set_user_form, resolve_form_code, get_form_display_name, get_all_forms
 from special_unlocks import inc_janken_win, get_janken_wins, is_nanoka_unlocked, set_nanoka_unlocked, has_danheng_stage1, mark_danheng_stage1, is_danheng_unlocked, set_danheng_unlocked
 import kimera_game
+import gemini_chat  # ★追加: AI対話モジュール
 
 # --- Discord Setup ---
 intents = discord.Intents.default()
@@ -32,6 +33,7 @@ waiting_for_transform_code = set()
 waiting_for_title_change = set()
 FORCE_RPS_WIN_NEXT = set()
 MYURION_QUIZ_STATE = {}
+GEMINI_MODE_USERS = set()  # ★追加: Gemini会話モード中のユーザーID
 
 # 変身履歴管理
 USER_FORM_HISTORY = {} # {user_id: ["cyrene", "hyacine", ...]}
@@ -84,6 +86,8 @@ GENERAL_COMMANDS_LIST_JP = (
     "**★ お話ししましょう♪**\n"
     "- `!mode auto`: メンションなしでもお話しするようになるわ\n"
     "- `!mode mention`: メンションした時だけお話しするわ\n"
+    "- `!chat on`: AI会話モードON（自由にお話ししましょ♪）\n"
+    "- `!chat off`: AI会話モードOFF（いつものおしゃべりに戻るわ）\n"
     "- `!lang en`: 英語モードに切り替えるわ\n"
     "- `こんにちは` / `おやすみ`: 挨拶は大事よね♪\n"
     "- `みんなについて教えて`: 他の人のこと、こっそり教えるわ\n"
@@ -111,6 +115,8 @@ GENERAL_COMMANDS_LIST_EN = (
     "**★ Let's Talk**\n"
     "- `!mode auto`: I will reply to everything\n"
     "- `!mode mention`: I will only reply to mentions\n"
+    "- `!chat on`: AI Chat ON (Let's talk freely♪)\n"
+    "- `!chat off`: AI Chat OFF (Back to normal)\n"
     "- `!lang jp`: Switch to Japanese mode\n"
     "- `Hello` / `Good night`: Greetings are important♪\n"
     "- `Tell me about everyone`: I'll tell you about my friends\n"
@@ -278,6 +284,26 @@ async def on_message(message):
         await message.channel.send(f"わかりました、{name}さん！これからは日本語でお話ししますね♪")
         return
 
+    # --- ★ Geminiモード切替コマンド ---
+    if content_lower == "!chat on":
+        GEMINI_MODE_USERS.add(user_id)
+        msg = "ふふっ、これからはもっと自由にお話ししましょう？ AI対話モード、起動よ♪" if lang != "en" else "Hehe, let's talk more freely. AI Chat Mode ON♪"
+        await message.channel.send(msg)
+        return
+
+    if content_lower == "!chat off":
+        GEMINI_MODE_USERS.discard(user_id)
+        gemini_chat.reset_history(user_id) # 履歴もリセット
+        msg = "わかったわ。いつものおしゃべりに戻りましょ♪" if lang != "en" else "Okay, back to normal chatting♪"
+        await message.channel.send(msg)
+        return
+        
+    if content_lower == "!chat reset":
+         gemini_chat.reset_history(user_id)
+         msg = "記憶を整理したわ。新しいお話をしましょう♪" if lang != "en" else "I've organized my memories. Let's start a new topic♪"
+         await message.channel.send(msg)
+         return
+
     # 状態チェック
     is_active_mode = (
         user_id in waiting_for_nickname or user_id in waiting_for_rename or
@@ -300,7 +326,10 @@ async def on_message(message):
     is_mentioned = client.user in message.mentions
     reply_mode = db.get_reply_mode(user_id)
     is_auto_reply = (reply_mode == "auto")
-    should_reply = (is_mentioned or is_active_mode or is_auto_reply or is_playing_kimera)
+    # Geminiモード中は自動的に返信対象とする（ただしコマンド優先）
+    is_gemini_active = (user_id in GEMINI_MODE_USERS)
+    
+    should_reply = (is_mentioned or is_active_mode or is_auto_reply or is_playing_kimera or is_gemini_active)
 
     # 隠しコマンド
     if content_body in ["死ぬ", "しぬ", "死にます", "しにます", "die", "kill myself"]:
@@ -992,6 +1021,18 @@ async def on_message(message):
                 try:
                     await message.channel.send(f"<@{target_uid}> {target_msg}")
                 except: pass
+        return
+
+    # --- ★ Gemini 対話モード処理 ---
+    if is_gemini_active and not is_command_query:
+        # 入力中であることを表示
+        async with message.channel.typing():
+            ai_reply = await gemini_chat.get_gemini_reply(user_id, raw_name, content_body)
+        
+        await send_myu(message, user_id, f"{message.author.mention} {ai_reply}")
+        
+        # 好感度XPの加算
+        logic.add_affection_xp(user_id, 2) 
         return
 
     # --- 通常会話 & 実績判定 ---
