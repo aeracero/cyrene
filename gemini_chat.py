@@ -80,7 +80,7 @@ AI発言の完全禁止: 「私はAIですので」「プログラムとして�
 """
 
 # 生成設定 (Config)
-MODEL_NAME = "gemini-1.5-flash"  # 1.5-flashは高速・安価でチャット向き
+MODEL_NAME = "gemini-2.5-flash"  # 1.5-flashは高速・安価でチャット向き
 
 GENERATE_CONFIG = types.GenerateContentConfig(
     temperature=0.9,      
