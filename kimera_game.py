@@ -131,7 +131,7 @@ def end_session(user_id):
 
 # --- バトル用ヘルパー関数群 ---
 
-def _init_battle_context(session, enemy_party, enemy_name, stage=None, potions=0):
+def _init_battle_context(session, enemy_party, enemy_name, stage=None, potions=0, ud=None):
     session["context"] = {
         "enemy_party": enemy_party,
         "enemy_name": enemy_name,
@@ -148,13 +148,18 @@ def _init_battle_context(session, enemy_party, enemy_name, stage=None, potions=0
         },
         "logs": []
     }
-    _init_chimera_battle_states(session, "p1")
-    _init_chimera_battle_states(session, "p2")
+    _init_chimera_battle_states(session, "p1", ud=ud)
+    _init_chimera_battle_states(session, "p2", ud=ud)
 
-def _init_chimera_battle_states(session, side):
-    user_id = [k for k, v in KIMERA_SESSIONS.items() if v == session][0]
-    ud = core.get_user_data(user_id, hard_mode=session.get("is_hard_mode", False))
-    party = ud["party"] if side == "p1" else session["context"]["enemy_party"]
+def _init_chimera_battle_states(session, side, ud=None):
+    party = []
+    if side == "p1":
+        if ud is None:
+            user_id = [k for k, v in KIMERA_SESSIONS.items() if v == session][0]
+            ud = core.get_user_data(user_id, hard_mode=session.get("is_hard_mode", False))
+        party = ud["party"]
+    else:
+        party = session["context"]["enemy_party"]
     
     for c in party:
         c["battle_state"] = {
@@ -165,8 +170,14 @@ def _init_chimera_battle_states(session, side):
             "oblivion_cd": 0,
             "form": None
         }
+        # ここでステータスランクを初期化
+        c["stat_stages"] = {
+            "atk": 0, "def": 0, "spa": 0, "spd": 0, 
+            "spe": 0, "acc": 0, "eva": 0
+        }
+        
         base = data.BASE_CHIMERAS[c["base_id"]]
-        if base["name"] == "キュヌレ": # Note: Logic checks original Japanese name for base ID map
+        if base["name"] == "キュヌレ":
             session["context"]["field_effects"]["remembrance"][side] = 24
 
 def _calculate_damage(attacker, defender, move_id, session):
@@ -177,12 +188,29 @@ def _calculate_damage(attacker, defender, move_id, session):
     power = move["power"]
     if move["category"] == "Status": return 0, 1.0
     
-    a_stat = attacker["stats"]["atk"] if move["category"] == "Physical" else attacker["stats"]["spa"]
-    d_stat = defender["stats"]["def"] if move["category"] == "Physical" else defender["stats"]["spd"]
+    # stat_stages が存在しない場合のフォールバック（既存セーブデータなどへの保険）
+    if "stat_stages" not in attacker: attacker["stat_stages"] = {"atk":0,"def":0,"spa":0,"spd":0,"spe":0,"acc":0,"eva":0}
+    if "stat_stages" not in defender: defender["stat_stages"] = {"atk":0,"def":0,"spa":0,"spd":0,"spe":0,"acc":0,"eva":0}
+
+    # ランク補正の計算ロジック（簡易）
+    def get_stage_mult(stage):
+        return max(2, 2 + stage) / max(2, 2 - stage)
     
+    a_stat_val = attacker["stats"]["atk"] if move["category"] == "Physical" else attacker["stats"]["spa"]
+    d_stat_val = defender["stats"]["def"] if move["category"] == "Physical" else defender["stats"]["spd"]
+    
+    # ランク補正適用
+    if move["category"] == "Physical":
+        a_stat = int(a_stat_val * get_stage_mult(attacker["stat_stages"]["atk"]))
+        d_stat = int(d_stat_val * get_stage_mult(defender["stat_stages"]["def"]))
+    else:
+        a_stat = int(a_stat_val * get_stage_mult(attacker["stat_stages"]["spa"]))
+        d_stat = int(d_stat_val * get_stage_mult(defender["stat_stages"]["spd"]))
+
     if attacker.get("status_condition") == "burn" and move["category"] == "Physical":
         a_stat = int(a_stat * 0.5)
 
+    if d_stat < 1: d_stat = 1
     dmg = int(math.floor(math.floor(math.floor(2 * attacker["level"] / 5 + 2) * power * a_stat / d_stat) / 50) + 2)
     
     type_eff = 1.0
@@ -202,21 +230,15 @@ def _calculate_damage(attacker, defender, move_id, session):
     if core.check_resist_berry(defender, move["type"]):
         dmg = int(dmg * 0.5)
         defender["held_item"] = None
-        # Note: Log handled in turn function via context if needed, but here we just return dmg
         
     return dmg, type_eff
 
 def _apply_status_effect(target, status_name, session, user_id):
     if target.get("status_condition"): return False
     target["status_condition"] = status_name
-    s_name = data.STATUS_CONDITIONS.get(status_name, {}).get("name", status_name) # This might be JP/EN mixed
-    # Ideally data.STATUS_CONDITIONS should have EN names, but for now we use status_name key for mapping if needed
+    s_name = data.STATUS_CONDITIONS.get(status_name, {}).get("name", status_name) 
     
-    # Localization for status name
     s_disp = s_name
-    # 簡易対応: 英語モードなら英語名を返すロジックを入れるか、データ側を修正する。
-    # ここでは既存データ構造維持のため、status_name(key)をそのまま使うか、辞書で変換
-    
     log = get_k_text(user_id, "status_ailment", name=target['nickname'], stat=s_disp)
     session["context"]["logs"].append(log)
     return True
@@ -560,7 +582,8 @@ def handle_battle_select(user_id, content):
         wild = core.create_chimera_instance(wild_base, level=w_lv)
         
         session["state"] = STATE_BATTLE_WILD
-        _init_battle_context(session, [wild], "Wild Kimera")
+        # Pass ud here to preserve battle state
+        _init_battle_context(session, [wild], "Wild Kimera", ud=ud)
         
         core.register_dex(ud, wild["base_id"], caught=False)
         core.save_user_data(user_id, ud, hard_mode=is_hard)
@@ -573,7 +596,8 @@ def handle_battle_select(user_id, content):
         c_lv = max(5, tlv + random.randint(0, 5))
         cpu_c = core.create_chimera_instance(cpu_base, level=c_lv)
         session["state"] = STATE_BATTLE_TRAINER
-        _init_battle_context(session, [cpu_c], "Phantom")
+        # Pass ud
+        _init_battle_context(session, [cpu_c], "Phantom", ud=ud)
         
         core.register_dex(ud, cpu_c["base_id"], caught=False)
         core.save_user_data(user_id, ud, hard_mode=is_hard)
@@ -598,7 +622,8 @@ def handle_battle_select(user_id, content):
         
         core.save_user_data(user_id, ud, hard_mode=is_hard)
         session["state"] = STATE_BATTLE_CHALLENGE
-        _init_battle_context(session, enemy_party, t_data["name"], stage=stage, potions=t_data.get("potions", 0))
+        # Pass ud
+        _init_battle_context(session, enemy_party, t_data["name"], stage=stage, potions=t_data.get("potions", 0), ud=ud)
         
         start_msg = t_data.get("dialogue_start", "Start!")
         first = enemy_party[0]
@@ -623,8 +648,18 @@ def handle_battle_action(user_id, content):
     
     enemy_party = ctx["enemy_party"]
     enemy = next((c for c in enemy_party if c["current_hp"] > 0), None)
+    
+    # ユーザーデータからプレイヤーキャラを取得。
+    # handle_battle_selectで_init_battle_context(..., ud=ud)し、その後save_user_data(ud)しているので
+    # ここのget_user_dataでロードしたudにもbattle_stateが含まれているはず。
     player = ud['party'][0]
 
+    # 安全対策: もし何らかの理由でbattle_stateなどが欠損していたら再初期化（再発防止策）
+    if "battle_state" not in player:
+        _init_chimera_battle_states(session, "p1", ud=ud)
+        # 再初期化したのでplayer変数を更新
+        player = ud['party'][0]
+        
     if not enemy:
         return _resolve_pve_win(user_id, session, ud)
 
@@ -649,7 +684,6 @@ def handle_battle_action(user_id, content):
             moves = [data.MOVES[m]['name'] for m in player["moves"]]
             return get_k_text(user_id, "cmd_moves", moves=", ".join(moves)), []
 
-        # Fix: 部分一致で意図しない技が選ばれるのを防ぐため、マッチした技の中で一番名前が長いものを優先する
         matched_moves = [m for m in player["moves"] if data.MOVES[m]["name"] in content]
         if matched_moves:
             sel_move = max(matched_moves, key=lambda m: len(data.MOVES[m]["name"]))
@@ -675,6 +709,14 @@ def handle_battle_action(user_id, content):
         if res["success"]:
             ctx["sub_state"] = BATTLE_SUB_MAIN
             target = res["target"]
+            # スイッチ先のキャラも戦闘用ステータスを持っているか確認
+            if "stat_stages" not in target:
+                 target["battle_state"] = {
+                    "revived": False, "barrier_hp": 0, "submission_prep": False,
+                    "rocket": False, "oblivion_cd": 0, "form": None
+                }
+                 target["stat_stages"] = {"atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0, "acc": 0, "eva": 0}
+
             msg = f"Go, {target['nickname']}!\n"
             msg += _enemy_attack_phase(user_id, session, target, enemy, ud)
             return msg, []
@@ -684,7 +726,15 @@ def handle_battle_action(user_id, content):
         res = _try_switch_member(user_id, content, ud, player, allow_cancel=False)
         if res["success"]:
             ctx["sub_state"] = BATTLE_SUB_MAIN
-            return f"Go, {res['target']['nickname']}!\n{get_k_text(user_id, 'cmd_prompt')}", []
+            target = res["target"]
+            if "stat_stages" not in target:
+                 target["battle_state"] = {
+                    "revived": False, "barrier_hp": 0, "submission_prep": False,
+                    "rocket": False, "oblivion_cd": 0, "form": None
+                }
+                 target["stat_stages"] = {"atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0, "acc": 0, "eva": 0}
+
+            return f"Go, {target['nickname']}!\n{get_k_text(user_id, 'cmd_prompt')}", []
         return res["msg"], []
 
     return get_k_text(user_id, "err_invalid"), []
@@ -853,7 +903,8 @@ def _end_of_turn_effects(session, player, enemy, ud):
             char["current_hp"] = max(0, char["current_hp"] - dmg)
             ctx["logs"].append(f"{char['nickname']} is hurt by burn!")
         
-        if char["battle_state"]["oblivion_cd"] > 0:
+        # 安全策: battle_stateが無い場合はスキップ（通常ありえないが念のため）
+        if "battle_state" in char and char["battle_state"].get("oblivion_cd", 0) > 0:
             char["battle_state"]["oblivion_cd"] -= 1
 
 def _handle_enemy_faint(user_id, session, ud, enemy):
@@ -988,10 +1039,13 @@ def _try_switch_member(user_id, content, ud, current, allow_cancel):
                 session = KIMERA_SESSIONS[user_id]
                 speed_boost = session["context"]["field_effects"]["aglaia_speed"]["p1"]
                 if speed_boost > 0:
+                    if "stat_stages" not in target:
+                        target["stat_stages"] = {"atk":0,"def":0,"spa":0,"spd":0,"spe":0,"acc":0,"eva":0}
                     target["stat_stages"]["spe"] = min(6, target["stat_stages"]["spe"] + speed_boost)
                     session["context"]["field_effects"]["aglaia_speed"]["p1"] = 0
                 
                 if data.BASE_CHIMERAS[target["base_id"]]["name"] == "温厚な竜":
+                    if "battle_state" not in target: target["battle_state"] = {}
                     target["battle_state"]["barrier_hp"] = int(target["stats"]["def"] * 0.6)
 
                 core.save_user_data(user_id, ud, hard_mode=session.get("is_hard_mode", False))
