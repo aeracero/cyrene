@@ -101,6 +101,27 @@ GAME_TEXT = {
     "err_cant_use": {"jp": "今は使えないわね。", "en": "You can't use that now."},
     "err_full_party": {"jp": "手持ちがいっぱいね（最大3体）。", "en": "Your party is full (Max 3)."},
     "err_invalid": {"jp": "指定が間違ってるみたいね。", "en": "Invalid selection."},
+
+    # Localized Battle Logs (Added)
+    "log_oblivion": {"jp": "{name} は技の使い方をド忘れしちゃった！", "en": "{name} forgot how to use that move!"},
+    "log_reflect": {"jp": "反射！ {dmg} のダメージ！", "en": "Reflect damage! {dmg}"},
+    "log_hp_display": {"jp": "(相手HP: {ehp} / 自分HP: {php})", "en": "(Enemy HP: {ehp} / Player HP: {php})"},
+    "log_paralyzed_cant_move": {"jp": "{name} は痺れて動けない！", "en": "{name} is paralyzed!"},
+    "log_woke_up": {"jp": "{name} は目を覚ました！", "en": "{name} woke up!"},
+    "log_sleeping": {"jp": "{name} は眠っている...", "en": "{name} is sleeping..."},
+    "log_poison_hurt": {"jp": "{name} は毒に蝕まれている！", "en": "{name} is hurt by poison!"},
+    "log_burn_hurt": {"jp": "{name} は火傷でダメージを受けた！", "en": "{name} is hurt by burn!"},
+    "log_hung_on": {"jp": "{name} はタスキで持ちこたえた！", "en": "{name} hung on with Sash!"},
+    "log_potion": {"jp": "相手は回復薬を使った！ {name} の体力が回復！", "en": "Enemy used Potion! {name} healed!"},
+    "log_icarun_start": {"jp": "イカルンが召喚された！ 毎ターン回復するわよ！", "en": "Icarun summoned! Healing every turn!"},
+    "log_icarun_heal": {"jp": "イカルンが {name} を回復した！", "en": "Icarun healed {name}!"},
+    "log_revived": {"jp": "\n{name} は復活したわ！", "en": "\n{name} revived!"},
+    "log_self_heal": {"jp": "{name} は回復した！", "en": "{name} healed!"},
+    
+    # Additions for fix
+    "win_level_up": {"jp": "\nトレーナーレベルが {lv} に上がったわ！", "en": "\nTrainer Level Up -> {lv}!"},
+    "win_aff_xp": {"jp": "\n(好感度XP +50)", "en": "\n(Affection XP +50)"},
+    "battle_select_back": {"jp": "メニューに戻ったわ。", "en": "Back to menu."},
 }
 
 def get_k_text(user_id, key, **kwargs):
@@ -567,6 +588,21 @@ def handle_battle_select(user_id, content):
     content = content.translate(str.maketrans({chr(0xFF10 + i): chr(0x30 + i) for i in range(10)}))
     c_lower = content.lower()
 
+    if "真なるキメラマスターロード" in content:
+        if is_hard:
+            return "You are already in Hard Mode.", []
+        normal_ud = core.get_user_data(user_id, hard_mode=False)
+        if "story_page_2" in normal_ud["items"]:
+            session["is_hard_mode"] = True
+            core.get_user_data(user_id, hard_mode=True)
+            return get_k_text(user_id, "hard_mode_warning"), []
+        else:
+            return "You don't have the proof (Normal Clear) to enter yet.", []
+
+    if "戻る" in content or "back" in c_lower:
+        session["state"] = STATE_MENU
+        return get_k_text(user_id, "battle_select_back") + "\n" + get_k_text(user_id, "menu_prompt"), []
+
     if "確保" in content or "1" in content or "catch" in c_lower:
         rand = random.randint(1, 100)
         target_rarity = 1
@@ -650,14 +686,11 @@ def handle_battle_action(user_id, content):
     enemy = next((c for c in enemy_party if c["current_hp"] > 0), None)
     
     # ユーザーデータからプレイヤーキャラを取得。
-    # handle_battle_selectで_init_battle_context(..., ud=ud)し、その後save_user_data(ud)しているので
-    # ここのget_user_dataでロードしたudにもbattle_stateが含まれているはず。
     player = ud['party'][0]
 
     # 安全対策: もし何らかの理由でbattle_stateなどが欠損していたら再初期化（再発防止策）
     if "battle_state" not in player:
         _init_chimera_battle_states(session, "p1", ud=ud)
-        # 再初期化したのでplayer変数を更新
         player = ud['party'][0]
         
     if not enemy:
@@ -748,17 +781,17 @@ def _execute_pve_turn(user_id, session, player, enemy, move_id, ud):
     cant_move = False
     sc = player.get("status_condition")
     if sc == "paralysis" and random.random() < 0.25:
-        ctx["logs"].append(f"{player['nickname']} is paralyzed!")
+        ctx["logs"].append(get_k_text(user_id, "log_paralyzed_cant_move", name=player['nickname']))
         cant_move = True
     elif sc == "sleep":
         if random.random() < 0.33:
             player["status_condition"] = None
-            ctx["logs"].append(f"{player['nickname']} woke up!")
+            ctx["logs"].append(get_k_text(user_id, "log_woke_up", name=player['nickname']))
         else:
-            ctx["logs"].append(f"{player['nickname']} is sleeping...")
+            ctx["logs"].append(get_k_text(user_id, "log_sleeping", name=player['nickname']))
             cant_move = True
     elif sc == "oblivion" and player.get("last_move") == move_id:
-        ctx["logs"].append(f"{player['nickname']} forgot how to use that move!")
+        ctx["logs"].append(get_k_text(user_id, "log_oblivion", name=player['nickname']))
         cant_move = True
 
     if not cant_move:
@@ -780,12 +813,12 @@ def _execute_pve_turn(user_id, session, player, enemy, move_id, ud):
             
             if core.check_survival_item(enemy, dmg):
                 enemy["current_hp"] = 1
-                ctx["logs"].append(f"{enemy['nickname']} hung on with Sash!")
+                ctx["logs"].append(get_k_text(user_id, "log_hung_on", name=enemy['nickname']))
             
             if data.BASE_CHIMERAS[enemy["base_id"]]["name"] == "チョウチョウケーキ":
                 ref = max(1, dmg // 10)
                 player["current_hp"] = max(0, player["current_hp"] - ref)
-                ctx["logs"].append(f"Reflect damage! {ref}")
+                ctx["logs"].append(get_k_text(user_id, "log_reflect", dmg=ref))
                 
             if data.BASE_CHIMERAS[enemy["base_id"]]["name"] == "キャンディーロール":
                  if enemy["battle_state"]["oblivion_cd"] == 0:
@@ -806,11 +839,11 @@ def _execute_pve_turn(user_id, session, player, enemy, move_id, ud):
                 elif eff["type"] == "heal":
                     rec = int(player["stats"]["max_hp"] * eff["percent"])
                     player["current_hp"] = min(player["stats"]["max_hp"], player["current_hp"] + rec)
-                    ctx["logs"].append(f"{player['nickname']} healed!")
+                    ctx["logs"].append(get_k_text(user_id, "log_self_heal", name=player['nickname']))
 
             if base_name == "チェリビス":
                 ctx["field_effects"]["icarun"]["p1"] = True
-                ctx["logs"].append("Icarun summoned! Healing every turn!")
+                ctx["logs"].append(get_k_text(user_id, "log_icarun_start"))
     
         player["last_move"] = move_id
 
@@ -831,14 +864,14 @@ def _enemy_attack_phase(user_id, session, player, enemy, ud):
     cant_move = False
     sc = enemy.get("status_condition")
     if sc == "paralysis" and random.random() < 0.25:
-        ctx["logs"].append(f"Enemy {enemy['nickname']} is paralyzed!")
+        ctx["logs"].append(get_k_text(user_id, "log_paralyzed_cant_move", name=f"Enemy {enemy['nickname']}"))
         cant_move = True
     elif sc == "sleep":
         if random.random() < 0.33:
             enemy["status_condition"] = None
-            ctx["logs"].append(f"Enemy {enemy['nickname']} woke up!")
+            ctx["logs"].append(get_k_text(user_id, "log_woke_up", name=f"Enemy {enemy['nickname']}"))
         else:
-            ctx["logs"].append(f"Enemy {enemy['nickname']} is sleeping...")
+            ctx["logs"].append(get_k_text(user_id, "log_sleeping", name=f"Enemy {enemy['nickname']}"))
             cant_move = True
 
     if not cant_move:
@@ -847,7 +880,7 @@ def _enemy_attack_phase(user_id, session, player, enemy, ud):
             ctx["potions"] -= 1
             heal_amt = int(enemy["stats"]["max_hp"] * 0.5)
             enemy["current_hp"] = min(enemy["stats"]["max_hp"], enemy["current_hp"] + heal_amt)
-            ctx["logs"].append(f"Enemy used Potion! {enemy['nickname']} healed!")
+            ctx["logs"].append(get_k_text(user_id, "log_potion", name=enemy['nickname']))
         else:
             emove_id = random.choice(enemy["moves"])
             emove = data.MOVES[emove_id]
@@ -866,14 +899,14 @@ def _enemy_attack_phase(user_id, session, player, enemy, ud):
                 if data.BASE_CHIMERAS[player["base_id"]]["name"] == "チョウチョウケーキ":
                     ref = max(1, dmg // 10)
                     enemy["current_hp"] = max(0, enemy["current_hp"] - ref)
-                    ctx["logs"].append(f"Reflect! Enemy took {ref} dmg!")
+                    ctx["logs"].append(get_k_text(user_id, "log_reflect", dmg=ref))
             else:
                 ctx["logs"].append(get_k_text(user_id, "log_stat", atkr=f"Enemy {enemy['nickname']}", move=emove['name']))
                 eff = emove.get("effect")
                 if eff and eff["type"] == "status":
                     _apply_status_effect(player, eff["status"], session, user_id)
     
-    _end_of_turn_effects(session, player, enemy, ud)
+    _end_of_turn_effects(session, player, enemy, ud, user_id)
     core.save_user_data(user_id, ud, hard_mode=session.get("is_hard_mode", False))
     msg = "\n".join(ctx["logs"])
     
@@ -882,14 +915,14 @@ def _enemy_attack_phase(user_id, session, player, enemy, ud):
     if enemy["current_hp"] <= 0:
         return msg + "\n" + _handle_enemy_faint(user_id, session, ud, enemy)
         
-    return msg + f"\n(Enemy HP: {enemy['current_hp']} / Player HP: {player['current_hp']})"
+    return msg + f"\n" + get_k_text(user_id, "log_hp_display", ehp=enemy['current_hp'], php=player['current_hp'])
 
-def _end_of_turn_effects(session, player, enemy, ud):
+def _end_of_turn_effects(session, player, enemy, ud, user_id):
     ctx = session["context"]
     if ctx["field_effects"]["icarun"]["p1"] and player["current_hp"] > 0:
         rec = int(player["stats"]["max_hp"] * 0.1)
         player["current_hp"] = min(player["stats"]["max_hp"], player["current_hp"] + rec)
-        ctx["logs"].append(f"Icarun healed {player['nickname']}!")
+        ctx["logs"].append(get_k_text(user_id, "log_icarun_heal", name=player['nickname']))
 
     for char in [player, enemy]:
         if char["current_hp"] <= 0: continue
@@ -897,11 +930,11 @@ def _end_of_turn_effects(session, player, enemy, ud):
         if sc == "poison":
             dmg = char["stats"]["max_hp"] // 8
             char["current_hp"] = max(0, char["current_hp"] - dmg)
-            ctx["logs"].append(f"{char['nickname']} is hurt by poison!")
+            ctx["logs"].append(get_k_text(user_id, "log_poison_hurt", name=char['nickname']))
         elif sc == "burn":
             dmg = char["stats"]["max_hp"] // 16
             char["current_hp"] = max(0, char["current_hp"] - dmg)
-            ctx["logs"].append(f"{char['nickname']} is hurt by burn!")
+            ctx["logs"].append(get_k_text(user_id, "log_burn_hurt", name=char['nickname']))
         
         # 安全策: battle_stateが無い場合はスキップ（通常ありえないが念のため）
         if "battle_state" in char and char["battle_state"].get("oblivion_cd", 0) > 0:
@@ -913,7 +946,7 @@ def _handle_enemy_faint(user_id, session, ud, enemy):
     if base_name == "ハニーフルーツスープ" and not enemy["battle_state"]["revived"]:
         enemy["current_hp"] = enemy["stats"]["max_hp"] // 2
         enemy["battle_state"]["revived"] = True
-        return f"\nEnemy {enemy['nickname']} revived!"
+        return get_k_text(user_id, "log_revived", name=f"Enemy {enemy['nickname']}")
 
     msg = get_k_text(user_id, "fainted", name=f"Enemy {enemy['nickname']}")
     
@@ -1007,10 +1040,10 @@ def _resolve_pve_win(user_id, session, ud):
     core.save_user_data(user_id, ud, hard_mode=is_hard)
     
     msg += get_k_text(user_id, "win_pve", money=base_money, xp=trainer_xp)
-    if leveled: msg += f"\nTrainer Level Up -> {ud['trainer_level']}!"
+    if leveled: msg += get_k_text(user_id, "win_level_up", lv=ud['trainer_level'])
     
     logic.add_affection_xp(user_id, 50)
-    msg += "\n(Affection XP +50)"
+    msg += get_k_text(user_id, "win_aff_xp")
     
     session["state"] = STATE_MENU
     session["context"] = {}
