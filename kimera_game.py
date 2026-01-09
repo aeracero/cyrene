@@ -649,10 +649,10 @@ def handle_battle_action(user_id, content):
             moves = [data.MOVES[m]['name'] for m in player["moves"]]
             return get_k_text(user_id, "cmd_moves", moves=", ".join(moves)), []
 
-        sel_move = None
-        for m in player["moves"]:
-            if data.MOVES[m]["name"] in content: sel_move = m
-        if sel_move:
+        # Fix: 部分一致で意図しない技が選ばれるのを防ぐため、マッチした技の中で一番名前が長いものを優先する
+        matched_moves = [m for m in player["moves"] if data.MOVES[m]["name"] in content]
+        if matched_moves:
+            sel_move = max(matched_moves, key=lambda m: len(data.MOVES[m]["name"]))
             return _execute_pve_turn(user_id, session, player, enemy, sel_move, ud)
 
         return get_k_text(user_id, "cmd_prompt"), []
@@ -972,27 +972,30 @@ def _generate_party_list(ud):
 
 def _try_switch_member(user_id, content, ud, current, allow_cancel):
     try:
-        idx = int(content.translate(str.maketrans({chr(0xFF01 + i): chr(0x21 + i) for i in range(94)}))) - 1
-        if 0 <= idx < len(ud["party"]):
-            target = ud["party"][idx]
-            if target["current_hp"] <= 0:
-                return {"success": False, "msg": "That Kimera can't fight!"}
-            if target == current and allow_cancel:
-                return {"success": False, "msg": "Already in battle!"}
-            
-            ud["party"][0], ud["party"][idx] = ud["party"][idx], ud["party"][0]
-            
-            session = KIMERA_SESSIONS[user_id]
-            speed_boost = session["context"]["field_effects"]["aglaia_speed"]["p1"]
-            if speed_boost > 0:
-                target["stat_stages"]["spe"] = min(6, target["stat_stages"]["spe"] + speed_boost)
-                session["context"]["field_effects"]["aglaia_speed"]["p1"] = 0
-            
-            if data.BASE_CHIMERAS[target["base_id"]]["name"] == "温厚な竜":
-                target["battle_state"]["barrier_hp"] = int(target["stats"]["def"] * 0.6)
+        # Fix: 文字列が含まれていても数値だけを取り出して判定するように修正 (例: "1番と交代" -> 1)
+        m = re.search(r'\d+', content)
+        if m:
+            idx = int(m.group(0)) - 1
+            if 0 <= idx < len(ud["party"]):
+                target = ud["party"][idx]
+                if target["current_hp"] <= 0:
+                    return {"success": False, "msg": "That Kimera can't fight!"}
+                if target == current and allow_cancel:
+                    return {"success": False, "msg": "Already in battle!"}
+                
+                ud["party"][0], ud["party"][idx] = ud["party"][idx], ud["party"][0]
+                
+                session = KIMERA_SESSIONS[user_id]
+                speed_boost = session["context"]["field_effects"]["aglaia_speed"]["p1"]
+                if speed_boost > 0:
+                    target["stat_stages"]["spe"] = min(6, target["stat_stages"]["spe"] + speed_boost)
+                    session["context"]["field_effects"]["aglaia_speed"]["p1"] = 0
+                
+                if data.BASE_CHIMERAS[target["base_id"]]["name"] == "温厚な竜":
+                    target["battle_state"]["barrier_hp"] = int(target["stats"]["def"] * 0.6)
 
-            core.save_user_data(user_id, ud, hard_mode=session.get("is_hard_mode", False))
-            return {"success": True, "target": target}
+                core.save_user_data(user_id, ud, hard_mode=session.get("is_hard_mode", False))
+                return {"success": True, "target": target}
     except:
         pass
     return {"success": False, "msg": "Invalid number."}
@@ -1029,6 +1032,9 @@ def use_item_in_battle(user_id, session, item_key, ud, player, enemy):
             return get_k_text(user_id, "catch_success", name=enemy['nickname']), []
         else:
             core.save_user_data(user_id, ud, hard_mode=is_hard)
+            # Fix: ボールを投げて失敗しても、道具選択メニューから抜けてメインメニューに戻す
+            session["context"]["sub_state"] = BATTLE_SUB_MAIN
+            
             msg = get_k_text(user_id, "catch_fail") + "\n"
             msg += _enemy_attack_phase(user_id, session, player, enemy, ud)
             return msg
@@ -1040,6 +1046,10 @@ def use_item_in_battle(user_id, session, item_key, ud, player, enemy):
         
         player["current_hp"] = min(player["stats"]["max_hp"], player["current_hp"] + item["value"])
         core.save_user_data(user_id, ud, hard_mode=is_hard)
+        
+        # Fix: 回復後、道具選択メニューから抜けてメインメニューに戻す
+        session["context"]["sub_state"] = BATTLE_SUB_MAIN
+        
         msg = f"Healed!\n"
         msg += _enemy_attack_phase(user_id, session, player, enemy, ud)
         return msg
