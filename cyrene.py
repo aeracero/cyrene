@@ -1,3 +1,4 @@
+# cyrene.py
 import os
 import re
 import random
@@ -105,6 +106,7 @@ GENERAL_COMMANDS_LIST_JP = (
     "- `単発ガチャ` / `10連ガチャ`: 石を使って回すわ\n"
     "- `チケット10連`: チケットで回すわよ\n"
     "- `デイリー受け取り`: 1日1回、あたしからのプレゼントよ♪\n"
+    "- `石をあげる @ユーザー 数`: お友達に石をプレゼントするわ♪\n"
     "- `ピックアップ変更 [キャラ名]`: 狙いを定めるのね？\n\n"
     "**★ キメラ**\n"
     "- `キメラと遊びたい`: 可愛い子たちと遊びましょ♪"
@@ -134,6 +136,7 @@ GENERAL_COMMANDS_LIST_EN = (
     "- `Pull 1` / `Pull 10`: Use gems to pull\n"
     "- `Ticket 10`: Use tickets\n"
     "- `Daily`: A daily present just for you♪\n"
+    "- `Give Stones @user [num]`: Send a gift to your friend♪\n"
     "- `Change Pickup [Name]`: Set your target\n\n"
     "**★ Kimera**\n"
     "- `Play with Kimera`: Let's play with the cute ones♪"
@@ -226,6 +229,25 @@ async def on_message(message):
             # 管理者にDMで通知
             await message.author.send("【System】 ログ確認モードをOFFにしました。")
             return
+    
+    # --- ★ 無限デイリー機能 (管理者限定) ---
+    if content_body in ["無限デイリーオン", "infinite daily on"]:
+        if user_id == PRIMARY_ADMIN_ID:
+            logic.set_infinite_daily(user_id, True)
+            msg = "Infinite Daily Mode ON. You can claim daily rewards unlimited times." if lang=="en" else "無限デイリーモードをオンにしたわ。\nこれで何度でも報酬を受け取れるわよ、マスター♪"
+            await send_myu(message, user_id, msg)
+        else:
+            await send_myu(message, user_id, "Access denied. Admin only.")
+        return
+
+    if content_body in ["無限デイリーオフ", "infinite daily off"]:
+        if user_id == PRIMARY_ADMIN_ID:
+            logic.set_infinite_daily(user_id, False)
+            msg = "Infinite Daily Mode OFF." if lang=="en" else "無限デイリーモードをオフにしたわ。自重も大切よね♪"
+            await send_myu(message, user_id, msg)
+        else:
+             await send_myu(message, user_id, "Access denied. Admin only.")
+        return
     
     # --- ★ 全チャンネル送信 (管理者限定) ---
     if content_body.startswith("全体送信") or content_body.startswith("broadcast"):
@@ -856,6 +878,15 @@ async def on_message(message):
             await send_myu(message, user_id, res)
         else:
             await send_myu(message, user_id, logic.format_gacha_status(user_id)) 
+        return
+    
+    # ★追加: 石の譲渡機能
+    m_gift = re.match(r"(?:石をあげる|give stones)\s+<@!?(\d+)>\s+(\d+)", content_body, re.IGNORECASE)
+    if m_gift:
+        target_id = int(m_gift.group(1))
+        amount = int(m_gift.group(2))
+        res = logic.transfer_stones(user_id, target_id, amount)
+        await send_myu(message, user_id, res)
         return
 
     if any(k in content_body_lower for k in DAILY_KEYWORDS):
