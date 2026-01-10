@@ -25,12 +25,17 @@ STATUS_CONDITIONS = {
     # 以下は特殊状態
     "oblivion": {"name": "忘却", "desc": "直前の技が使えず、命中率ダウン。"},
     "submission": {"name": "屈服", "desc": "与えるダメージ低下。捕獲されやすい。"},
+    "recharge": {"name": "反動待機", "desc": "強力な技の反動で動けない。"}
 }
 
 # --- 技データ (MOVES) ---
 # category: Physical(物理), Special(特殊), Status(変化)
-# target: Enemy, Self
-# effect: {type: "buff", stat: "atk", stage: 1}, {type: "status", status: "poison"} 等
+# effect types: 
+#   buff/debuff (stat, stage)
+#   status (status)
+#   recoil (percent of damage taken)
+#   recharge (skip next turn)
+#   debuff_self (stat, stage)
 MOVES = {
     # 物理技
     "scratch": {"name": "ひっかく", "type": "Normal", "category": "Physical", "power": 40, "accuracy": 100, "max_pp": 35, "target": "Enemy"},
@@ -39,6 +44,8 @@ MOVES = {
     "shadow_claw": {"name": "シャドークロー", "type": "Dark", "category": "Physical", "power": 70, "accuracy": 100, "max_pp": 15, "target": "Enemy"},
     "dragon_claw": {"name": "ドラゴンクロー", "type": "Normal", "category": "Physical", "power": 80, "accuracy": 100, "max_pp": 15, "target": "Enemy"},
     "quick_attack": {"name": "電光石火", "type": "Normal", "category": "Physical", "power": 40, "accuracy": 100, "max_pp": 30, "priority": 1, "target": "Enemy"},
+    "flare_blitz": {"name": "フレアドライブ", "type": "Fire", "category": "Physical", "power": 120, "accuracy": 100, "max_pp": 15, "target": "Enemy", "effect": {"type": "recoil", "percent": 0.33}, "desc": "高威力だが反動ダメージを受ける。"},
+    "giga_impact": {"name": "ギガインパクト", "type": "Normal", "category": "Physical", "power": 150, "accuracy": 90, "max_pp": 5, "target": "Enemy", "effect": {"type": "recharge"}, "desc": "超高威力だが次のターン動けない。"},
 
     # 特殊技
     "ember": {"name": "火の粉", "type": "Fire", "category": "Special", "power": 40, "accuracy": 100, "max_pp": 25, "target": "Enemy"},
@@ -47,11 +54,12 @@ MOVES = {
     "flamethrower": {"name": "火炎放射", "type": "Fire", "category": "Special", "power": 90, "accuracy": 100, "max_pp": 15, "target": "Enemy", "effect": {"type": "chance_status", "status": "burn", "chance": 0.1}},
     "hydro_pump": {"name": "ハイドロポンプ", "type": "Water", "category": "Special", "power": 110, "accuracy": 80, "max_pp": 5, "target": "Enemy"},
     "solar_beam": {"name": "ソーラービーム", "type": "Grass", "category": "Special", "power": 120, "accuracy": 100, "max_pp": 10, "target": "Enemy"},
-    "hyper_beam": {"name": "破壊光線", "type": "Normal", "category": "Special", "power": 150, "accuracy": 90, "max_pp": 5, "target": "Enemy"},
+    "hyper_beam": {"name": "破壊光線", "type": "Normal", "category": "Special", "power": 150, "accuracy": 90, "max_pp": 5, "target": "Enemy", "effect": {"type": "recharge"}, "desc": "超高威力だが次のターン動けない。"},
     "dark_pulse": {"name": "悪の波動", "type": "Dark", "category": "Special", "power": 80, "accuracy": 100, "max_pp": 15, "target": "Enemy"},
     "flash_cannon": {"name": "ラスターカノン", "type": "Light", "category": "Special", "power": 80, "accuracy": 100, "max_pp": 10, "target": "Enemy"},
     "dragon_breath": {"name": "竜の息吹", "type": "Light", "category": "Special", "power": 60, "accuracy": 100, "max_pp": 20, "target": "Enemy", "effect": {"type": "chance_status", "status": "paralysis", "chance": 0.3}},
     "dazzling_gleam": {"name": "マジカルシャイン", "type": "Fairy", "category": "Special", "power": 80, "accuracy": 100, "max_pp": 10, "target": "Enemy"},
+    "draco_meteor": {"name": "流星群", "type": "Normal", "category": "Special", "power": 130, "accuracy": 90, "max_pp": 5, "target": "Enemy", "effect": {"type": "debuff_self", "stat": "spa", "stage": 2}, "desc": "高威力だが使用後に特攻がガクッと下がる。"},
 
     # 変化技 (バフ・デバフ・状態異常)
     "growl": {"name": "鳴き声", "type": "Normal", "category": "Status", "power": 0, "accuracy": 100, "max_pp": 40, "target": "Enemy", "effect": {"type": "debuff", "stat": "atk", "stage": 1}},
@@ -62,6 +70,21 @@ MOVES = {
     "thunder_wave": {"name": "電磁波", "type": "Light", "category": "Status", "power": 0, "accuracy": 90, "max_pp": 20, "target": "Enemy", "effect": {"type": "status", "status": "paralysis"}},
     "sing": {"name": "歌う", "type": "Normal", "category": "Status", "power": 0, "accuracy": 55, "max_pp": 15, "target": "Enemy", "effect": {"type": "status", "status": "sleep"}},
     "recover": {"name": "自己再生", "type": "Normal", "category": "Status", "power": 0, "accuracy": 100, "max_pp": 10, "target": "Self", "effect": {"type": "heal", "percent": 0.5}},
+
+    # 黄金裔専用技 (デメリット付きなど強力な技)
+    "golden_rush": {"name": "黄金ラッシュ", "type": "Normal", "category": "Physical", "power": 120, "accuracy": 100, "max_pp": 5, "target": "Enemy", "effect": {"type": "debuff_self", "stat": "def", "stage": 1}, "desc": "アグライア専用。防御を犠牲に猛攻を仕掛ける。"},
+    "rocket_dive": {"name": "ロケットダイブ", "type": "Fire", "category": "Physical", "power": 130, "accuracy": 95, "max_pp": 5, "target": "Enemy", "effect": {"type": "recoil", "percent": 0.25}, "desc": "トリスビアス専用。ロケットで突撃する捨て身の技。"},
+    "logic_burst": {"name": "論理崩壊", "type": "Grass", "category": "Special", "power": 140, "accuracy": 90, "max_pp": 5, "target": "Enemy", "effect": {"type": "debuff_self", "stat": "spa", "stage": 2}, "desc": "アナクサゴラス専用。演算限界を超えるビーム。"},
+    "holy_nova": {"name": "ホーリーノヴァ", "type": "Light", "category": "Special", "power": 90, "accuracy": 100, "max_pp": 10, "target": "Enemy", "effect": {"type": "heal", "percent": 0.5}, "desc": "ヒアシンシア専用。攻撃と同時に回復を行う。"},
+    "abyss_soup": {"name": "深淵のスープ", "type": "Dark", "category": "Special", "power": 110, "accuracy": 95, "max_pp": 10, "target": "Enemy", "effect": {"type": "recoil", "percent": 0.2}, "desc": "メデイモス専用。命を削って毒のスープを浴びせる。"},
+    "cat_burglar": {"name": "猫騙し", "type": "Dark", "category": "Physical", "power": 40, "accuracy": 100, "max_pp": 10, "target": "Enemy", "priority": 3, "effect": {"type": "chance_status", "status": "paralysis", "chance": 1.0}, "desc": "セファリア専用。必ず先制し、相手をひるませる(麻痺)。"},
+    "sweet_temptation": {"name": "甘い誘惑", "type": "Fairy", "category": "Status", "power": 0, "accuracy": 90, "max_pp": 10, "target": "Enemy", "effect": {"type": "status", "status": "sleep"}, "desc": "キャストリス専用。強力な眠り技。"},
+    "volcanic_ash": {"name": "ヴォルカニック", "type": "Fire", "category": "Special", "power": 130, "accuracy": 85, "max_pp": 5, "target": "Enemy", "effect": {"type": "chance_status", "status": "burn", "chance": 0.5}, "desc": "ファイノン専用。広範囲を焼き尽くす。"},
+    "deep_sea_gulp": {"name": "丸呑み", "type": "Water", "category": "Physical", "power": 100, "accuracy": 100, "max_pp": 10, "target": "Enemy", "effect": {"type": "heal", "percent": 0.3}, "desc": "セイレンス専用。相手を齧って回復する。"},
+    "kings_pressure": {"name": "王のプレッシャー", "type": "Dark", "category": "Status", "power": 0, "accuracy": 100, "max_pp": 5, "target": "Enemy", "effect": {"type": "debuff", "stat": "def", "stage": 2}, "desc": "ケリュドラ専用。相手の防御を大幅に下げる。"},
+    "memory_erasure": {"name": "記憶消去", "type": "Light", "category": "Special", "power": 120, "accuracy": 100, "max_pp": 5, "target": "Enemy", "effect": {"type": "recharge"}, "desc": "三月なのか専用。強烈な光で記憶ごと吹き飛ばす。"},
+    "dragon_sanctuary": {"name": "竜の聖域", "type": "Light", "category": "Status", "power": 0, "accuracy": 100, "max_pp": 5, "target": "Self", "effect": {"type": "buff", "stat": "def", "stage": 2}, "desc": "丹恒専用。防御と特防を大幅に上げる。"},
+    "eternal_love": {"name": "永遠の愛", "type": "Fairy", "category": "Special", "power": 200, "accuracy": 100, "max_pp": 1, "target": "Enemy", "effect": {"type": "recharge"}, "desc": "キュレネ専用。全てを包み込む究極の一撃。"},
 
     # 特殊個体用（変身後など）
     "star_burst": {"name": "スターバースト", "type": "Fire", "category": "Physical", "power": 999, "accuracy": 200, "max_pp": 1, "target": "Enemy", "desc": "必中・一撃必殺"},
@@ -95,7 +118,7 @@ BASE_CHIMERAS = {
         "name": "フレアリザード", "type": "Fire", "rarity": 1,
         "base_stats": {"hp": 39, "atk": 52, "def": 43, "spa": 60, "spd": 50, "spe": 65},
         "ability": "猛火",
-        "learnset": {1: "scratch", 6: "ember", 12: "tail_whip", 25: "flamethrower"},
+        "learnset": {1: "scratch", 6: "ember", 12: "tail_whip", 25: "flamethrower", 40: "flare_blitz"},
         "description": "尻尾に炎を宿したトカゲ。"
     },
     # ★2
@@ -124,7 +147,7 @@ BASE_CHIMERAS = {
         "name": "短気", "type": "Fire", "rarity": 2,
         "base_stats": {"hp": 60, "atk": 70, "def": 55, "spa": 65, "spd": 50, "spe": 75},
         "ability": "短気",
-        "learnset": {1: "ember", 5: "sharpen", 15: "flamethrower"},
+        "learnset": {1: "ember", 5: "sharpen", 15: "flamethrower", 30: "flare_blitz"},
         "description": "短気な火のキメラ。攻撃が高い。"
     },
     "skape_goat":{
@@ -139,92 +162,92 @@ BASE_CHIMERAS = {
     "oatmeal":{
         "name": "オートミール", "type": "Normal", "rarity": 6,
         "base_stats": {"hp": 65, "atk": 55, "def": 60, "spa": 50, "spd": 55, "spe": 40},
-        "ability": "金糸雀", # 攻撃毎S上昇。倒されると次へSバフ引継ぎ
-        "learnset": {1: "tackle", 5: "sing", 10: "sharpen", 20: "hyper_beam"},
+        "ability": "金糸雀", 
+        "learnset": {1: "tackle", 5: "sing", 10: "sharpen", 20: "hyper_beam", 40: "golden_rush"},
         "description": "アグライアの相棒。攻撃するたび加速し、想いを次へ託す。"
     },
     "ringo_ame":{
         "name": "リンゴアメ", "type": "Grass", "rarity": 6,
         "base_stats": {"hp": 65, "atk": 55, "def": 55, "spa": 45, "spd": 50, "spe": 40},
-        "ability": "ロケット", # 補助技で搭乗、攻撃で追撃
-        "learnset": {1: "tackle", 5: "growth", 10: "leaf_blade", 15: "poison_powder"},
+        "ability": "ロケット", 
+        "learnset": {1: "tackle", 5: "growth", 10: "leaf_blade", 15: "poison_powder", 35: "rocket_dive"},
         "description": "トリスビアスの相棒。ロケットに乗って戦場を駆ける。"
     },
     "nunusu":{
         "name": "ヌヌス", "type": "Grass", "rarity": 6,
         "base_stats": {"hp": 75, "atk": 65, "def": 70, "spa": 80, "spd": 75, "spe": 55},
-        "ability": "大地獣", # 攻撃時デバフ付与。退場時デバフ深化
-        "learnset": {1: "leaf_blade", 5: "poison_powder", 12: "solar_beam"},
+        "ability": "大地獣", 
+        "learnset": {1: "leaf_blade", 5: "poison_powder", 12: "solar_beam", 40: "logic_burst"},
         "description": "アナクサゴラスの相棒。相手を解析し弱体化させる。"
     },
     "cheribis":{
         "name": "チェリビス", "type": "Light", "rarity": 6,
         "base_stats": {"hp": 55, "atk": 45, "def": 50, "spa": 75, "spd": 65, "spe": 55},
-        "ability": "癒しの光", # 補助技でイカルン召喚(毎ターン回復)
-        "learnset": {1: "shining_ray", 5: "recover", 10: "flash_cannon", 20: "hyper_beam"},
+        "ability": "癒しの光", 
+        "learnset": {1: "shining_ray", 5: "recover", 10: "flash_cannon", 20: "hyper_beam", 45: "holy_nova"},
         "description": "ヒアシンシアの相棒。イカルンと共に味方を癒やす。"
     },
     "honey_fruit_soup":{
         "name": "ハニーフルーツスープ", "type": "Dark", "rarity": 6,
         "base_stats": {"hp": 60, "atk": 55, "def": 50, "spa": 60, "spd": 55, "spe": 45},
-        "ability": "蘇り", # HP0時、半分で復活（1回のみ）
-        "learnset": {1: "shadow_claw", 5: "growth", 11: "dark_pulse"},
+        "ability": "蘇り", 
+        "learnset": {1: "shadow_claw", 5: "growth", 11: "dark_pulse", 40: "abyss_soup"},
         "description": "メデイモスの相棒。何度でも蘇る不屈の魂。"
     },
     "nyanko_dorobou":{
         "name": "ニャンコ泥棒", "type": "Dark", "rarity": 6,
         "base_stats": {"hp": 50, "atk": 70, "def": 45, "spa": 40, "spd": 50, "spe": 80},
-        "ability": "盗みの天才", # 攻撃時50%で盗む
-        "learnset": {1: "scratch", 5: "tail_whip", 10: "shadow_claw", 15: "dark_pulse"},
+        "ability": "盗みの天才", 
+        "learnset": {1: "scratch", 5: "tail_whip", 10: "shadow_claw", 15: "dark_pulse", 30: "cat_burglar"},
         "description": "セファリアの相棒。素早く相手の道具を奪う。"
     },
     "cho_cho_cake":{
         "name": "チョウチョウケーキ", "type": "Normal", "rarity": 6,
         "base_stats": {"hp": 70, "atk": 30, "def": 60, "spa": 50, "spd": 65, "spe": 25},
-        "ability": "甘美な誘惑", # 被弾時10%反射
-        "learnset": {1: "tackle", 5: "sing", 10: "recover", 20: "hyper_beam"},
+        "ability": "甘美な誘惑", 
+        "learnset": {1: "tackle", 5: "sing", 10: "recover", 20: "hyper_beam", 40: "sweet_temptation"},
         "description": "キャストリスの相棒。攻撃した相手に甘いお返しをする。"
     },
     "biguruyashi":{
         "name": "ビ-グルヤシ", "type": "Fire", "rarity": 6,
         "base_stats": {"hp": 60, "atk": 80, "def": 50, "spa": 70, "spd": 55, "spe": 65},
-        "ability": "炎の守護者", # 火種スタック12で変身
-        "learnset": {1: "ember", 5: "sharpen", 10: "flamethrower", 30: "star_burst"},
+        "ability": "炎の守護者", 
+        "learnset": {1: "ember", 5: "sharpen", 10: "flamethrower", 30: "star_burst", 50: "volcanic_ash"},
         "description": "ファイノンの相棒。火種を集め、伝説の姿へと覚醒する。"
     },
     "harapekono_sakana":{
         "name": "腹ペコの魚", "type": "Water", "rarity": 6,
         "base_stats": {"hp": 50, "atk": 60, "def": 40, "spa": 55, "spd": 45, "spe": 70},
-        "ability": "食いしん坊", # 補助技でメーレを飲み回復
-        "learnset": {1: "scratch", 5: "tail_whip", 10: "water_gun"},
+        "ability": "食いしん坊", 
+        "learnset": {1: "scratch", 5: "tail_whip", 10: "water_gun", 35: "deep_sea_gulp"},
         "description": "セイレンスの相棒。メーレを飲んで体力を回復する。"
     },
     "kijyukyou":{
         "name": "奇獣卿", "type": "Dark", "rarity": 6,
         "base_stats": {"hp": 100, "atk": 90, "def": 85, "spa": 80, "spd": 75, "spe": 70},
-        "ability": "王の風格", # 補助技→攻撃で「屈服」付与
-        "learnset": {1: "shadow_claw", 5: "growl", 10: "dark_pulse", 20: "hyper_beam"},
+        "ability": "王の風格", 
+        "learnset": {1: "shadow_claw", 5: "growl", 10: "dark_pulse", 20: "hyper_beam", 50: "kings_pressure"},
         "description": "ケリュドラの相棒。圧倒的な風格で相手を屈服させる。"
     },
     "candy_roll":{
         "name": "キャンディーロール", "type": "Fire", "rarity": 6,
         "base_stats": {"hp": 55, "atk": 50, "def": 45, "spa": 65, "spd": 50, "spe": 60},
-        "ability": "忘却", # 被弾時相手を「忘却」に（CD3ターン）
-        "learnset": {1: "ember", 5: "sing", 9: "flamethrower"},
+        "ability": "忘却", 
+        "learnset": {1: "ember", 5: "sing", 9: "flamethrower", 40: "memory_erasure"},
         "description": "三月なのかの相棒。攻撃してきた相手の記憶を奪う。"
     },
     "onkouna_ryu":{
         "name": "温厚な竜", "type": "Light", "rarity": 6,
         "base_stats": {"hp": 90, "atk": 80, "def": 85, "spa": 100, "spd": 95, "spe": 70},
-        "ability": "皆を守る者", # 場に出るとバリア。補助技で補充
-        "learnset": {1: "dragon_breath", 5: "recover", 15: "dragon_claw"},
+        "ability": "皆を守る者", 
+        "learnset": {1: "dragon_breath", 5: "recover", 15: "dragon_claw", 30: "draco_meteor", 50: "dragon_sanctuary"},
         "description": "丹恒の相棒。仲間を守る強固なバリアを展開する。"
     },
     "kyunure":{
         "name": "キュヌレ", "type": "Fairy", "rarity": 6,
         "base_stats": {"hp": 85, "atk": 70, "def": 75, "spa": 90, "spd": 80, "spe": 95},
-        "ability": "最愛", # 追憶スタック。倒されるとゴースト化し追撃
-        "learnset": {1: "tackle", 5: "sing", 10: "dazzling_gleam"},
+        "ability": "最愛", 
+        "learnset": {1: "tackle", 5: "sing", 10: "dazzling_gleam", 60: "eternal_love"},
         "description": "キュレネの相棒。愛の記憶は消えず、永遠に共に戦う。"
     }
 }
@@ -348,84 +371,92 @@ CHALLENGE_TRAINERS = {
 }
 
 # --- 真なるキメラマスターロード用 (Hard Mode) ---
+# レベル、持ち物、技構成、回復頻度を大幅強化
 CHALLENGE_TRAINERS_HARD = {
     1: {
         "name": "真・アグライア",
-        "party": [{"base_id": "light_fairy", "level": 105, "item": "sitrus_berry"}, {"base_id": "oatmeal", "level": 110, "item": "power_band"}], "potions": 2,
+        "party": [{"base_id": "light_fairy", "level": 110, "item": "sitrus_berry"}, {"base_id": "oatmeal", "level": 115, "item": "power_band"}], "potions": 3,
         "dialogue_start": "金糸によって全てお見通しです。今回は負けません。",
         "dialogue_win": "私にも見えないまぶしい光でした…あなたの勝ちです。"
     },
     2: {
         "name": "真・トリスビアス",
-        "party": [{"base_id": "ringo_ame", "level": 115, "item": "hard_stone"}, {"base_id": "leaf_golem", "level": 115, "item": "sitrus_berry"}], "potions": 2,
+        "party": [{"base_id": "ringo_ame", "level": 120, "item": "hard_stone"}, {"base_id": "leaf_golem", "level": 120, "item": "sitrus_berry"}], "potions": 3,
         "dialogue_start": "あたち今度は負けないからね！",
         "dialogue_win": "すごーい戦いだったね！あたち負けちゃったよ〜"
     },
     3: {
         "name": "真・アナクサゴラス",
-        "party": [{"base_id": "nunusu", "level": 120, "item": "vitality_belt"}, {"base_id": "aqua_bird", "level": 120, "item": "wise_glasses"}], "potions": 2,
+        "party": [{"base_id": "nunusu", "level": 125, "item": "vitality_belt"}, {"base_id": "aqua_bird", "level": 125, "item": "wise_glasses"}], "potions": 3,
         "dialogue_start": "全てのパターンを考慮しました。敗北などありえないでしょう。",
         "dialogue_win": "おめでとうございます。"
     },
     4: {
         "name": "真・ヒアシンシア",
-        "party": [{"base_id": "cheribis", "level": 125, "item": "leftovers"}, {"base_id": "fire_lizard", "level": 125, "item": "power_band"}], "potions": 3,
+        "party": [{"base_id": "cheribis", "level": 130, "item": "leftovers"}, {"base_id": "fire_lizard", "level": 130, "item": "power_band"}], "potions": 4,
         "dialogue_start": "全力で行きますね♪",
         "dialogue_win": "お強いですね♪完敗です♪"
     },
     5: {
         "name": "真・メデイモス",
-        "party": [{"base_id": "honey_fruit_soup", "level": 130, "item": "leftovers"}, {"base_id": "wolf_pup", "level": 130, "item": "power_band"}], "potions": 3,
+        "party": [{"base_id": "honey_fruit_soup", "level": 135, "item": "leftovers"}, {"base_id": "wolf_pup", "level": 135, "item": "power_band"}], "potions": 4,
         "dialogue_start": "クレムノス人の辞書に“不可能”の文字は無い。",
         "dialogue_win": "俺に勝つとは…お見事だ。"
     },
     6: {
         "name": "真・セファリア",
-        "party": [{"base_id": "nyanko_dorobou", "level": 135, "item": "focus_sash"}, {"base_id": "dark_hound", "level": 135, "item": "power_band"}], "potions": 3,
+        "party": [{"base_id": "nyanko_dorobou", "level": 140, "item": "focus_sash"}, {"base_id": "dark_hound", "level": 140, "item": "power_band"}], "potions": 4,
         "dialogue_start": "へへーん、今度は負けないよ！",
         "dialogue_win": "うぅ…負けちゃったよ〜！"
     },
     7: {
         "name": "真・キャストリス",
-        "party": [{"base_id": "cho_cho_cake", "level": 140, "item": "leftovers"}, {"base_id": "leaf_golem", "level": 140, "item": "hard_stone"}], "potions": 3,
+        "party": [{"base_id": "cho_cho_cake", "level": 145, "item": "leftovers"}, {"base_id": "leaf_golem", "level": 145, "item": "hard_stone"}], "potions": 4,
         "dialogue_start": "腹が減っては戦はできぬ、と、言いますでしょう？",
         "dialogue_win": "レシピの改良が必要ですね……"
     },
     8: {
         "name": "真・ファイノン",
-        "party": [{"base_id": "biguruyashi", "level": 145, "item": "wise_glasses"}, {"base_id": "wolf_pup", "level": 145, "item": "power_band"}], "potions": 3,
+        "party": [{"base_id": "biguruyashi", "level": 150, "item": "wise_glasses"}, {"base_id": "wolf_pup", "level": 150, "item": "power_band"}], "potions": 4,
         "dialogue_start": "僕は、最強のキメラトレーナーになるんだ！",
         "dialogue_win": "僕の道は、まだ終わりじゃない。"
     },
     9: {
         "name": "真・セイレンス",
-        "party": [{"base_id": "harapekono_sakana", "level": 150, "item": "leftovers"}, {"base_id": "aqua_bird", "level": 150, "item": "wise_glasses"}], "potions": 4,
+        "party": [{"base_id": "harapekono_sakana", "level": 155, "item": "leftovers"}, {"base_id": "aqua_bird", "level": 155, "item": "wise_glasses"}], "potions": 5,
         "dialogue_start": "いい余興になりそうだ。",
         "dialogue_win": "幕が下りた・・・"
     },
     10: {
         "name": "真・ケリュドラ",
-        "party": [{"base_id": "kijyukyou", "level": 155, "item": "focus_sash"}, {"base_id": "dark_hound", "level": 155, "item": "power_band"}], "potions": 4,
+        "party": [{"base_id": "kijyukyou", "level": 160, "item": "focus_sash"}, {"base_id": "dark_hound", "level": 160, "item": "power_band"}], "potions": 5,
         "dialogue_start": "しょせんチェスとあまり変わらないだろう",
         "dialogue_win": "ほう…この僕を打ち負かすとは…やるではないか。。"
     },
     11: {
         "name": "真・三月なのか",
-        "party": [{"base_id": "candy_roll", "level": 160, "item": "wise_glasses"}, {"base_id": "light_fairy", "level": 160, "item": "focus_sash"}], "potions": 4,
+        "party": [{"base_id": "candy_roll", "level": 165, "item": "wise_glasses"}, {"base_id": "light_fairy", "level": 165, "item": "focus_sash"}], "potions": 5,
         "dialogue_start": "アンタが相手でも手加減しないから！！",
         "dialogue_win": "負けちゃった〜。アンタ強いね。"
     },
     12: {
         "name": "真・丹恒",
-        "party": [{"base_id": "onkouna_ryu", "level": 165, "item": "leftovers"}, {"base_id": "leaf_golem", "level": 165, "item": "hard_stone"}], "potions": 4,
+        "party": [{"base_id": "onkouna_ryu", "level": 170, "item": "leftovers"}, {"base_id": "leaf_golem", "level": 170, "item": "hard_stone"}], "potions": 5,
         "dialogue_start": "新たに得た力で、お前を止めよう。",
         "dialogue_win": "やるな。さっすがだ。"
     },
     13: {
         "name": "真・キュレネ",
-        "party": [{"base_id": "kyunure", "level": 170, "item": "leftovers"}, {"base_id": "cho_cho_cake", "level": 170, "item": "focus_sash"}, {"base_id": "biguruyashi", "level": 175, "item": "wise_glasses"}], "potions": 5,
+        "party": [{"base_id": "kyunure", "level": 175, "item": "leftovers"}, {"base_id": "cho_cho_cake", "level": 175, "item": "focus_sash"}, {"base_id": "biguruyashi", "level": 180, "item": "wise_glasses"}], "potions": 6,
         "reward_title": "キメラを極めし者",
         "dialogue_start": "これが私たちの『愛』の最終形…受け止めきれるかしら？",
         "dialogue_win": "ふふっ、素晴らしいわ！ あなたの愛、確かに受け取ったわ。"
+    }
+    14: {
+        "name": "制作者 aeracero",
+        "party": [{"base_id": "candy_roll", "level": 1000, "item": "cheribish"}, {"base_id": "kyurune", "level": 1000, "item": "leftovers"}, {"base_id": "kyunure", "level": 1000, "item": "wise_glasses"}], "potions": 33350337,
+        "reward_title": "制作者泣かせ",
+        "dialogue_start": "どうも、制作者のaeraceroです。今は暇なんで、相手してあげますよ。",
+        "dialogue_win": "すごいっすね、まさか私も殺っちゃうなんて..."
     }
 }

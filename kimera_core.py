@@ -58,6 +58,18 @@ def get_user_data(user_id, hard_mode=False):
         if "challenge_stage" not in data: data["challenge_stage"] = 1
         if "dex" not in data: data["dex"] = {}
         data["is_hard_mode"] = hard_mode
+        
+        # キメラデータのマイグレーション (learned_movesの追加)
+        for c in data.get("party", []) + data.get("box", []):
+            if "learned_moves" not in c:
+                base = BASE_CHIMERAS.get(c["base_id"])
+                if base:
+                    c["learned_moves"] = [mid for lv, mid in base["learnset"].items() if lv <= c["level"]]
+                    # 現在の技がもしlearnsetになくても（引継ぎ等）維持する
+                    for m in c["moves"]:
+                        if m not in c["learned_moves"]:
+                            c["learned_moves"].append(m)
+
         return data
     except Exception:
         return get_user_data(user_id, hard_mode)
@@ -108,19 +120,13 @@ def move_box_to_party(ud, box_idx):
 
 # --- 配合 (Breeding) ---
 def breed_chimeras(parent1, parent2):
-    """
-    2体の親から新しいキメラ(Lv1)を生成する。
-    ベースはparent1(母親役)を継承、個体値は両親の平均+ランダム変異。
-    """
     base_id = parent1["base_id"]
-    
-    # 個体値遺伝: 両親の平均 + ランダム(-2~+2)
     new_ivs = {}
     for k in ["hp", "atk", "def", "spa", "spd", "spe"]:
         p1_iv = parent1.get("ivs", {}).get(k, 15)
         p2_iv = parent2.get("ivs", {}).get(k, 15)
         avg = (p1_iv + p2_iv) // 2
-        mutation = random.randint(-2, 4) # 少し良くなりやすい
+        mutation = random.randint(-2, 4)
         new_iv = max(0, min(31, avg + mutation))
         new_ivs[k] = new_iv
         
@@ -252,7 +258,6 @@ def update_chimera_stats(instance):
     if "ivs" not in instance: instance["ivs"] = generate_ivs()
     ivs = instance["ivs"]
     
-    # 素のステータス
     s = {
         "max_hp": calculate_stat(bs["hp"], ivs["hp"], lv, True),
         "atk": calculate_stat(bs["atk"], ivs["atk"], lv),
@@ -262,13 +267,14 @@ def update_chimera_stats(instance):
         "spe": calculate_stat(bs["spe"], ivs["spe"], lv),
     }
     
-    # 装備・特性補正 (バトル外で計算できるもの)
+    # 特性補正
     if ability == "闘争心": s["atk"] = int(s["atk"] * 1.1)
     if ability == "大地獣": s["def"] = int(s["def"] * 1.1)
     if ability in ["水流", "ロケット", "盗みの天才"]: s["spe"] = int(s["spe"] * 1.1)
     if ability == "最愛":
          for k in s: s[k] = int(s[k] * 1.1)
 
+    # アイテム補正
     held = instance.get("held_item")
     if held and held in ITEMS:
         item_data = ITEMS[held]
@@ -289,11 +295,15 @@ def create_chimera_instance(base_id, level=5, nickname=None, held_item=None):
     if not base: return None
     level = max(1, level)
     
-    moves = []
+    learned_moves = []
     for lv, mid in base["learnset"].items():
-        if lv <= level: moves.append(mid)
-    if not moves: moves = ["tackle"]
-    moves = moves[-4:]
+        if lv <= level: learned_moves.append(mid)
+    
+    # Default move if none learned
+    if not learned_moves: learned_moves = ["tackle"]
+    
+    # Active moves (max 4) - take last 4 learned
+    active_moves = learned_moves[-4:]
 
     instance = {
         "id": random.randint(100000, 999999),
@@ -305,16 +315,16 @@ def create_chimera_instance(base_id, level=5, nickname=None, held_item=None):
         "current_hp": 0,
         "ivs": generate_ivs(),
         "stats": {},
-        "moves": moves,
+        "moves": active_moves,
+        "learned_moves": learned_moves, # Added: All known moves
         "held_item": held_item,
         "friendship": 0,
         "rarity": base.get("rarity", 1),
         
-        # 新規追加項目
-        "status_condition": None, # poison, paralysis etc.
-        "stat_stages": {"atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0}, # -6 to +6
-        "battle_state": {}, # バトル中の一時的な状態フラグ(スタックなど)
-        "form": None, # 変身形態
+        "status_condition": None,
+        "stat_stages": {"atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
+        "battle_state": {},
+        "form": None,
     }
     update_chimera_stats(instance)
     instance["current_hp"] = instance["stats"]["max_hp"]
@@ -350,7 +360,8 @@ def get_chimera_display_stats(instance):
         f"素:{s['spe']}({ivs['spe']})\n"
         f"----------------\n"
         f"技: {moves_txt}\n"
-        f"Exp: {instance['xp']}/{instance['next_xp']}"
+        f"Exp: {instance['xp']}/{instance['next_xp']}\n"
+        f"(『技』と言えば、習得済みの技を入れ替えられるわよ♪)"
     )
 
 def level_up_chimera(instance, is_hard_mode=False):
@@ -380,24 +391,27 @@ def level_up_chimera(instance, is_hard_mode=False):
     
     new_move = base["learnset"].get(instance["level"])
     if new_move:
-        if len(instance["moves"]) < 4:
-            instance["moves"].append(new_move)
-            msg += f"\n『{MOVES[new_move]['name']}』を覚えた！"
-        else:
-            forgot = instance["moves"].pop(0)
-            instance["moves"].append(new_move)
-            msg += f"\n『{MOVES[forgot]['name']}』を忘れて『{MOVES[new_move]['name']}』を覚えた！"
+        if "learned_moves" not in instance: instance["learned_moves"] = []
+        
+        if new_move not in instance["learned_moves"]:
+            instance["learned_moves"].append(new_move)
+            
+            # Auto-equip if slot available, otherwise just notify
+            if len(instance["moves"]) < 4:
+                instance["moves"].append(new_move)
+                msg += f"\n『{MOVES[new_move]['name']}』を覚えた！"
+            else:
+                msg += f"\n『{MOVES[new_move]['name']}』を習得したわ！(詳細メニューで入れ替えてね)"
+
     return msg
 
 # --- 戦闘用ロジック ---
 def calculate_type_effectiveness(move_type, defender_type):
-    """タイプ相性倍率を返す"""
     if move_type in TYPE_CHART and defender_type in TYPE_CHART[move_type]:
         return TYPE_CHART[move_type][defender_type]
     return 1.0
 
 def calculate_stat_with_stage(stat_value, stage):
-    """ランク補正後のステータスを計算 (-6 ~ +6)"""
     if stage >= 0:
         return int(stat_value * (2 + stage) / 2)
     else:
@@ -414,6 +428,5 @@ def check_survival_item(chimera, damage):
 def check_resist_berry(chimera, damage_type):
     held = chimera.get("held_item")
     if held == "resist_berry":
-        # ここで本来は相性計算が必要だが、簡易的に発動フラグだけ返す
         return True 
     return False
