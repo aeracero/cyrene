@@ -231,7 +231,9 @@ def unequip_item_logic(ud, party_idx):
 
 # --- キメラステータス計算 ---
 
-def generate_ivs():
+def generate_ivs(value=None):
+    if value is not None:
+        return {k: value for k in ["hp", "atk", "def", "spa", "spd", "spe"]}
     return {
         "hp": random.randint(0, 31),
         "atk": random.randint(0, 31),
@@ -290,7 +292,7 @@ def update_chimera_stats(instance):
     if instance["current_hp"] > s["max_hp"]:
         instance["current_hp"] = s["max_hp"]
 
-def create_chimera_instance(base_id, level=5, nickname=None, held_item=None):
+def create_chimera_instance(base_id, level=5, nickname=None, held_item=None, fixed_iv=None):
     base = BASE_CHIMERAS.get(base_id)
     if not base: return None
     level = max(1, level)
@@ -313,7 +315,7 @@ def create_chimera_instance(base_id, level=5, nickname=None, held_item=None):
         "xp": 0,
         "next_xp": level * 100,
         "current_hp": 0,
-        "ivs": generate_ivs(),
+        "ivs": generate_ivs(fixed_iv),
         "stats": {},
         "moves": active_moves,
         "learned_moves": learned_moves, # Added: All known moves
@@ -341,7 +343,8 @@ def get_chimera_display_stats(instance):
     status_txt = f"[{instance['status_condition']}]" if instance.get('status_condition') else ""
     
     total_iv = sum(ivs.values())
-    if total_iv >= 170: rank = "S (神個体)"
+    if total_iv >= 180: rank = "S+ (神話級)"
+    elif total_iv >= 170: rank = "S (神個体)"
     elif total_iv >= 150: rank = "A (素晴らしい)"
     elif total_iv >= 120: rank = "B (相当優秀)"
     elif total_iv >= 90: rank = "C (平均以上)"
@@ -375,20 +378,12 @@ def level_up_chimera(instance, is_hard_mode=False):
     if is_hard_mode: base_req = 300
     instance["next_xp"] = instance["level"] * base_req
     
-    base = BASE_CHIMERAS[instance["base_id"]]
-    old_hp_rate = instance["current_hp"] / instance["stats"]["max_hp"] if instance["stats"]["max_hp"] > 0 else 0
-    
     update_chimera_stats(instance)
+    instance["current_hp"] = instance["stats"]["max_hp"] # 全回復に統一
     
-    if is_hard_mode:
-        instance["current_hp"] = int(instance["stats"]["max_hp"] * old_hp_rate)
-        hp_msg = ""
-    else:
-        instance["current_hp"] = instance["stats"]["max_hp"]
-        hp_msg = " (全回復)"
+    msg = f"**{instance['nickname']}** は Lv.{instance['level']} になった！ (全回復)"
     
-    msg = f"**{instance['nickname']}** は Lv.{instance['level']} になった！{hp_msg}"
-    
+    base = BASE_CHIMERAS[instance["base_id"]]
     new_move = base["learnset"].get(instance["level"])
     if new_move:
         if "learned_moves" not in instance: instance["learned_moves"] = []
