@@ -19,7 +19,7 @@ STATE_BATTLE_PVP_LOBBY = "battle_pvp_lobby"
 STATE_BATTLE_PVP = "battle_pvp"
 STATE_BOX = "box_menu"
 STATE_EQUIP = "equip_menu"
-STATE_MOVE_MANAGE = "move_manage"  # 新規: 技管理メニュー
+STATE_MOVE_MANAGE = "move_manage"
 
 # サブステート
 BATTLE_SUB_MAIN = "main"
@@ -608,7 +608,10 @@ def handle_shop(user_id, content):
         session["state"] = STATE_MENU
         return get_k_text(user_id, "menu_prompt"), []
     
-    target_key = next((k for k, v in data.ITEMS.items() if v["name"] in content), None)
+    # 修正: 入力文字列に含まれるすべてのアイテムを検出し、名前が最も長いものを優先する
+    # これにより「すごいキズぐすり」を購入する際に「キズぐすり」にマッチしてしまうのを防ぐ
+    matches = [k for k, v in data.ITEMS.items() if v["name"] in content]
+    target_key = max(matches, key=lambda k: len(data.ITEMS[k]["name"])) if matches else None
     
     if target_key:
         item = data.ITEMS[target_key]
@@ -661,7 +664,6 @@ def handle_battle_select(user_id, content):
         wild = core.create_chimera_instance(wild_base, level=w_lv)
         
         # --- 野生強化 (Capture Zone Buff) ---
-        # 捕獲前提のため、戦闘時はステータスを大幅に強化して「倒しにくく」する
         mult_hp = 3.0 if not is_hard else 5.0
         mult_st = 1.5 if not is_hard else 2.0
         
@@ -743,7 +745,6 @@ def handle_battle_action(user_id, content):
     enemy = next((c for c in enemy_party if c["current_hp"] > 0), None)
     player = ud['party'][0]
 
-    # 安全対策
     if "battle_state" not in player:
         _init_chimera_battle_states(session, "p1", ud=ud)
         player = ud['party'][0]
@@ -781,7 +782,11 @@ def handle_battle_action(user_id, content):
         if "戻る" in content:
             ctx["sub_state"] = BATTLE_SUB_MAIN
             return get_k_text(user_id, "cmd_prompt"), []
-        sel_item = next((k for k, v in data.ITEMS.items() if v["name"] in content), None)
+            
+        # 修正: 戦闘中のアイテム選択も最長一致を優先する
+        matches = [k for k, v in data.ITEMS.items() if v["name"] in content]
+        sel_item = max(matches, key=lambda k: len(data.ITEMS[k]["name"])) if matches else None
+        
         if sel_item:
             return use_item_in_battle(user_id, session, sel_item, ud, player, enemy), []
         return "アイテムを選んでね。", []
@@ -832,13 +837,11 @@ def _execute_pve_turn(user_id, session, player, enemy, move_id, ud):
     
     cant_move = False
     
-    # 反動待機(Recharge)チェック
     if player["battle_state"].get("recharge"):
         ctx["logs"].append(get_k_text(user_id, "log_recharge", name=player['nickname']))
         player["battle_state"]["recharge"] = False
         cant_move = True
 
-    # 状態異常チェック
     sc = player.get("status_condition")
     if not cant_move and sc == "paralysis" and random.random() < 0.25:
         ctx["logs"].append(get_k_text(user_id, "log_paralyzed_cant_move", name=player['nickname']))
@@ -875,7 +878,6 @@ def _execute_pve_turn(user_id, session, player, enemy, move_id, ud):
                 enemy["current_hp"] = 1
                 ctx["logs"].append(get_k_text(user_id, "log_hung_on", name=enemy['nickname']))
             
-            # 特殊反射
             if data.BASE_CHIMERAS[enemy["base_id"]]["name"] == "チョウチョウケーキ":
                 ref = max(1, dmg // 10)
                 player["current_hp"] = max(0, player["current_hp"] - ref)
@@ -886,17 +888,14 @@ def _execute_pve_turn(user_id, session, player, enemy, move_id, ud):
                      _apply_status_effect(player, "oblivion", session, user_id)
                      enemy["battle_state"]["oblivion_cd"] = 3
                      
-            # 反動 (Recoil)
             if mdata.get("effect", {}).get("type") == "recoil":
                 recoil = int(dmg * mdata["effect"]["percent"])
                 player["current_hp"] = max(0, player["current_hp"] - recoil)
                 ctx["logs"].append(get_k_text(user_id, "log_recoil", name=player['nickname']))
                 
-            # 反動待機付与
             if mdata.get("effect", {}).get("type") == "recharge":
                 player["battle_state"]["recharge"] = True
 
-            # 自身デバフ
             if mdata.get("effect", {}).get("type") == "debuff_self":
                 stat = mdata["effect"]["stat"]
                 player["stat_stages"][stat] = max(-6, player["stat_stages"][stat] - mdata["effect"]["stage"])
@@ -937,7 +936,6 @@ def _enemy_attack_phase(user_id, session, player, enemy, ud):
     ctx["logs"] = []
     is_hard = ud.get("is_hard_mode", False)
     
-    # 敵の反動待機チェック
     if enemy["battle_state"].get("recharge"):
         ctx["logs"].append(get_k_text(user_id, "log_recharge", name=f"Enemy {enemy['nickname']}"))
         enemy["battle_state"]["recharge"] = False
@@ -959,7 +957,6 @@ def _enemy_attack_phase(user_id, session, player, enemy, ud):
             cant_move = True
 
     if not cant_move:
-        # AI回復ロジック強化
         potions = ctx.get("potions", 0)
         heal_threshold = 0.5 if is_hard else 0.3
         
@@ -983,13 +980,11 @@ def _enemy_attack_phase(user_id, session, player, enemy, ud):
 
                 ctx["logs"].append(get_k_text(user_id, "log_hit", atkr=f"Enemy {enemy['nickname']}", move=emove['name'], eff=eff_msg, dmg=dmg))
                 
-                # 反動 (Recoil)
                 if emove.get("effect", {}).get("type") == "recoil":
                     recoil = int(dmg * emove["effect"]["percent"])
                     enemy["current_hp"] = max(0, enemy["current_hp"] - recoil)
                     ctx["logs"].append(get_k_text(user_id, "log_recoil", name=enemy['nickname']))
 
-                # 反動待機
                 if emove.get("effect", {}).get("type") == "recharge":
                     enemy["battle_state"]["recharge"] = True
 
@@ -1109,14 +1104,12 @@ def _resolve_pve_win(user_id, session, ud):
         base_money = st * 5000
         trainer_xp = st * 1000
         
-        # 13人目: アイテム
         if st == 13:
             reward_item = t_data.get("reward_item")
             if reward_item and reward_item not in ud["items"]:
                 ud["items"][reward_item] = 1
                 msg += f"\n『{data.ITEMS[reward_item]['name']}』を手に入れた！\n"
         
-        # 14人目: 制作者称号
         if st == 14:
              reward_title = t_data.get("reward_title", "制作者泣かせ")
              msg += f"\n🏆 称号獲得: **{reward_title}**\n"
@@ -1196,7 +1189,6 @@ def use_item_in_battle(user_id, session, item_key, ud, player, enemy):
         if enemy.get("status_condition") == "submission": rate *= 2.0
 
         if random.random() < rate:
-            # 捕獲成功時、強化状態を解除して正規ステータスに戻す
             core.update_chimera_stats(enemy)
             enemy["current_hp"] = enemy["stats"]["max_hp"]
             
@@ -1209,7 +1201,6 @@ def use_item_in_battle(user_id, session, item_key, ud, player, enemy):
             
             session["state"] = STATE_MENU
             session["context"] = {}
-            # 修正: 確実に日本語テキストを返す
             return get_k_text(user_id, "catch_success", name=enemy['nickname']), []
         else:
             core.save_user_data(user_id, ud, hard_mode=is_hard)
@@ -1280,7 +1271,7 @@ def handle_pvp_action(user_id, content):
         return "相手の入力を待っているわ...", []
 
     if sub == BATTLE_SUB_MAIN:
-        if "降参" in content or "逃" in content:
+        if "降参" in content:
             return _resolve_pvp_end(battle, loser_id=user_id)
 
         if "戦" in content:
