@@ -33,7 +33,6 @@ PVP_CHALLENGES = {}
 PVP_BATTLES = {}
 
 # --- テキスト辞書 (Localization) ---
-# 日本語を優先・デフォルト化
 GAME_TEXT = {
     # Menu
     "menu_title": {"jp": "【キメラメニュー】", "en": "【Kimera Menu】"},
@@ -46,7 +45,7 @@ GAME_TEXT = {
     
     # Move Manage
     "move_title": {"jp": "【技管理】 (対象: {name})", "en": "【Move Management】 ({name})"},
-    "move_list": {"jp": "現在の技: {current}\n習得可能: {learned}\n\n『1を忘れて2を覚える』のように言ってね。\n(戻るなら『戻る』)", "en": "Current: {current}\nLearned: {learned}\nSay 'Forget 1 Learn 2'."},
+    "move_list": {"jp": "現在の技: {current}\n習得可能: {learned}\n\n『1を覚える』『1を忘れる』『1を忘れて2を覚える』のように言ってね。\n(戻るなら『戻る』)", "en": "Current: {current}\nLearned: {learned}\nSay 'Learn 1', 'Forget 1', or 'Forget 1 Learn 2'."},
     "move_changed": {"jp": "{out} を忘れて {in_} を覚えたわ！", "en": "Forgot {out} and learned {in_}!"},
     
     "items_list": {"jp": "所持: {items}\n(『けいけんアメSを使う』って言ってね♪)", "en": "Owned: {items}\n(Say 'Use exp candy S' to use)"},
@@ -142,7 +141,7 @@ GAME_TEXT = {
 def get_k_text(user_id, key, **kwargs):
     # バグ対策: 強制的にJPをデフォルトとする
     lang = db.get_user_lang(user_id)
-    if not lang or lang == "en": lang = "jp" # ユーザーの言語設定がenでもjpを優先したい場合の暫定処置
+    if not lang or lang == "en": lang = "jp"
     
     text_map = GAME_TEXT.get(key, {})
     tmpl = text_map.get(lang, text_map.get("jp", ""))
@@ -207,10 +206,9 @@ def _init_chimera_battle_states(session, side, ud=None):
             "submission_prep": False,
             "rocket": False,
             "oblivion_cd": 0,
-            "recharge": False, # 反動待機
+            "recharge": False,
             "form": None
         }
-        # ステータスランク初期化
         c["stat_stages"] = {
             "atk": 0, "def": 0, "spa": 0, "spd": 0, 
             "spe": 0, "acc": 0, "eva": 0
@@ -223,7 +221,6 @@ def _init_chimera_battle_states(session, side, ud=None):
 def _calculate_damage(attacker, defender, move_id, session):
     move = data.MOVES[move_id]
     
-    # 状態異常：火傷補正（物理半減）
     is_burn = attacker.get("status_condition") == "burn"
     
     power = move["power"]
@@ -242,10 +239,8 @@ def _calculate_damage(attacker, defender, move_id, session):
 
     if d_stat < 1: d_stat = 1
     
-    # ダメージ計算式
     dmg = int(math.floor(math.floor(math.floor(2 * attacker["level"] / 5 + 2) * power * a_stat / d_stat) / 50) + 2)
     
-    # タイプ相性
     base_def = data.BASE_CHIMERAS[defender["base_id"]]
     type_eff = 1.0
     if move["type"] in data.TYPE_CHART:
@@ -261,7 +256,6 @@ def _calculate_damage(attacker, defender, move_id, session):
     dmg = int(dmg * random.uniform(0.85, 1.0))
     if dmg < 1: dmg = 1
 
-    # 半減の実
     if core.check_resist_berry(defender, move["type"]):
         dmg = int(dmg * 0.5)
         defender["held_item"] = None
@@ -376,7 +370,6 @@ def handle_menu(user_id, content):
         core.save_user_data(user_id, ud, hard_mode=is_hard)
         return get_k_text(user_id, "healed"), []
 
-    # --- Dex ---
     if "図鑑" in content:
         m_search = re.search(r"(?:図鑑|dex)\s+(.+)", content, re.IGNORECASE)
         if m_search:
@@ -472,13 +465,17 @@ def handle_move_manage(user_id, content):
     c = ud["party"][0]
     available = [m for m in c["learned_moves"] if m not in c["moves"]]
 
-    # 「1を忘れて2を覚える」
-    m_forget = re.search(r"(\d+)(?:を忘れて| forget)", content)
-    m_learn = re.search(r"(\d+)(?:を覚える| learn)", content)
+    # パターンマッチング
+    m_swap_forget = re.search(r"(\d+)(?:を忘れて| forget)", content)
+    m_swap_learn = re.search(r"(\d+)(?:を覚える| learn)", content)
+    
+    m_learn_only = re.search(r"(\d+)(?:を覚える| learn)", content)
+    m_forget_only = re.search(r"(\d+)(?:を忘れる| forget)", content)
 
-    if m_forget and m_learn:
-        f_idx = int(m_forget.group(1)) - 1
-        l_idx = int(m_learn.group(1)) - 1
+    # 1. 入れ替え (Swap)
+    if m_swap_forget and m_swap_learn:
+        f_idx = int(m_swap_forget.group(1)) - 1
+        l_idx = int(m_swap_learn.group(1)) - 1
         
         if 0 <= f_idx < len(c["moves"]) and 0 <= l_idx < len(available):
             forget_move = c["moves"][f_idx]
@@ -489,8 +486,37 @@ def handle_move_manage(user_id, content):
             
             msg = get_k_text(user_id, "move_changed", out=data.MOVES[forget_move]['name'], in_=data.MOVES[learn_move]['name'])
             return msg + "\n\n" + _get_move_manage_text(user_id), []
+        else:
+            return "指定された番号が正しくないわ。", []
+
+    # 2. 覚える (Learn Only)
+    elif m_learn_only and not m_swap_forget:
+        l_idx = int(m_learn_only.group(1)) - 1
+        if 0 <= l_idx < len(available):
+            if len(c["moves"]) < 4:
+                learn_move = available[l_idx]
+                c["moves"].append(learn_move)
+                core.save_user_data(user_id, ud, hard_mode=session.get("is_hard_mode", False))
+                return f"{data.MOVES[learn_move]['name']} を覚えたわ！\n\n" + _get_move_manage_text(user_id), []
+            else:
+                return "技がいっぱいで覚えられないわ。忘れる技も指定してね（例: 1を忘れて2を覚える）。", []
+        else:
+             return "指定された番号の技は習得リストにないわ。", []
+
+    # 3. 忘れる (Forget Only)
+    elif m_forget_only:
+        f_idx = int(m_forget_only.group(1)) - 1
+        if 0 <= f_idx < len(c["moves"]):
+            if len(c["moves"]) > 1:
+                forgot_move = c["moves"].pop(f_idx)
+                core.save_user_data(user_id, ud, hard_mode=session.get("is_hard_mode", False))
+                return f"{data.MOVES[forgot_move]['name']} を忘れたわ。\n\n" + _get_move_manage_text(user_id), []
+            else:
+                return "全ての技を忘れることはできないわ（最低1つは必要よ）。", []
+        else:
+             return "指定された番号の技は持っていないわ。", []
     
-    return "『1を忘れて2を覚える』のように指定してね。", []
+    return "『1を忘れて2を覚える』、『1を覚える』、『1を忘れる』のように指定してね。", []
 
 # --- 装備操作 ---
 def _get_equip_menu_text(user_id):
@@ -608,8 +634,6 @@ def handle_shop(user_id, content):
         session["state"] = STATE_MENU
         return get_k_text(user_id, "menu_prompt"), []
     
-    # 修正: 入力文字列に含まれるすべてのアイテムを検出し、名前が最も長いものを優先する
-    # これにより「すごいキズぐすり」を購入する際に「キズぐすり」にマッチしてしまうのを防ぐ
     matches = [k for k, v in data.ITEMS.items() if v["name"] in content]
     target_key = max(matches, key=lambda k: len(data.ITEMS[k]["name"])) if matches else None
     
@@ -663,7 +687,7 @@ def handle_battle_select(user_id, content):
         w_lv = max(1, tlv + random.randint(-1, 3))
         wild = core.create_chimera_instance(wild_base, level=w_lv)
         
-        # --- 野生強化 (Capture Zone Buff) ---
+        # --- 野生強化 ---
         mult_hp = 3.0 if not is_hard else 5.0
         mult_st = 1.5 if not is_hard else 2.0
         
@@ -671,7 +695,7 @@ def handle_battle_select(user_id, content):
         for k in ["atk", "def", "spa", "spd", "spe"]:
             wild["stats"][k] = int(wild["stats"][k] * mult_st)
         wild["current_hp"] = wild["stats"]["max_hp"]
-        # ----------------------------------
+        # ----------------
         
         session["state"] = STATE_BATTLE_WILD
         _init_battle_context(session, [wild], "Wild Kimera", ud=ud)
@@ -695,7 +719,6 @@ def handle_battle_select(user_id, content):
 
     if "チャレンジ" in content or "3" in content:
         stage = ud.get("challenge_stage", 1)
-        # 14人目(制作者)まで対応
         if stage > 14:
             stage = 1
             ud["challenge_stage"] = 1
@@ -707,10 +730,8 @@ def handle_battle_select(user_id, content):
         
         enemy_party = []
         for p in t_data["party"]:
-            # ハードモードなら神個体(IV=31)で生成
             iv_val = 31 if is_hard else None
             c = core.create_chimera_instance(p["base_id"], p["level"], held_item=p.get("item"), fixed_iv=iv_val)
-            # 全回復補正
             core.update_chimera_stats(c)
             c["current_hp"] = c["stats"]["max_hp"]
             enemy_party.append(c)
@@ -783,7 +804,6 @@ def handle_battle_action(user_id, content):
             ctx["sub_state"] = BATTLE_SUB_MAIN
             return get_k_text(user_id, "cmd_prompt"), []
             
-        # 修正: 戦闘中のアイテム選択も最長一致を優先する
         matches = [k for k, v in data.ITEMS.items() if v["name"] in content]
         sel_item = max(matches, key=lambda k: len(data.ITEMS[k]["name"])) if matches else None
         
@@ -1041,7 +1061,7 @@ def _handle_enemy_faint(user_id, session, ud, enemy):
     
     xp_mult = 150
     is_hard = session.get("is_hard_mode", False)
-    if is_hard: xp_mult = 30 # ハードはXP低め
+    if is_hard: xp_mult = 30
     base_xp = (enemy["level"] * xp_mult) + random.randint(0, enemy["level"] * 10)
     
     for p in ud["party"]:
