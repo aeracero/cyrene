@@ -552,7 +552,7 @@ CHALLENGE_TRAINERS_HARD = {
             {"base_id": "candy_roll", "level": 1000, "item": "leftovers"}, 
             {"base_id": "kyunure", "level": 1000, "item": "wise_glasses"}, 
             {"base_id": "onkouna_ryu", "level": 1000, "item": "focus_sash"}
-        ], "potions": 10,
+        ], "potions": 33350337,
         "reward_title": "制作者泣かせ",
         "dialogue_start": "どうも、制作者のaeraceroです。今は暇なんで、相手してあげますよ。",
         "dialogue_win": "すごいっすね、まさか私も殺っちゃうなんて..."
