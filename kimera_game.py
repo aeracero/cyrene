@@ -130,6 +130,8 @@ GAME_TEXT = {
     "log_potion": {"jp": "相手は回復薬を使った！ {name} の体力が回復！", "en": "Enemy used Potion! {name} healed!"},
     "log_icarun_start": {"jp": "イカルンが召喚された！ 毎ターン回復するわよ！", "en": "Icarun summoned! Healing every turn!"},
     "log_icarun_heal": {"jp": "イカルンが {name} を回復した！", "en": "Icarun healed {name}!"},
+    "log_synergy_start": {"jp": "【共鳴】『{syn}』が発動！ {eff}", "en": "【Synergy】'{syn}' activated! {eff}"},
+    "log_synergy_heal": {"jp": "【共鳴】『{syn}』の効果で回復した！", "en": "【Synergy】Healed by '{syn}'!"},
     "log_revived": {"jp": "\n{name} は復活したわ！", "en": "\n{name} revived!"},
     "log_self_heal": {"jp": "{name} は回復した！", "en": "{name} healed!"},
     
@@ -139,7 +141,6 @@ GAME_TEXT = {
 }
 
 def get_k_text(user_id, key, **kwargs):
-    # バグ対策: 強制的にJPをデフォルトとする
     lang = db.get_user_lang(user_id)
     if not lang or lang == "en": lang = "jp"
     
@@ -184,20 +185,27 @@ def _init_battle_context(session, enemy_party, enemy_name, stage=None, potions=0
             "remembrance": {"p1": 0, "p2": 0},
             "aglaia_speed": {"p1": 0, "p2": 0},
         },
+        "active_synergies": {"p1": [], "p2": []}, # シナジー効果管理用
         "logs": []
     }
-    _init_chimera_battle_states(session, "p1", ud=ud)
-    _init_chimera_battle_states(session, "p2", ud=ud)
+    
+    # プレイヤー側
+    if ud:
+        _init_chimera_battle_states(session, "p1", ud=ud)
+        _apply_team_synergies(session, "p1", ud["party"])
+    else:
+        # User ID逆引きなどが必要だが、基本は呼び出し元でudを渡す設計
+        pass
 
-def _init_chimera_battle_states(session, side, ud=None):
+    # 敵側 (簡易的に敵はシナジーなしとするか、必要なら実装)
+    _init_chimera_battle_states(session, "p2", enemy_party=enemy_party)
+
+def _init_chimera_battle_states(session, side, ud=None, enemy_party=None):
     party = []
     if side == "p1":
-        if ud is None:
-            user_id = [k for k, v in KIMERA_SESSIONS.items() if v == session][0]
-            ud = core.get_user_data(user_id, hard_mode=session.get("is_hard_mode", False))
-        party = ud["party"]
+        if ud: party = ud["party"]
     else:
-        party = session["context"]["enemy_party"]
+        party = enemy_party if enemy_party else session["context"]["enemy_party"]
     
     for c in party:
         c["battle_state"] = {
@@ -207,16 +215,47 @@ def _init_chimera_battle_states(session, side, ud=None):
             "rocket": False,
             "oblivion_cd": 0,
             "recharge": False,
+            "choice_lock": None, # こだわり系アイテム用
             "form": None
         }
-        c["stat_stages"] = {
-            "atk": 0, "def": 0, "spa": 0, "spd": 0, 
-            "spe": 0, "acc": 0, "eva": 0
-        }
+        # ステータスランク初期化
+        c["stat_stages"] = {"atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0, "acc": 0, "eva": 0}
         
         base = data.BASE_CHIMERAS[c["base_id"]]
         if base["name"] == "キュヌレ":
             session["context"]["field_effects"]["remembrance"][side] = 24
+
+def _apply_team_synergies(session, side, party):
+    """パーティの組み合わせによるシナジー効果を適用する"""
+    active_keys = []
+    base_ids = [c["base_id"] for c in party]
+    
+    user_id = [k for k, v in KIMERA_SESSIONS.items() if v == session][0] if side == "p1" else None
+
+    for key, syn in data.TEAM_SYNERGIES.items():
+        required = syn["members"]
+        # パーティ内に必要なメンバーが全員いるかチェック
+        if all(mid in base_ids for mid in required):
+            active_keys.append(key)
+            eff = syn["effect"]
+            
+            # 開幕バフ (buff_start)
+            if eff["type"] == "buff_start":
+                for c in party:
+                    for stat, stage in eff["stats"].items():
+                        c["stat_stages"][stat] = min(6, c["stat_stages"][stat] + stage)
+                
+                if user_id:
+                    log = get_k_text(user_id, "log_synergy_start", syn=syn['name'], eff="能力が上がった！")
+                    session["context"]["logs"].append(log)
+            
+            # その他の効果はターン終了時などに参照するために保存
+            elif eff["type"] == "regen":
+                if user_id:
+                    log = get_k_text(user_id, "log_synergy_start", syn=syn['name'], eff="毎ターン回復する！")
+                    session["context"]["logs"].append(log)
+
+    session["context"]["active_synergies"][side] = active_keys
 
 def _calculate_damage(attacker, defender, move_id, session):
     move = data.MOVES[move_id]
@@ -226,6 +265,20 @@ def _calculate_damage(attacker, defender, move_id, session):
     power = move["power"]
     if move["category"] == "Status": return 0, 1.0
     
+    # --- 条件付き威力アップ (状態異常特攻など) ---
+    meff = move.get("effect", {})
+    if meff.get("type") == "conditional_power":
+        cond = meff["condition"]
+        mult = meff["multiplier"]
+        target_status = defender.get("status_condition")
+        
+        match = False
+        if cond == "poison" and target_status == "poison": match = True
+        elif cond == "any_status" and target_status is not None: match = True
+        
+        if match: power = int(power * mult)
+
+    # --- ランク補正 ---
     def get_stage_mult(stage):
         return max(2, 2 + stage) / max(2, 2 - stage)
     
@@ -233,14 +286,24 @@ def _calculate_damage(attacker, defender, move_id, session):
         a_stat = int(attacker["stats"]["atk"] * get_stage_mult(attacker["stat_stages"]["atk"]))
         d_stat = int(defender["stats"]["def"] * get_stage_mult(defender["stat_stages"]["def"]))
         if is_burn: a_stat = int(a_stat * 0.5)
+        
+        # アイテム補正: こだわりハチマキ
+        if attacker.get("held_item") == "choice_band":
+            a_stat = int(a_stat * 1.5)
+            
     else:
         a_stat = int(attacker["stats"]["spa"] * get_stage_mult(attacker["stat_stages"]["spa"]))
         d_stat = int(defender["stats"]["spd"] * get_stage_mult(defender["stat_stages"]["spd"]))
+
+        # アイテム補正: こだわりメガネ
+        if attacker.get("held_item") == "choice_specs":
+            a_stat = int(a_stat * 1.5)
 
     if d_stat < 1: d_stat = 1
     
     dmg = int(math.floor(math.floor(math.floor(2 * attacker["level"] / 5 + 2) * power * a_stat / d_stat) / 50) + 2)
     
+    # --- タイプ相性 ---
     base_def = data.BASE_CHIMERAS[defender["base_id"]]
     type_eff = 1.0
     if move["type"] in data.TYPE_CHART:
@@ -250,12 +313,22 @@ def _calculate_damage(attacker, defender, move_id, session):
     
     dmg = int(dmg * type_eff)
     
+    # --- その他の補正 ---
     if attacker.get("status_condition") == "submission":
         dmg = int(dmg * 0.75)
 
     dmg = int(dmg * random.uniform(0.85, 1.0))
     if dmg < 1: dmg = 1
 
+    # アイテム: 命の珠
+    if attacker.get("held_item") == "life_orb":
+        dmg = int(dmg * 1.3)
+
+    # アイテム: 達人の帯 (効果抜群時)
+    if attacker.get("held_item") == "expert_belt" and type_eff > 1.0:
+        dmg = int(dmg * 1.2)
+
+    # アイテム: 半減の実
     if core.check_resist_berry(defender, move["type"]):
         dmg = int(dmg * 0.5)
         defender["held_item"] = None
@@ -292,15 +365,15 @@ def handle_menu(user_id, content):
         return "【Debug】 Removed 'story_page_2'.", []
 
     if content == "デバッグ最強召喚" and user_id == PRIMARY_ADMIN_ID:
-        god = core.create_chimera_instance("kyunure", level=200, nickname="DebugGod")
+        god = core.create_chimera_instance("kyunure", level=999, nickname="aeraceroが愛を込めて育てたキュヌレ")
         god["ivs"] = {k: 31 for k in god["ivs"]}
-        god["held_item"] = "leftovers"
+        god["held_item"] = "life_orb"
         core.update_chimera_stats(god)
         god["current_hp"] = god["stats"]["max_hp"]
         if len(ud["party"]) < 3: ud["party"].append(god)
         else: ud["box"].append(god)
         core.save_user_data(user_id, ud, hard_mode=is_hard)
-        return "【Admin】 Summoned 'DebugGod' (Lv.200).", []
+        return "【Admin】 Summoned 'aeraceroが愛を込めて育てたキュヌレ' (Lv.999).", []
 
     # --- Mode Switch ---
     if "真なるキメラマスターロード" in content:
@@ -634,6 +707,7 @@ def handle_shop(user_id, content):
         session["state"] = STATE_MENU
         return get_k_text(user_id, "menu_prompt"), []
     
+    # 修正: 最長一致優先
     matches = [k for k, v in data.ITEMS.items() if v["name"] in content]
     target_key = max(matches, key=lambda k: len(data.ITEMS[k]["name"])) if matches else None
     
@@ -766,6 +840,7 @@ def handle_battle_action(user_id, content):
     enemy = next((c for c in enemy_party if c["current_hp"] > 0), None)
     player = ud['party'][0]
 
+    # 安全対策
     if "battle_state" not in player:
         _init_chimera_battle_states(session, "p1", ud=ud)
         player = ud['party'][0]
@@ -775,6 +850,14 @@ def handle_battle_action(user_id, content):
     sub = ctx.get("sub_state", BATTLE_SUB_MAIN)
 
     if sub == BATTLE_SUB_MAIN:
+        # こだわりロックチェック
+        locked_move = player["battle_state"].get("choice_lock")
+        if locked_move and "戦" in content:
+            # ロック中は技選択をスキップして即実行するならここで処理できるが、
+            # わかりやすさのため技一覧で「それしか選べない」表示にする等の工夫も可。
+            # 今回は技選択フェーズを通すが、異なる技を選んだら弾く実装。
+            pass
+
         if "逃" in content:
             if session["state"] == STATE_BATTLE_CHALLENGE: return get_k_text(user_id, "run_fail"), []
             session["state"] = STATE_MENU
@@ -795,6 +878,16 @@ def handle_battle_action(user_id, content):
         matched_moves = [m for m in player["moves"] if data.MOVES[m]["name"] in content]
         if matched_moves:
             sel_move = max(matched_moves, key=lambda m: len(data.MOVES[m]["name"]))
+            
+            # こだわりロック判定
+            if locked_move and sel_move != locked_move:
+                return f"こだわりアイテムの効果で『{data.MOVES[locked_move]['name']}』しか出せない！", []
+            
+            # こだわりロックセット
+            held = player.get("held_item")
+            if held in ["choice_band", "choice_specs"] and not locked_move:
+                player["battle_state"]["choice_lock"] = sel_move
+
             return _execute_pve_turn(user_id, session, player, enemy, sel_move, ud)
 
         return get_k_text(user_id, "cmd_prompt"), []
@@ -804,6 +897,7 @@ def handle_battle_action(user_id, content):
             ctx["sub_state"] = BATTLE_SUB_MAIN
             return get_k_text(user_id, "cmd_prompt"), []
             
+        # 修正: 最長一致優先
         matches = [k for k, v in data.ITEMS.items() if v["name"] in content]
         sel_item = max(matches, key=lambda k: len(data.ITEMS[k]["name"])) if matches else None
         
@@ -820,10 +914,14 @@ def handle_battle_action(user_id, content):
         if res["success"]:
             ctx["sub_state"] = BATTLE_SUB_MAIN
             target = res["target"]
+            # スイッチ時は戦闘状態リセット(こだわりロック解除など)
+            if "battle_state" in target:
+                target["battle_state"]["choice_lock"] = None
+                
             if "stat_stages" not in target:
                  target["battle_state"] = {
                     "revived": False, "barrier_hp": 0, "submission_prep": False,
-                    "rocket": False, "oblivion_cd": 0, "recharge": False, "form": None
+                    "rocket": False, "oblivion_cd": 0, "recharge": False, "choice_lock": None, "form": None
                 }
                  target["stat_stages"] = {"atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0, "acc": 0, "eva": 0}
 
@@ -837,10 +935,11 @@ def handle_battle_action(user_id, content):
         if res["success"]:
             ctx["sub_state"] = BATTLE_SUB_MAIN
             target = res["target"]
+            if "battle_state" in target: target["battle_state"]["choice_lock"] = None
             if "stat_stages" not in target:
                  target["battle_state"] = {
                     "revived": False, "barrier_hp": 0, "submission_prep": False,
-                    "rocket": False, "oblivion_cd": 0, "recharge": False, "form": None
+                    "rocket": False, "oblivion_cd": 0, "recharge": False, "choice_lock": None, "form": None
                 }
                  target["stat_stages"] = {"atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0, "acc": 0, "eva": 0}
 
@@ -894,6 +993,12 @@ def _execute_pve_turn(user_id, session, player, enemy, move_id, ud):
             
             ctx["logs"].append(get_k_text(user_id, "log_hit", atkr=player['nickname'], move=mdata['name'], eff=eff_msg, dmg=dmg))
             
+            # 命の珠反動
+            if player.get("held_item") == "life_orb":
+                recoil_orb = max(1, player["stats"]["max_hp"] // 10)
+                player["current_hp"] = max(0, player["current_hp"] - recoil_orb)
+                ctx["logs"].append("命の珠の反動を受けた！")
+
             if core.check_survival_item(enemy, dmg):
                 enemy["current_hp"] = 1
                 ctx["logs"].append(get_k_text(user_id, "log_hung_on", name=enemy['nickname']))
@@ -1029,6 +1134,16 @@ def _enemy_attack_phase(user_id, session, player, enemy, ud):
 
 def _end_of_turn_effects(session, player, enemy, ud, user_id):
     ctx = session["context"]
+    
+    # ターン終了時のシナジー効果 (Regenなど)
+    active = ctx["active_synergies"]["p1"]
+    for key in active:
+        eff = data.TEAM_SYNERGIES[key]["effect"]
+        if eff["type"] == "regen" and player["current_hp"] > 0:
+            rec = int(player["stats"]["max_hp"] * eff["percent"])
+            player["current_hp"] = min(player["stats"]["max_hp"], player["current_hp"] + rec)
+            ctx["logs"].append(get_k_text(user_id, "log_synergy_heal", syn=data.TEAM_SYNERGIES[key]['name']))
+
     if ctx["field_effects"]["icarun"]["p1"] and player["current_hp"] > 0:
         rec = int(player["stats"]["max_hp"] * 0.1)
         player["current_hp"] = min(player["stats"]["max_hp"], player["current_hp"] + rec)
