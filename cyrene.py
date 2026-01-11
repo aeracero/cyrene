@@ -11,7 +11,8 @@ from lines import ARAFUE_TRIGGER_LINE
 from forms import get_user_form, set_user_form, resolve_form_code, get_form_display_name, get_all_forms
 from special_unlocks import inc_janken_win, get_janken_wins, is_nanoka_unlocked, set_nanoka_unlocked, has_danheng_stage1, mark_danheng_stage1, is_danheng_unlocked, set_danheng_unlocked
 import kimera_game
-import gemini_chat  # ★追加: AI対話モジュール
+import cthulhu_game  # 新規追加：TRPGモジュール
+import gemini_chat  # AI対話モジュール
 
 # --- Discord Setup ---
 intents = discord.Intents.default()
@@ -34,7 +35,7 @@ waiting_for_transform_code = set()
 waiting_for_title_change = set()
 FORCE_RPS_WIN_NEXT = set()
 MYURION_QUIZ_STATE = {}
-GEMINI_MODE_USERS = set()  # ★追加: Gemini会話モード中のユーザーID
+GEMINI_MODE_USERS = set()  # Gemini会話モード中のユーザーID
 
 # 変身履歴管理
 USER_FORM_HISTORY = {} # {user_id: ["cyrene", "hyacine", ...]}
@@ -108,8 +109,9 @@ GENERAL_COMMANDS_LIST_JP = (
     "- `デイリー受け取り`: 1日1回、あたしからのプレゼントよ♪\n"
     "- `石をあげる @ユーザー 数`: お友達に石をプレゼントするわ♪\n"
     "- `ピックアップ変更 [キャラ名]`: 狙いを定めるのね？\n\n"
-    "**★ キメラ**\n"
-    "- `キメラと遊びたい`: 可愛い子たちと遊びましょ♪"
+    "**★ ミニゲーム**\n"
+    "- `キメラと遊びたい`: 可愛い子たちと遊びましょ♪\n"
+    "- `天外からのゲームやってみる？`: シンプルなクトゥルフ神話TRPGを始めましょ♪"
 )
 
 GENERAL_COMMANDS_LIST_EN = (
@@ -138,8 +140,9 @@ GENERAL_COMMANDS_LIST_EN = (
     "- `Daily`: A daily present just for you♪\n"
     "- `Give Stones @user [num]`: Send a gift to your friend♪\n"
     "- `Change Pickup [Name]`: Set your target\n\n"
-    "**★ Kimera**\n"
-    "- `Play with Kimera`: Let's play with the cute ones♪"
+    "**★ Games**\n"
+    "- `Play with Kimera`: Let's play with the cute ones♪\n"
+    "- `Play Cthulhu Game`: Start a simple Cthulhu TRPG session♪"
 )
 
 async def send_myu(message, user_id, text):
@@ -326,7 +329,7 @@ async def on_message(message):
          await message.channel.send(msg)
          return
 
-    # 状態チェック
+    # 状態チェック (クトゥルフTRPGのセッションも判定に追加)
     is_active_mode = (
         user_id in waiting_for_nickname or user_id in waiting_for_rename or
         user_id in waiting_for_admin_add or user_id in waiting_for_admin_remove or
@@ -334,7 +337,8 @@ async def on_message(message):
         user_id in waiting_for_guardian_level or user_id in waiting_for_msg_limit or
         user_id in waiting_for_affection_edit or
         user_id in waiting_for_bypass_edit or user_id in waiting_for_transform_code or
-        user_id in waiting_for_title_change or user_id in MYURION_QUIZ_STATE
+        user_id in waiting_for_title_change or user_id in MYURION_QUIZ_STATE or
+        cthulhu_game.get_session(user_id) is not None
     )
     
     # キメラゲーム中かチェック
@@ -351,7 +355,6 @@ async def on_message(message):
     # Geminiモード中は自動的に返信対象とする（ただしコマンド優先）
     is_gemini_active = (user_id in GEMINI_MODE_USERS)
     
-    # ★修正: is_gemini_active をトリガーから外し、メンションかAutoモードでないと反応しないように変更
     should_reply = (is_mentioned or is_active_mode or is_auto_reply or is_playing_kimera)
 
     # 隠しコマンド
@@ -359,25 +362,6 @@ async def on_message(message):
         await message.channel.send(f"# {message.author.mention} が死ぬらしいわ♪ 慰めてあげて？")
         return
     
-    # --- ★ お正月・挨拶の判定 (完全一致リスト) ---
-    # EXACT_GREETINGS = [
-    #     "あけおめ", "あけましておめでとう", "あけおめ", "新年おめでとう",
-    #     "happy new year", "happy new year!", "あけおめ！", "あけましておめでとう！",
-    #     "新年おめでとう！", "よろしくね", "よろしくね", "ことよろ", "ことよろ！",
-    #     "よろしくね！", "おめでとう", "おめでとう！", "2026", "2026年", "2026年!",
-    #     "2026!", "happy 2026", "happy 2026!", "happy new year 2026",
-    #     "happy new year 2026!","明けましておめでとうございます","明けましておめでとうございます！","明けおめ",
-    #    "明けおめ！","新年おめでとうございます","新年おめでとうございます！","今年もよろしくお願いします","今年もよろしくお願いします！","今年もよろしくね","今年もよろしくね！",
-    #    "あけおめことよろ","あけおめことよろ！","あけましておめでとうございます、今年もよろしくお願いします","あけましておめでとうございます、今年もよろしくお願いします！",
-    #    "happy new year 2026, happy 2026", "happy new year 2026, happy 2026!","明","今年","新年","お正月","謹賀新年","謹賀新年！","賀正","賀正！","迎春","迎春！",
-    #    "迎春2026","迎春2026！","謹賀新年2026","謹賀新年2026！","新年明けましておめでとうございます","新年明けましておめでとうございます！","新年あけましておめでとうございます","新年あけましておめでとうございます！",
-    #    "新年あけおめ","新年あけおめ！","新年あけおめことよろ","新年あけおめことよろ！","happy new year 2026, wishing you the best!"
-    #]
-    #if content_body_lower in EXACT_GREETINGS:
-    #    msg = f"# {message.author.mention} Happy New Year! Let's have a wonderful year♪" if lang=="en" else f"# {message.author.mention} あけましておめでとう♪ 今年もよろしくね！"
-    #    await message.channel.send(msg)
-    #   return
-
     # ★ DM移動機能
     if content_body in ["DMに移動する", "move to dm"]:
         try:
@@ -868,8 +852,6 @@ async def on_message(message):
         # ガチャ実行
         if any(k in content_body_lower for k in ["単発", "pull"]) or is_10:
             count = 10 if is_10 else 1
-            # "pull 1" or "pull 10" or just "10連" or "単発"
-            
             ok, res = logic.perform_gacha_pulls(user_id, count, use_ticket=use_ticket)
             if ok:
                 db.increment_achievement_stat(user_id, "gacha_count", count)
@@ -880,7 +862,7 @@ async def on_message(message):
             await send_myu(message, user_id, logic.format_gacha_status(user_id)) 
         return
     
-    # ★追加: 石の譲渡機能
+    # ★石の譲渡機能
     m_gift = re.match(r"(?:石をあげる|give stones)\s+<@!?(\d+)>\s+(\d+)", content_body, re.IGNORECASE)
     if m_gift:
         target_id = int(m_gift.group(1))
@@ -1010,7 +992,27 @@ async def on_message(message):
         await send_myu(message, user_id, f"{message.author.mention} {msg}")
         return
 
+    # --- ★ クトゥルフミニゲーム ★ ---
+    # raw_name は既存のコードで定義されているニックネームまたは表示名を使用
+    cthulhu_res = cthulhu_game.process_cthulhu_command(user_id, content_body, raw_name)
+    
+    if cthulhu_res:
+        reply_msg, extra_messages = cthulhu_res
+        if reply_msg:
+            await send_myu(message, user_id, f"{message.author.mention} {reply_msg}")
+        
+        # 他のルーム参加者への通知（非同期メッセージ転送）
+        for target_uid, target_msg in extra_messages:
+            try:
+                target_user = client.get_user(target_uid) or await client.fetch_user(target_uid)
+                await target_user.send(f"【TRPG通信】{target_msg}")
+            except Exception:
+                # 送信失敗時はチャンネルにフォールバック、あるいは無視
+                pass
+        return
+
     # --- ★ キメラミニゲーム ★ ---
+    # PvPロビーでのニックネーム検索処理を含む
     if is_playing_kimera and kimera_session["state"] == "battle_pvp_lobby" and "<@" not in content_body:
         target_name = content_body
         found_user = None
@@ -1046,8 +1048,7 @@ async def on_message(message):
         
         for target_uid, target_msg in extra_messages:
             try:
-                target_user = client.get_user(target_uid)
-                if not target_user: target_user = await client.fetch_user(target_uid)
+                target_user = client.get_user(target_uid) or await client.fetch_user(target_uid)
                 await target_user.send(target_msg)
             except:
                 try:
@@ -1057,19 +1058,13 @@ async def on_message(message):
 
     # --- ★ Gemini 対話モード処理 ---
     if is_gemini_active and not is_command_query:
-        # メンションされていない場合は無視する（ただしAutoモードなら通す、あるいは厳格にメンション必須にする）
-        # ご要望通り「メンション必須」にするため、is_auto_reply は考慮せず弾きます
         if not is_mentioned:
             return
 
-        # 入力中であることを表示
         async with message.channel.typing():
-            # 既に上で取得済みの raw_name (ニックネーム) を渡します
             ai_reply = await gemini_chat.get_gemini_reply(user_id, raw_name, content_body)
         
         await send_myu(message, user_id, f"{message.author.mention} {ai_reply}")
-        
-        # 好感度XPの加算
         logic.add_affection_xp(user_id, 2) 
         return
 
@@ -1090,7 +1085,6 @@ async def on_message(message):
             is_complete = db.mark_hc_love_phrase(user_id, idx)
             if is_complete:
                 if db.unlock_achievement(user_id, "unlock_love_hc"):
-                    # 実績名等はLogic側で言語対応が必要だが、ここでは簡易表示
                     ach_name = "Love for HC" if lang=="en" else "【HCへの愛】"
                     ach_title = "Loving Cyrene HC" if lang=="en" else "【キュレネHCを愛する】"
                     reply += f"\n\n🏆 Achievement: **{ach_name}**\nTitle: **{ach_title}**"
