@@ -14,6 +14,10 @@ USER_ROOM_MAP = {}
 # ユーザーのセッション状態
 CTHULHU_SESSIONS = {}
 
+def get_session(user_id):
+    """ユーザーのセッションを取得する (cyrene.pyから呼び出される)"""
+    return CTHULHU_SESSIONS.get(user_id)
+
 def generate_room_code():
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
 
@@ -29,7 +33,6 @@ def process_cthulhu_command(user_id, content, raw_name):
 
     session = CTHULHU_SESSIONS[user_id]
     state = session["state"]
-    lang = db.get_user_lang(user_id)
 
     # 共通：終了処理
     if content in ["終了", "戻る", "やめる"]:
