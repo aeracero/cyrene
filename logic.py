@@ -93,6 +93,42 @@ ACHIEVEMENTS = {
         "title_jp": "豪運の", "title_en": "Lucky",
         "type": "cyrene_copies", "threshold": 7
     },
+    "gacha_aglaia_e6": {
+        "name_jp": "美の極致", "name_en": "Perfection of Beauty",
+        "desc_jp": "アグライアを合計7体（完凸）所持する", "desc_en": "Own 7 copies of Aglaia (E6)",
+        "title_jp": "審美眼を持つ", "title_en": "Aesthetic",
+        "type": "aglaia_copies", "threshold": 7
+    },
+    "gacha_trisbeas_e6": {
+        "name_jp": "黄金の出資者", "name_en": "Golden Investor",
+        "desc_jp": "トリスビアスを合計7体（完凸）所持する", "desc_en": "Own 7 copies of Trisbeas (E6)",
+        "title_jp": "大富豪の", "title_en": "Billionaire",
+        "type": "trisbeas_copies", "threshold": 7
+    },
+    "gacha_anaxagoras_e6": {
+        "name_jp": "真理の演算", "name_en": "Logic of Truth",
+        "desc_jp": "アナクサゴラスを合計7体（完凸）所持する", "desc_en": "Own 7 copies of Anaxagoras (E6)",
+        "title_jp": "全知の", "title_en": "Omniscient",
+        "type": "anaxagoras_copies", "threshold": 7
+    },
+    "gacha_medimos_e6": {
+        "name_jp": "不敗の軍神", "name_en": "Invincible God of War",
+        "desc_jp": "メデイモスを合計7体（完凸）所持する", "desc_en": "Own 7 copies of Medimos (E6)",
+        "title_jp": "常勝無敗の", "title_en": "Ever-Victorious",
+        "type": "medimos_copies", "threshold": 7
+    },
+    "gacha_sepharia_e6": {
+        "name_jp": "伝説の大泥棒", "name_en": "Legendary Phantom Thief",
+        "desc_jp": "セファリアを合計7体（完凸）所持する", "desc_en": "Own 7 copies of Sepharia (E6)",
+        "title_jp": "世間を騒がす", "title_en": "Notorious",
+        "type": "sepharia_copies", "threshold": 7
+    },
+    "maker_cry": {
+        "name_jp": "製作者泣かせ", "name_en": "Developer's Nightmare",
+        "desc_jp": "黄金裔を全員完凸（各7体ずつ）所持する", "desc_en": "Own 7 copies of all Limited Characters",
+        "title_jp": "終焉を齎す", "title_en": "Bringer of End",
+        "type": "all_limited_e6", "threshold": 1
+    },
     "talk_master_300": {
         "name_jp": "お喋り好き", "name_en": "Chatterbox",
         "desc_jp": "累計300回会話する", "desc_en": "Talk 300 times total",
@@ -189,15 +225,27 @@ def check_all_achievements(user_id: int) -> list[str]:
     stats = ach_data.get("stats", {})
     aff_xp, aff_lv = get_user_affection(user_id)
     gacha_state = db.get_gacha_state(user_id)
-    cyrene_copies = gacha_state.get("cyrene_copies", 0)
-    if "characters" in gacha_state and "cyrene" in gacha_state["characters"]:
-        cyrene_copies = max(cyrene_copies, gacha_state["characters"]["cyrene"])
+    
+    # ガチャキャラ所持数の整理
+    char_counts = gacha_state.get("characters", {})
+    if "cyrene_copies" in gacha_state:
+        char_counts["cyrene"] = max(char_counts.get("cyrene", 0), gacha_state["cyrene_copies"])
+    
+    # 全員完凸チェック (製作者泣かせ判定用)
+    all_limited_e6 = 1 if all(char_counts.get(k, 0) >= 7 for k in LIMITED_CHARACTERS.keys()) else 0
+
     rps_wins = get_janken_wins(user_id)
     
     current_values = {
         "affection": aff_lv,
         "xp": aff_xp,
-        "cyrene_copies": cyrene_copies,
+        "cyrene_copies": char_counts.get("cyrene", 0),
+        "aglaia_copies": char_counts.get("aglaia", 0),
+        "trisbeas_copies": char_counts.get("trisbeas", 0),
+        "anaxagoras_copies": char_counts.get("anaxagoras", 0),
+        "medimos_copies": char_counts.get("medimos", 0),
+        "sepharia_copies": char_counts.get("sepharia", 0),
+        "all_limited_e6": all_limited_e6,
         "rps_win": rps_wins,
         "talk_count": stats.get("talk_count", 0),
         "gacha_count": stats.get("gacha_count", 0),
@@ -241,12 +289,22 @@ def format_achievement_progress(user_id: int) -> str:
     stats = ach_data.get("stats", {})
     xp, lv = get_user_affection(user_id)
     gacha = db.get_gacha_state(user_id)
-    cyrene_cnt = gacha.get("cyrene_copies", 0)
-    if "characters" in gacha and "cyrene" in gacha["characters"]:
-        cyrene_cnt = max(cyrene_cnt, gacha["characters"]["cyrene"])
+    
+    char_counts = gacha.get("characters", {})
+    if "cyrene_copies" in gacha:
+        char_counts["cyrene"] = max(char_counts.get("cyrene", 0), gacha["cyrene_copies"])
+    
+    all_limited_e6 = 1 if all(char_counts.get(k, 0) >= 7 for k in LIMITED_CHARACTERS.keys()) else 0
 
     vals = {
-        "affection": lv, "xp": xp, "cyrene_copies": cyrene_cnt,
+        "affection": lv, "xp": xp, 
+        "cyrene_copies": char_counts.get("cyrene", 0),
+        "aglaia_copies": char_counts.get("aglaia", 0),
+        "trisbeas_copies": char_counts.get("trisbeas", 0),
+        "anaxagoras_copies": char_counts.get("anaxagoras", 0),
+        "medimos_copies": char_counts.get("medimos", 0),
+        "sepharia_copies": char_counts.get("sepharia", 0),
+        "all_limited_e6": all_limited_e6,
         "rps_win": get_janken_wins(user_id), "talk_count": stats.get("talk_count", 0),
         "gacha_count": stats.get("gacha_count", 0), "guardian": 1 if db.get_guardian_level(user_id) else 0,
         "nanoka_flag": 1 if is_nanoka_unlocked(user_id) else 0,
@@ -290,7 +348,7 @@ def format_achievement_progress(user_id: int) -> str:
         lines.append("\n『二つ名変更』で獲得した称号をつけられるわよ♪")
     return "\n".join(lines)
 
-# --- 好感度など省略（変更なし） ---
+# --- 以下、省略・変更なし ---
 def get_level_from_xp(xp: int, cfg: dict) -> int:
     thresholds = [0, 1000, 2000, 3500, 7000, 10000]
     current_level = 1
@@ -366,7 +424,6 @@ def get_affection_status_message(user_id: int) -> str:
             return (f"あなたの好感度は **Lv.{level}** (累計 {xp} XP) よ♪\n"
                     "もう十分すぎるくらい仲良しね！これ以上は数え切れないわ♪")
 
-# --- ミュリオン省略 ---
 MYURION_SYLLABLES = ["ミュ", "ミュウ", "ミュミュ", "ミュイー"]
 
 def to_myurion_text(body: str) -> str:
@@ -415,8 +472,6 @@ async def send_myurion_question(message, user_id, correct_count, state_dict):
     state_dict[user_id] = {"question": q, "options": [c for _, c in indexed], "correct_index": correct_index}
     await message.channel.send(apply_myurion_filter(user_id, f"{message.author.mention} {body}"))
 
-# --- 新・ガチャロジック (アップデート版) ---
-
 def calc_main_5star_rate(pity_5: int) -> float:
     base = 0.0006
     if pity_5 <= 73: return base
@@ -425,7 +480,6 @@ def calc_main_5star_rate(pity_5: int) -> float:
     return 1.0
 
 def perform_gacha_pulls(user_id: int, num_pulls: int, use_ticket: bool = False) -> tuple[bool, str]:
-    # シークレットボイス読み込みのためにインポート（循環参照防止のため関数内）
     from reply_system import get_secret_voice
 
     state = db.get_gacha_state(user_id)
@@ -505,12 +559,10 @@ def perform_gacha_pulls(user_id: int, num_pulls: int, use_ticket: bool = False) 
                 if char_key == "cyrene":
                     state["cyrene_copies"] = count
 
-                # ★変更: 完凸（7体目）でのみシークレットボイス解放
                 if count == 7:
                     if char_info["secret_voice_id"] not in state["unlocked_voices"]:
                         state["unlocked_voices"].append(char_info["secret_voice_id"])
                     
-                    # 外部ファイルからボイス取得
                     voice_text = get_secret_voice(char_key, lang)
                     new_features.append(f"🎉 **完凸達成！シークレットボイス解放**: \n「{voice_text}」")
                     new_features.append(f"👑 **二つ名解放**: 【{char_info['title']}】")
@@ -522,36 +574,29 @@ def perform_gacha_pulls(user_id: int, num_pulls: int, use_ticket: bool = False) 
                 else:
                     res_txt = f"**★5 [限定] {char_info['name']}** ({eidolon}凸)"
             else:
-                # ★変更: すり抜けアイテムの強化
                 spook_item = random.choice(STANDARD_POOL_5)
                 
                 if spook_item["id"] == "mecha_cyrene_doll":
-                    # メカキュレネ: 1600石還元
                     state["stones"] += 1600
                     res_txt = f"★5 {spook_item['name']} (売却ボーナス: +1600石)"
                 elif spook_item["id"] == "ancient_memory":
-                    # 記憶データ: チケット5枚
                     state["offbanner_tickets"] = state.get("offbanner_tickets", 0) + 5
                     res_txt = f"★5 {spook_item['name']} (貴重な資源: +5 チケット)"
                 else:
-                    # フォールバック
                     res_txt = f"★5 {spook_item['name']}"
                 
-                # 通常のすり抜けチケットも付与
                 state["offbanner_tickets"] = state.get("offbanner_tickets", 0) + 1
                 res_txt += "\n🎫 **すり抜けチケット** +1"
             
             results.append(res_txt)
 
         elif rank == 4:
-            # ★4はアイテムのまま
             item_key = random.choice(GACHA_ITEMS_R4)
             item_name = k_data.ITEMS[item_key]["name"]
             user_kimera_data["items"][item_key] = user_kimera_data["items"].get(item_key, 0) + 1
             results.append(f"★4 {item_name}")
 
         else: 
-            # ★変更: ★3はアイテムではなく石10個に変換
             state["stones"] += 10
             results.append(f"★3 (10石に変換されました)")
 
@@ -677,7 +722,6 @@ def set_user_stones(user_id: int, amount: int) -> int:
     db.save_gacha_state(user_id, state)
     return state["stones"]
 
-# --- じゃんけん省略（変更なし） ---
 JANKEN_HANDS = ["グー", "チョキ", "パー"]
 def parse_hand(text: str):
     t = text.lower()
