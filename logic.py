@@ -125,9 +125,9 @@ ACHIEVEMENTS = {
     },
     "maker_cry": {
         "name_jp": "製作者泣かせ", "name_en": "Developer's Nightmare",
-        "desc_jp": "黄金裔を全員完凸（各7体ずつ）所持する", "desc_en": "Own 7 copies of all Limited Characters",
+        "desc_jp": "真なるキメラマスターロードの裏ボスを撃破する", "desc_en": "Defeat the hidden boss of True Kimera Master Road",
         "title_jp": "終焉を齎す", "title_en": "Bringer of End",
-        "type": "all_limited_e6", "threshold": 1
+        "type": "kimera_hard_stage", "threshold": 15
     },
     "talk_master_300": {
         "name_jp": "お喋り好き", "name_en": "Chatterbox",
@@ -151,7 +151,7 @@ ACHIEVEMENTS = {
         "name_jp": "キメラチャンピオン", "name_en": "Kimera Champion",
         "desc_jp": "チャレンジモードを完全制覇する", "desc_en": "Complete Challenge Mode",
         "title_jp": "ポ◯モンマスターの", "title_en": "Po*emon Master",
-        "type": "manual", "threshold": 1
+        "type": "kimera_stage", "threshold": 15
     },
     "unlock_nanoka": {
         "name_jp": "可愛いは正義", "name_en": "Cute is Justice",
@@ -187,7 +187,7 @@ ACHIEVEMENTS = {
         "name_jp": "真なるキメラマスター", "name_en": "True Kimera Master",
         "desc_jp": "「真なるキメラマスターロード」をクリアする", "desc_en": "Complete True Kimera Master Road",
         "title_jp": "キメラ遊びを極めし者", "title_en": "Supreme Kimera Master",
-        "type": "manual", "threshold": 1
+        "type": "kimera_hard_stage", "threshold": 15
     },
 }
 
@@ -236,6 +236,13 @@ def check_all_achievements(user_id: int) -> list[str]:
 
     rps_wins = get_janken_wins(user_id)
     
+    # キメラゲーム進行度取得
+    # ステージ14をクリアすると15になる
+    k_ud_normal = k_core.get_user_data(user_id, hard_mode=False)
+    k_ud_hard = k_core.get_user_data(user_id, hard_mode=True)
+    kimera_stage = k_ud_normal.get("challenge_stage", 1)
+    kimera_hard_stage = k_ud_hard.get("challenge_stage", 1)
+
     current_values = {
         "affection": aff_lv,
         "xp": aff_xp,
@@ -247,6 +254,8 @@ def check_all_achievements(user_id: int) -> list[str]:
         "sepharia_copies": char_counts.get("sepharia", 0),
         "all_limited_e6": all_limited_e6,
         "rps_win": rps_wins,
+        "kimera_stage": kimera_stage,
+        "kimera_hard_stage": kimera_hard_stage,
         "talk_count": stats.get("talk_count", 0),
         "gacha_count": stats.get("gacha_count", 0),
         "guardian": 1 if db.get_guardian_level(user_id) else 0,
@@ -296,6 +305,11 @@ def format_achievement_progress(user_id: int) -> str:
     
     all_limited_e6 = 1 if all(char_counts.get(k, 0) >= 7 for k in LIMITED_CHARACTERS.keys()) else 0
 
+    k_ud_normal = k_core.get_user_data(user_id, hard_mode=False)
+    k_ud_hard = k_core.get_user_data(user_id, hard_mode=True)
+    kimera_stage = k_ud_normal.get("challenge_stage", 1)
+    kimera_hard_stage = k_ud_hard.get("challenge_stage", 1)
+
     vals = {
         "affection": lv, "xp": xp, 
         "cyrene_copies": char_counts.get("cyrene", 0),
@@ -305,7 +319,10 @@ def format_achievement_progress(user_id: int) -> str:
         "medimos_copies": char_counts.get("medimos", 0),
         "sepharia_copies": char_counts.get("sepharia", 0),
         "all_limited_e6": all_limited_e6,
-        "rps_win": get_janken_wins(user_id), "talk_count": stats.get("talk_count", 0),
+        "rps_win": get_janken_wins(user_id), 
+        "kimera_stage": kimera_stage,
+        "kimera_hard_stage": kimera_hard_stage,
+        "talk_count": stats.get("talk_count", 0),
         "gacha_count": stats.get("gacha_count", 0), "guardian": 1 if db.get_guardian_level(user_id) else 0,
         "nanoka_flag": 1 if is_nanoka_unlocked(user_id) else 0,
         "danheng_flag": 1 if is_danheng_unlocked(user_id) else 0
@@ -565,7 +582,9 @@ def perform_gacha_pulls(user_id: int, num_pulls: int, use_ticket: bool = False) 
                     
                     voice_text = get_secret_voice(char_key, lang)
                     new_features.append(f"🎉 **完凸達成！シークレットボイス解放**: \n「{voice_text}」")
-                    new_features.append(f"👑 **二つ名解放**: 【{char_info['title']}】")
+                    # ここでの「二つ名解放」表示は flavor text として残し、
+                    # 実際の実績解除通知は後述の check_all_achievements で行う
+                    # new_features.append(f"👑 **二つ名解放**: 【{char_info['title']}】")
 
                 eidolon = count - 1 
                 if count == 1:
@@ -606,11 +625,18 @@ def perform_gacha_pulls(user_id: int, num_pulls: int, use_ticket: bool = False) 
     db.save_gacha_state(user_id, state)
     k_core.save_user_data(user_id, user_kimera_data, hard_mode=False)
 
+    # ガチャ結果確定後、実績をチェックして即時反映させる
+    new_unlocks = check_all_achievements(user_id)
+
     header = f"【ガチャ結果】PickUp: {pickup_char['name']}\n"
     body = "\n".join(results)
     footer = f"\n\n{cost_str} / 残り石: {state['stones']} / チケット: {state.get('offbanner_tickets',0)}"
+    
     if new_features:
         footer += "\n\n" + "\n".join(new_features)
+    
+    if new_unlocks:
+        footer += "\n" + "\n".join(new_unlocks)
 
     return True, header + body + footer
 
