@@ -345,15 +345,15 @@ def handle_menu(user_id, content):
         return "【Debug】 Removed 'story_page_2'.", []
 
     if content == "デバッグ最強召喚" and user_id == PRIMARY_ADMIN_ID:
-        god = core.create_chimera_instance("kyunure", level=200, nickname="DebugGod")
+        god = core.create_chimera_instance("cheribis", level=999, nickname="aeraceroが愛を込めて育てたチェビリス")
         god["ivs"] = {k: 31 for k in god["ivs"]}
-        god["held_item"] = "life_orb"
+        god["held_item"] = "leftover"
         core.update_chimera_stats(god)
         god["current_hp"] = god["stats"]["max_hp"]
         if len(ud["party"]) < 3: ud["party"].append(god)
         else: ud["box"].append(god)
         core.save_user_data(user_id, ud, hard_mode=is_hard)
-        return "【Admin】 Summoned 'DebugGod' (Lv.200).", []
+        return "あなたが大切に育てた子たちを召喚したわ♪", []
 
     # --- Mode Switch ---
     if "真なるキメラマスターロード" in content:
