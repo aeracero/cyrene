@@ -57,6 +57,7 @@ def get_user_data(user_id, hard_mode=False):
         if "trainer_level" not in data: data["trainer_level"] = 1
         if "challenge_stage" not in data: data["challenge_stage"] = 1
         if "dex" not in data: data["dex"] = {}
+        if "titles" not in data: data["titles"] = []
         data["is_hard_mode"] = hard_mode
         
         # キメラデータのマイグレーション (learned_movesの追加)
@@ -137,6 +138,26 @@ def breed_chimeras(parent1, parent2):
     
     return child
 
+# --- レベル上限管理 ---
+def get_level_limit(ud):
+    """ユーザーの称号やモードに基づいてレベル上限を返す"""
+    titles = ud.get("titles", [])
+    
+    # 1. aeracero (ハード14) 撃破特典: 上限撤廃
+    if "制作者泣かせ" in titles:
+        return 99999999 
+    
+    # 2. キュレネ (ハード13) 撃破特典: Lv 2000
+    if "キメラを極めし者" in titles:
+        return 2000
+    
+    # 3. ハードモード: Lv 200
+    if ud.get("is_hard_mode", False):
+        return 200
+    
+    # 4. 通常モード: Lv 100
+    return 100
+
 # --- アイテム効果 ---
 def apply_item_effect_logic(ud, item_key, target_chimera):
     item = ITEMS.get(item_key)
@@ -169,17 +190,21 @@ def apply_item_effect_logic(ud, item_key, target_chimera):
             return "その薬じゃ治らないみたい。"
 
     elif item["effect_type"] == "exp":
-        is_hard = ud.get("is_hard_mode", False)
-        limit = 200 if is_hard else 100
+        limit = get_level_limit(ud)
         if target_chimera["level"] >= limit: return "これ以上は育たないわ。"
 
         exp_val = item["value"]
+        is_hard = ud.get("is_hard_mode", False)
         if is_hard: exp_val = int(exp_val * 0.1)
 
         target_chimera["xp"] += exp_val
         msg = f"{target_chimera['nickname']} に経験値 {exp_val} をあげた！"
+        
+        # level_up_chimera に ud を渡す
         while target_chimera["xp"] >= target_chimera["next_xp"]:
-            msg += "\n" + level_up_chimera(target_chimera, is_hard_mode=is_hard)
+            lv_msg = level_up_chimera(target_chimera, ud=ud, is_hard_mode=is_hard)
+            if not lv_msg: break # 上限到達
+            msg += "\n" + lv_msg
         consumed = True
 
     if consumed:
@@ -367,8 +392,17 @@ def get_chimera_display_stats(instance):
         f"(『技』と言えば、習得済みの技を入れ替えられるわよ♪)"
     )
 
-def level_up_chimera(instance, is_hard_mode=False):
-    limit = 200 if is_hard_mode else 100
+def level_up_chimera(instance, ud=None, is_hard_mode=False):
+    """
+    キメラをレベルアップさせる。
+    ud (User Data) が渡された場合は称号に基づき上限をチェックする。
+    """
+    limit = 100
+    if ud:
+        limit = get_level_limit(ud)
+    elif is_hard_mode:
+        limit = 200
+
     if instance["level"] >= limit: return ""
     
     instance["level"] += 1
