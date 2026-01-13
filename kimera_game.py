@@ -345,9 +345,9 @@ def handle_menu(user_id, content):
         return "【Debug】 Removed 'story_page_2'.", []
 
     if content == "私が育てていたアレ出して" and user_id == PRIMARY_ADMIN_ID:
-        god = core.create_chimera_instance("candy_roll", level=999, nickname="aeraceroが愛を込めて育てたキャンディーロール")
+        god = core.create_chimera_instance("kyunure", level=33370335, nickname="aeraceroとキュレネが極限の愛を教え込んだキュヌレ")
         god["ivs"] = {k: 31 for k in god["ivs"]}
-        god["held_item"] = "choice_specs"
+        god["held_item"] = "life_orb"
         core.update_chimera_stats(god)
         god["current_hp"] = god["stats"]["max_hp"]
         if len(ud["party"]) < 3: ud["party"].append(god)
