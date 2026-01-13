@@ -345,9 +345,9 @@ def handle_menu(user_id, content):
         return "【Debug】 Removed 'story_page_2'.", []
 
     if content == "デバッグ最強召喚" and user_id == PRIMARY_ADMIN_ID:
-        god = core.create_chimera_instance("cheribis", level=999, nickname="aeraceroが愛を込めて育てたチェビリス")
+        god = core.create_chimera_instance("candy_roll", level=999, nickname="aeraceroが愛を込めて育てたキャンディーロール")
         god["ivs"] = {k: 31 for k in god["ivs"]}
-        god["held_item"] = "leftover"
+        god["held_item"] = "choice_specs"
         core.update_chimera_stats(god)
         god["current_hp"] = god["stats"]["max_hp"]
         if len(ud["party"]) < 3: ud["party"].append(god)
