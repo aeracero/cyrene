@@ -33,7 +33,6 @@ PVP_CHALLENGES = {}
 PVP_BATTLES = {}
 
 # --- テキスト辞書 (Localization) ---
-# 日本語(jp)をデフォルトとして定義
 GAME_TEXT = {
     # Menu
     "menu_title": {"jp": "【キメラメニュー】", "en": "【Kimera Menu】"},
@@ -144,12 +143,10 @@ GAME_TEXT = {
 }
 
 def get_k_text(user_id, key, **kwargs):
-    # バグ対策: 強制的にJPをデフォルトとする
     lang = db.get_user_lang(user_id)
     if not lang or lang == "en": lang = "jp"
     
     text_map = GAME_TEXT.get(key, {})
-    # キーが見つからない場合や、jpがない場合のフォールバックを強化
     tmpl = text_map.get(lang, text_map.get("jp", ""))
     if not tmpl and "jp" in text_map: tmpl = text_map["jp"]
     
@@ -173,6 +170,27 @@ def end_session(user_id):
             for k in to_del:
                 del PVP_CHALLENGES[k]
         del KIMERA_SESSIONS[user_id]
+
+# --- ヘルパー: レベル上限取得 ---
+def _get_level_limit(user_id):
+    # 1. 通常データのアイテム確認（ハードモード解放フラグ）
+    normal_ud = core.get_user_data(user_id, hard_mode=False)
+    if "story_page_2" not in normal_ud["items"]:
+        return 100 # ハードモード未解放
+    
+    # 2. ハードモード解放済み -> ハードデータのステージ進行度確認
+    hard_ud = core.get_user_data(user_id, hard_mode=True)
+    stage = hard_ud.get("challenge_stage", 1)
+    
+    # Stage 15以上 = aeracero(Stage 14) 撃破済み -> 上限なし
+    if stage >= 15:
+        return 999999
+    # Stage 14以上 = キュレネ(Stage 13) 撃破済み -> Lv2000
+    elif stage >= 14:
+        return 2000
+    # それ以外（ハード解放済み） -> Lv200
+    else:
+        return 200
 
 # --- バトル用ヘルパー関数群 ---
 
@@ -768,19 +786,44 @@ def handle_battle_select(user_id, content):
 
     if "チャレンジ" in content or "3" in content:
         stage = ud.get("challenge_stage", 1)
-        if stage > 14:
+        # 14人目(aeracero)撃破後は15になる。そのまま15以上でループさせるか14に戻すか。
+        # ここでは15以上でも挑戦できる（ただし14の敵など）ようにするか、1に戻すか。
+        # 従来のロジックは 13人抜きだったので >13 でループだった。
+        # 今回は14人抜き(aeraceroまで)なので >14 で1に戻す。
+        # ただしLv上限撤廃後も遊びたいかもしれないので、15以降はStage14相当のループにするか、
+        # ひとまず1に戻して周回させる。
+        if stage > 15:
             stage = 1
             ud["challenge_stage"] = 1
             core.save_user_data(user_id, ud, hard_mode=is_hard)
         
-        trainer_source = data.CHALLENGE_TRAINERS_HARD if is_hard else data.CHALLENGE_TRAINERS
-        t_data = trainer_source.get(stage)
+        # 敵データ取得
+        t_data = None
+        if stage == 14 and is_hard:
+             # Stage 14: aeracero (ハードモード限定)
+             t_data = {
+                 "name": "aeracero",
+                 "party": [
+                    {"base_id": "kyunure", "level": 1500, "item": "life_orb", "fixed_iv": 31},
+                    {"base_id": "aglaia", "level": 1500, "item": "choice_specs", "fixed_iv": 31},
+                    {"base_id": "trisbeas", "level": 1500, "item": "leftovers", "fixed_iv": 31}
+                 ],
+                 "dialogue_start": "……よくここまで来たね。私の最高傑作たちと遊んであげて。",
+                 "dialogue_win": "見事だ……。君こそ真のキメラマスターだ。",
+                 "potions": 10
+             }
+        else:
+             trainer_source = data.CHALLENGE_TRAINERS_HARD if is_hard else data.CHALLENGE_TRAINERS
+             t_data = trainer_source.get(stage)
+        
         if not t_data: return "準備中よ。", []
         
         enemy_party = []
         for p in t_data["party"]:
             iv_val = 31 if is_hard else None
-            c = core.create_chimera_instance(p["base_id"], p["level"], held_item=p.get("item"), fixed_iv=iv_val)
+            # Stage 14のデータは辞書内で指定済み
+            item = p.get("item")
+            c = core.create_chimera_instance(p["base_id"], p["level"], held_item=item, fixed_iv=iv_val)
             core.update_chimera_stats(c)
             c["current_hp"] = c["stats"]["max_hp"]
             enemy_party.append(c)
@@ -1139,11 +1182,15 @@ def _handle_enemy_faint(user_id, session, ud, enemy):
     if is_hard: xp_mult = 30
     base_xp = (enemy["level"] * xp_mult) + random.randint(0, enemy["level"] * 10)
     
+    # レベル上限を取得
+    lv_limit = _get_level_limit(user_id)
+
     for p in ud["party"]:
         if p["current_hp"] > 0:
             p["xp"] += base_xp
             if p["xp"] >= p["next_xp"]:
-                msg += "\n" + core.level_up_chimera(p, is_hard_mode=is_hard)
+                # 修正: limit を渡す
+                msg += "\n" + core.level_up_chimera(p, is_hard_mode=is_hard, limit=lv_limit)
     
     msg += f"\nParty gained {base_xp} XP!"
     core.save_user_data(user_id, ud, hard_mode=is_hard)
@@ -1189,26 +1236,46 @@ def _resolve_pve_win(user_id, session, ud):
     
     if session["state"] == STATE_BATTLE_CHALLENGE:
         st = session["context"]["stage"]
-        trainer_source = data.CHALLENGE_TRAINERS_HARD if is_hard else data.CHALLENGE_TRAINERS
-        t_data = trainer_source[st]
+        
+        # 敵トレーナーデータ取得(勝利メッセージ用)
+        if st == 14 and is_hard:
+             t_data = {"name": "aeracero", "dialogue_win": "見事だ……。君こそ真のキメラマスターだ。"}
+        else:
+             trainer_source = data.CHALLENGE_TRAINERS_HARD if is_hard else data.CHALLENGE_TRAINERS
+             t_data = trainer_source.get(st, {})
         
         win_msg = t_data.get("dialogue_win", "Well done...")
-        msg += f"\n**{t_data['name']}**: \"{win_msg}\"\n"
+        msg += f"\n**{t_data.get('name', 'Unknown')}**: \"{win_msg}\"\n"
         
         ud["challenge_stage"] = st + 1
         base_money = st * 5000
         trainer_xp = st * 1000
         
-        if st == 13:
-            reward_item = t_data.get("reward_item")
-            if reward_item and reward_item not in ud["items"]:
-                ud["items"][reward_item] = 1
-                msg += f"\n『{data.ITEMS[reward_item]['name']}』を手に入れた！\n"
-        
-        if st == 14:
-             reward_title = t_data.get("reward_title", "制作者泣かせ")
-             msg += f"\n🏆 称号獲得: **{reward_title}**\n"
-             if reward_title not in ud["titles"]: ud["titles"].append(reward_title)
+        # ハードモード限定報酬 & アナウンス
+        if is_hard:
+             if st == 13: # キュレネ撃破
+                 msg += "\n🔓 **レベル上限解放**: Lv.2000まで育成可能になったわ！\n"
+                 reward_item = "story_page_2" # アイテム例（もし報酬設定があれば）
+                 # ここでは特にアイテム指定がないためメッセージのみ
+             
+             if st == 14: # aeracero撃破
+                 msg += "\n🔓 **レベル上限撤廃**: レベルの枷は外されたわ！無限の彼方へ！\n"
+                 
+                 # 実績解除チェック
+                 new_unlocks = logic.check_all_achievements(user_id)
+                 if new_unlocks:
+                     msg += "\n" + "\n".join(new_unlocks)
+                 
+        else:
+            # ノーマルモードの既存報酬
+            if st == 13:
+                # 報酬アイテムの処理などは kimera_data に定義があれば行う
+                pass
+            if st == 14: # ノーマルに14があるかはデータ依存だが一応
+                reward_title = t_data.get("reward_title")
+                if reward_title:
+                     msg += f"\n🏆 称号獲得: **{reward_title}**\n"
+                     if reward_title not in ud["titles"]: ud["titles"].append(reward_title)
 
     ud["money"] += base_money
     ud["trainer_xp"] += trainer_xp
