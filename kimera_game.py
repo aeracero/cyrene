@@ -344,7 +344,7 @@ def handle_menu(user_id, content):
         core.save_user_data(user_id, normal_ud, hard_mode=False)
         return "【Debug】 Removed 'story_page_2'.", []
 
-    if content == "デバッグ最強召喚" and user_id == PRIMARY_ADMIN_ID:
+    if content == "私が育てていたアレ出して" and user_id == PRIMARY_ADMIN_ID:
         god = core.create_chimera_instance("candy_roll", level=999, nickname="aeraceroが愛を込めて育てたキャンディーロール")
         god["ivs"] = {k: 31 for k in god["ivs"]}
         god["held_item"] = "choice_specs"
