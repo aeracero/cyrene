@@ -37,7 +37,7 @@ BATTLE_SUB_WAIT = "wait"
 KIMERA_SESSIONS = {}
 PVP_CHALLENGES = {}
 PVP_BATTLES = {}
-RAID_SESSIONS = {} # {raid_id: {host, members:[], state, boss, turn_inputs, turn_count}}
+RAID_SESSIONS = {} 
 
 # --- テキスト辞書 (Localization) ---
 GAME_TEXT = {
@@ -160,7 +160,6 @@ GAME_TEXT = {
     "win_level_up": {"jp": "\nトレーナーレベルが {lv} に上がったわ！", "en": "\nTrainer Level Up -> {lv}!"},
     "win_aff_xp": {"jp": "\n(好感度XP +50)", "en": "\n(Affection XP +50)"},
     "battle_select_back": {"jp": "メニューに戻ったわ。", "en": "Back to menu."},
-    "win_dps": {"jp": "実験終了よ！ お疲れ様♪\n(メニューに戻りました)", "en": "Lab test finished!\n(Returned to menu)"}
 }
 
 def get_k_text(user_id, key, **kwargs):
@@ -175,7 +174,6 @@ def get_k_text(user_id, key, **kwargs):
     return tmpl.format(**kwargs)
 
 # --- 基本ヘルパー関数 ---
-
 def get_session(user_id):
     return KIMERA_SESSIONS.get(user_id)
 
@@ -257,12 +255,10 @@ def _distribute_raid_rewards(sess):
     boss_base_id = sess["boss"]["base_id"]
     for uid in sess["members"]:
         is_hard = KIMERA_SESSIONS.get(uid, {}).get("is_hard_mode", False)
-        
         reward_c = core.create_chimera_instance(boss_base_id, level=1)
         stats_keys = ["hp", "atk", "def", "spa", "spd", "spe"]
         v_stats = random.sample(stats_keys, 3)
         for s in v_stats: reward_c["ivs"][s] = 31
-        
         is_rare = random.random() < 0.1
         rare_txt = ""
         if is_rare:
@@ -518,12 +514,309 @@ def _handle_player_faint(user_id, session, ud, player):
         msg += get_k_text(user_id, "lose_pve", lost=lost)
     return msg
 
+def _enemy_attack_phase(user_id, session, player, enemy, ud):
+    ctx = session["context"]
+    ctx["logs"] = []
+    is_hard = ud.get("is_hard_mode", False)
+    e_prefix = get_k_text(user_id, "prefix_enemy")
+    e_display_name = f"{e_prefix}{enemy['nickname']}"
+    
+    if enemy["battle_state"].get("recharge"):
+        ctx["logs"].append(get_k_text(user_id, "log_recharge", name=e_display_name))
+        enemy["battle_state"]["recharge"] = False
+        _end_of_turn_effects(session, player, enemy, ud, user_id)
+        msg = "\n".join(ctx["logs"])
+        p_bar = _draw_hp_bar(player['current_hp'], player['stats']['max_hp'])
+        e_bar = _draw_hp_bar(enemy['current_hp'], enemy['stats']['max_hp'])
+        return msg + get_k_text(user_id, "log_hp_bar", p_name=player['nickname'], p_hp=max(0,player['current_hp']), p_max=player['stats']['max_hp'], p_bar=p_bar, e_name=enemy['nickname'], e_hp=max(0,enemy['current_hp']), e_max=enemy['stats']['max_hp'], e_bar=e_bar)
+    
+    cant_move = False
+    sc = enemy.get("status_condition")
+    if sc == "paralysis" and random.random() < 0.25:
+        ctx["logs"].append(get_k_text(user_id, "log_paralyzed_cant_move", name=e_display_name))
+        cant_move = True
+    elif sc == "sleep":
+        if random.random() < 0.33:
+            enemy["status_condition"] = None
+            ctx["logs"].append(get_k_text(user_id, "log_woke_up", name=e_display_name))
+        else:
+            ctx["logs"].append(get_k_text(user_id, "log_sleeping", name=e_display_name))
+            cant_move = True
+    oblv = enemy["battle_state"].get("oblivion")
+    if oblv and not cant_move:
+        ctx["logs"].append(get_k_text(user_id, "log_oblivion", name=e_display_name))
+        cant_move = True
+
+    if not cant_move:
+        potions = ctx.get("potions", 0)
+        heal_threshold = 0.5 if is_hard else 0.3
+        if potions > 0 and enemy["current_hp"] < enemy["stats"]["max_hp"] * heal_threshold:
+            ctx["potions"] -= 1
+            heal_amt = int(enemy["stats"]["max_hp"] * (0.8 if is_hard else 0.5))
+            enemy["current_hp"] = min(enemy["stats"]["max_hp"], enemy["current_hp"] + heal_amt)
+            ctx["logs"].append(get_k_text(user_id, "log_potion", name=enemy['nickname']))
+        else:
+            emove_id = random.choice(enemy["moves"])
+            emove = data.MOVES[emove_id]
+            dmg, type_eff = _calculate_damage(enemy, player, emove_id, session)
+            
+            if emove["category"] != "Status":
+                eff_msg = ""
+                if type_eff > 1.0: eff_msg = get_k_text(user_id, "eff_super")
+                elif type_eff == 0: eff_msg = get_k_text(user_id, "eff_none")
+                elif type_eff < 1.0: eff_msg = get_k_text(user_id, "eff_not")
+                ctx["logs"].append(get_k_text(user_id, "log_hit", atkr=e_display_name, move=emove['name'], eff=eff_msg, dmg=dmg))
+                player["current_hp"] -= dmg
+                if emove.get("effect", {}).get("type") == "recoil":
+                    recoil = int(dmg * emove["effect"]["percent"])
+                    enemy["current_hp"] = max(0, enemy["current_hp"] - recoil)
+                    ctx["logs"].append(get_k_text(user_id, "log_recoil", name=enemy['nickname']))
+                if emove.get("effect", {}).get("type") == "recharge": enemy["battle_state"]["recharge"] = True
+                if data.BASE_CHIMERAS[player["base_id"]]["name"] == "チョウチョウケーキ":
+                    ref = max(1, dmg // 10)
+                    enemy["current_hp"] = max(0, enemy["current_hp"] - ref)
+                    ctx["logs"].append(get_k_text(user_id, "log_reflect", dmg=ref))
+            else:
+                ctx["logs"].append(get_k_text(user_id, "log_stat", atkr=e_display_name, move=emove['name']))
+                eff = emove.get("effect")
+                if eff and eff["type"] == "status": _apply_status_effect(player, eff["status"], session, user_id)
+    
+    _end_of_turn_effects(session, player, enemy, ud, user_id)
+    core.save_user_data(user_id, ud, hard_mode=is_hard)
+    msg = "\n".join(ctx["logs"])
+    
+    if player["current_hp"] <= 0: return msg + "\n" + _handle_player_faint(user_id, session, ud, player)
+    if enemy["current_hp"] <= 0: 
+        p_bar = _draw_hp_bar(player['current_hp'], player['stats']['max_hp'])
+        e_bar = _draw_hp_bar(0, enemy['stats']['max_hp'])
+        hp_log = get_k_text(user_id, "log_hp_bar", p_name=player['nickname'], p_hp=max(0,player['current_hp']), p_max=player['stats']['max_hp'], p_bar=p_bar, e_name=enemy['nickname'], e_hp=0, e_max=enemy['stats']['max_hp'], e_bar=e_bar)
+        return _handle_enemy_faint(user_id, session, ud, enemy, msg + "\n" + hp_log)
+    
+    p_bar = _draw_hp_bar(player['current_hp'], player['stats']['max_hp'])
+    e_bar = _draw_hp_bar(enemy['current_hp'], enemy['stats']['max_hp'])
+    return msg + get_k_text(user_id, "log_hp_bar", p_name=player['nickname'], p_hp=max(0,player['current_hp']), p_max=player['stats']['max_hp'], p_bar=p_bar, e_name=enemy['nickname'], e_hp=max(0,enemy['current_hp']), e_max=enemy['stats']['max_hp'], e_bar=e_bar)
+
+def _execute_pve_turn(user_id, session, player, enemy, move_id, ud):
+    ctx = session["context"]
+    ctx["logs"] = []
+    mdata = data.MOVES[move_id]
+    cant_move = False
+    
+    if player["battle_state"].get("recharge"):
+        ctx["logs"].append(get_k_text(user_id, "log_recharge", name=player['nickname']))
+        player["battle_state"]["recharge"] = False
+        cant_move = True
+    sc = player.get("status_condition")
+    if not cant_move and sc == "paralysis" and random.random() < 0.25:
+        ctx["logs"].append(get_k_text(user_id, "log_paralyzed_cant_move", name=player['nickname']))
+        cant_move = True
+    elif not cant_move and sc == "sleep":
+        if random.random() < 0.33:
+            player["status_condition"] = None
+            ctx["logs"].append(get_k_text(user_id, "log_woke_up", name=player['nickname']))
+        else:
+            ctx["logs"].append(get_k_text(user_id, "log_sleeping", name=player['nickname']))
+            cant_move = True
+    oblv = player["battle_state"].get("oblivion")
+    if oblv and not cant_move:
+        ctx["logs"].append(get_k_text(user_id, "log_oblivion", name=player['nickname']))
+        cant_move = True
+
+    if not cant_move:
+        base_name = data.BASE_CHIMERAS[player["base_id"]]["name"]
+        if base_name == "オートミール" and mdata["category"] != "Status":
+            player["stat_stages"]["spe"] = min(6, player["stat_stages"]["spe"] + 1)
+            ctx["logs"].append(get_k_text(user_id, "buff", name="オートミール"))
+        dmg, type_eff = _calculate_damage(player, enemy, move_id, session)
+        
+        if mdata["category"] != "Status":
+            eff_msg = ""
+            if type_eff > 1.0: eff_msg = get_k_text(user_id, "eff_super")
+            elif type_eff == 0: eff_msg = get_k_text(user_id, "eff_none")
+            elif type_eff < 1.0: eff_msg = get_k_text(user_id, "eff_not")
+            ctx["logs"].append(get_k_text(user_id, "log_hit", atkr=player['nickname'], move=mdata['name'], eff=eff_msg, dmg=dmg))
+            enemy["current_hp"] -= dmg
+            
+            if player.get("held_item") == "life_orb":
+                recoil_orb = max(1, player["stats"]["max_hp"] // 10)
+                player["current_hp"] = max(0, player["current_hp"] - recoil_orb)
+                ctx["logs"].append("命の珠の反動を受けた！")
+            if core.check_survival_item(enemy, dmg):
+                enemy["current_hp"] = 1
+                ctx["logs"].append(get_k_text(user_id, "log_hung_on", name=enemy['nickname']))
+            if data.BASE_CHIMERAS[enemy["base_id"]]["name"] == "チョウチョウケーキ":
+                ref = max(1, dmg // 10)
+                player["current_hp"] = max(0, player["current_hp"] - ref)
+                ctx["logs"].append(get_k_text(user_id, "log_reflect", dmg=ref))
+            if data.BASE_CHIMERAS[enemy["base_id"]]["name"] == "キャンディーロール":
+                 if not player["battle_state"].get("oblivion"):
+                     player["battle_state"]["oblivion"] = 3
+                     ctx["logs"].append(f"{player['nickname']} は呪いを受けた！")
+            if mdata.get("effect", {}).get("type") == "recoil":
+                recoil = int(dmg * mdata["effect"]["percent"])
+                player["current_hp"] = max(0, player["current_hp"] - recoil)
+                ctx["logs"].append(get_k_text(user_id, "log_recoil", name=player['nickname']))
+            if mdata.get("effect", {}).get("type") == "recharge": player["battle_state"]["recharge"] = True
+            if mdata.get("effect", {}).get("type") == "debuff_self":
+                stat = mdata["effect"]["stat"]
+                player["stat_stages"][stat] = max(-6, player["stat_stages"][stat] - mdata["effect"]["stage"])
+                ctx["logs"].append(get_k_text(user_id, "debuff", name=player['nickname']))
+        else:
+            ctx["logs"].append(get_k_text(user_id, "log_stat", atkr=player['nickname'], move=mdata['name']))
+            eff = mdata.get("effect")
+            if eff:
+                if eff["type"] == "buff":
+                    player["stat_stages"][eff["stat"]] = min(6, player["stat_stages"][eff["stat"]] + eff["stage"])
+                    ctx["logs"].append(get_k_text(user_id, "buff", name=player['nickname']))
+                elif eff["type"] == "debuff":
+                    enemy["stat_stages"][eff["stat"]] = max(-6, enemy["stat_stages"][eff["stat"]] - eff["stage"])
+                    ctx["logs"].append(get_k_text(user_id, "debuff", name=enemy['nickname']))
+                elif eff["type"] == "status": _apply_status_effect(enemy, eff["status"], session, user_id)
+                elif eff["type"] == "heal":
+                    rec = int(player["stats"]["max_hp"] * eff["percent"])
+                    player["current_hp"] = min(player["stats"]["max_hp"], player["current_hp"] + rec)
+                    ctx["logs"].append(get_k_text(user_id, "log_self_heal", name=player['nickname']))
+            if base_name == "チェリビス":
+                ctx["field_effects"]["icarun"]["p1"] = True
+                ctx["logs"].append(get_k_text(user_id, "log_icarun_start"))
+        player["last_move"] = move_id
+
+    if enemy["current_hp"] <= 0:
+        p_bar = _draw_hp_bar(player['current_hp'], player['stats']['max_hp'])
+        e_bar = _draw_hp_bar(0, enemy['stats']['max_hp'])
+        hp_log = get_k_text(user_id, "log_hp_bar", p_name=player['nickname'], p_hp=max(0,player['current_hp']), p_max=player['stats']['max_hp'], p_bar=p_bar, e_name=enemy['nickname'], e_hp=0, e_max=enemy['stats']['max_hp'], e_bar=e_bar)
+        pre_logs = "\n".join(ctx["logs"]) + "\n" + hp_log
+        return _handle_enemy_faint(user_id, session, ud, enemy, pre_logs)
+
+    if player["current_hp"] <= 0: return _handle_player_faint(user_id, session, ud, player)
+    msg = "\n".join(ctx["logs"]) + "\n"
+    msg += _enemy_attack_phase(user_id, session, player, enemy, ud)
+    return msg, []
+
+def use_item_in_battle(user_id, session, item_key, ud, player, enemy):
+    item = data.ITEMS[item_key]
+    is_hard = session.get("is_hard_mode", False)
+    if item["effect_type"] == "capture":
+        if session["state"] != STATE_BATTLE_WILD: return get_k_text(user_id, "err_cant_use")
+        if ud["items"].get(item_key, 0) <= 0: return get_k_text(user_id, "err_no_item")
+        ud["items"][item_key] -= 1
+        if ud["items"][item_key] <= 0: del ud["items"][item_key]
+        rarity_mod = 1.0 - (enemy.get("rarity", 1) * 0.1)
+        rate = ((1 - (enemy["current_hp"]/enemy["stats"]["max_hp"])) * 0.8 + 0.2) * item["value"] * rarity_mod
+        if enemy.get("status_condition"): rate *= 1.5
+        if enemy.get("status_condition") == "submission": rate *= 2.0
+        if random.random() < rate:
+            core.update_chimera_stats(enemy)
+            enemy["current_hp"] = enemy["stats"]["max_hp"]
+            if len(ud["party"]) < 3: ud["party"].append(enemy)
+            else: ud["box"].append(enemy)
+            core.register_dex(ud, enemy["base_id"], caught=True)
+            core.save_user_data(user_id, ud, hard_mode=is_hard)
+            logic.add_affection_xp(user_id, 50)
+            session["state"] = STATE_MENU
+            session["context"] = {}
+            return get_k_text(user_id, "catch_success", name=enemy['nickname']), []
+        else:
+            core.save_user_data(user_id, ud, hard_mode=is_hard)
+            session["context"]["sub_state"] = BATTLE_SUB_MAIN
+            msg = get_k_text(user_id, "catch_fail") + "\n"
+            msg += _enemy_attack_phase(user_id, session, player, enemy, ud)
+            return msg
+    elif item["effect_type"] == "heal":
+        if ud["items"].get(item_key, 0) <= 0: return get_k_text(user_id, "err_no_item")
+        ud["items"][item_key] -= 1
+        if ud["items"][item_key] <= 0: del ud["items"][item_key]
+        player["current_hp"] = min(player["stats"]["max_hp"], player["current_hp"] + item["value"])
+        core.save_user_data(user_id, ud, hard_mode=is_hard)
+        session["context"]["sub_state"] = BATTLE_SUB_MAIN
+        msg = f"回復したわ！\n"
+        msg += _enemy_attack_phase(user_id, session, player, enemy, ud)
+        return msg
+    return get_k_text(user_id, "err_cant_use")
+
+def _initiate_pvp_battle(p1, p2):
+    if p2 in PVP_CHALLENGES: del PVP_CHALLENGES[p2]
+    battle_id = f"pvp_{p1}_{p2}"
+    PVP_BATTLES[battle_id] = {"p1": p1, "p2": p2, "actions": {}, "turn": 1}
+    for uid in [p1, p2]:
+        if uid not in KIMERA_SESSIONS: start_session(uid)
+        sess = KIMERA_SESSIONS[uid]
+        sess["state"] = STATE_BATTLE_PVP
+        sess["context"] = {"battle_id": battle_id, "sub_state": BATTLE_SUB_MAIN}
+    ud1 = core.get_user_data(p1, hard_mode=KIMERA_SESSIONS[p1].get("is_hard_mode", False))
+    ud2 = core.get_user_data(p2, hard_mode=KIMERA_SESSIONS[p2].get("is_hard_mode", False))
+    c1 = ud1["party"][0]; c2 = ud2["party"][0]
+    msg1 = get_k_text(p1, "pvp_start", name=c2['nickname'], lv=c2['level'])
+    msg2 = get_k_text(p2, "pvp_start", name=c1['nickname'], lv=c1['level'])
+    return msg2, [(p1, msg1)]
+
+def _check_pvp_turn_ready(battle):
+    if battle["p1"] in battle["actions"] and battle["p2"] in battle["actions"]:
+        return _resolve_pvp_turn(battle)
+    else: return "相手の入力を待っているわ...", []
+
+def _end_pvp(battle):
+    target_k = None
+    for k, v in PVP_BATTLES.items():
+        if v == battle: target_k = k
+    if target_k: del PVP_BATTLES[target_k]
+
+def _resolve_pvp_end(battle, loser_id):
+    p1, p2 = battle["p1"], battle["p2"]
+    winner_id = p2 if loser_id == p1 else p1
+    _end_pvp(battle)
+    msg = f"<@{loser_id}> surrendered.\n<@{winner_id}> wins!"
+    KIMERA_SESSIONS[p1]["state"] = STATE_MENU; KIMERA_SESSIONS[p2]["state"] = STATE_MENU
+    return "", [(p1, msg), (p2, msg)]
+
+def _resolve_pvp_turn(battle):
+    p1, p2 = battle["p1"], battle["p2"]
+    act1, act2 = battle["actions"][p1], battle["actions"][p2]
+    ud1 = core.get_user_data(p1); ud2 = core.get_user_data(p2)
+    c1 = ud1["party"][0]; c2 = ud2["party"][0]
+    if c1["stats"]["spe"] >= c2["stats"]["spe"]:
+        order = [(p1, c1, act1, p2, c2), (p2, c2, act2, p1, c1)]
+    else: order = [(p2, c2, act2, p1, c1), (p1, c1, act1, p2, c2)]
+    logs = []
+    for actor_id, actor_c, act, target_id, target_c in order:
+        if actor_c["current_hp"] <= 0: continue
+        if act["type"] == "move":
+            mid = act["value"]
+            mdata = data.MOVES[mid]
+            dmg = int(mdata["power"] * (actor_c["stats"]["atk"] / target_c["stats"]["def"]) * 0.4)
+            if dmg < 1: dmg = 1
+            target_c["current_hp"] -= dmg
+            logs.append(f"**{actor_c['nickname']}** used {mdata['name']}! {target_c['nickname']} took {dmg} dmg!")
+            if target_c["current_hp"] <= 0:
+                target_c["current_hp"] = 0
+                logs.append(f"**{target_c['nickname']}** fainted!")
+    battle["actions"] = {}
+    full_log = "\n".join(logs)
+    loser = None
+    if c1["current_hp"] <= 0 and c2["current_hp"] <= 0:
+        _end_pvp(battle)
+        msg = f"{full_log}\n\nDraw!"
+        return "", [(p1, msg), (p2, msg)]
+    if c1["current_hp"] <= 0: loser = p1
+    elif c2["current_hp"] <= 0: loser = p2
+    if loser:
+        _end_pvp(battle)
+        winner = p2 if loser == p1 else p1
+        msg = f"{full_log}\n\nWinner: <@{winner}>!"
+        KIMERA_SESSIONS[p1]["state"] = STATE_MENU; KIMERA_SESSIONS[p2]["state"] = STATE_MENU
+        KIMERA_SESSIONS[p1]["context"]["sub_state"] = BATTLE_SUB_MAIN
+        KIMERA_SESSIONS[p2]["context"]["sub_state"] = BATTLE_SUB_MAIN
+        return "", [(p1, msg), (p2, msg)]
+    KIMERA_SESSIONS[p1]["context"]["sub_state"] = BATTLE_SUB_MAIN
+    KIMERA_SESSIONS[p2]["context"]["sub_state"] = BATTLE_SUB_MAIN
+    msg_next = f"{full_log}\n\nNext turn!"
+    return "", [(p1, msg_next), (p2, msg_next)]
+
 def _start_raid_battle(raid_id):
     sess = RAID_SESSIONS[raid_id]
     sess["state"] = "battle"
     boss_base = random.choice(data.RAID_BOSS_CANDIDATES)
     boss = core.create_chimera_instance(boss_base, level=100)
-    # Boss HP adjustment: 10000
     boss["stats"]["max_hp"] = 10000 
     boss["current_hp"] = boss["stats"]["max_hp"]
     for k in ["atk", "def", "spa", "spd", "spe"]: boss["stats"][k] = int(boss["stats"][k] * 2.0)
@@ -577,9 +870,6 @@ def _execute_raid_turn(raid_id):
                 eff = eff_data["effect"]
                 if eff["type"] == "buff_all":
                     stat = eff["stat"]
-                    for m_uid in members:
-                        # Apply to in-memory check
-                        pass 
                     logs.append(eff_data["msg"])
                     # Save to DB
                     for m_uid in members:
@@ -711,6 +1001,148 @@ def _execute_raid_turn(raid_id):
     return msgs[0][1], msgs[1:]
 
 # --- メインハンドラ (依存関数が定義済みなので安全) ---
+
+def handle_menu(user_id, content):
+    session = KIMERA_SESSIONS[user_id]
+    is_hard = session.get("is_hard_mode", False)
+    ud = core.get_user_data(user_id, hard_mode=is_hard)
+    if content == "デバッグ解放":
+        normal_ud = core.get_user_data(user_id, hard_mode=False)
+        normal_ud["items"]["story_page_2"] = 1
+        core.save_user_data(user_id, normal_ud, hard_mode=False)
+        return "【Debug】 Added 'story_page_2'.", []
+    if content == "デバッグ封印":
+        normal_ud = core.get_user_data(user_id, hard_mode=False)
+        if "story_page_2" in normal_ud["items"]: del normal_ud["items"]["story_page_2"]
+        core.save_user_data(user_id, normal_ud, hard_mode=False)
+        return "【Debug】 Removed 'story_page_2'.", []
+    if "真なるキメラマスターロード" in content:
+        if is_hard: return "既にハードモードよ。", []
+        normal_ud = core.get_user_data(user_id, hard_mode=False)
+        if "story_page_2" in normal_ud["items"]:
+            session["is_hard_mode"] = True
+            core.get_user_data(user_id, hard_mode=True)
+            return get_k_text(user_id, "hard_mode_warning"), []
+        else: return "まだその資格はないみたい。", []
+    if "ノーマルに戻る" in content:
+        if is_hard:
+            session["is_hard_mode"] = False
+            return "平和な世界（ノーマルモード）のデータに戻したわよ♪", []
+        return "既にノーマルモードよ。", []
+    norm_content = content.translate(str.maketrans({chr(0xFF10 + i): chr(0x30 + i) for i in range(10)}))
+    c_lower = content.lower()
+    if "技" in content or "moves" in c_lower:
+        session["state"] = STATE_MOVE_MANAGE
+        return _get_move_manage_text(user_id), []
+    if "バトル" in content or "battle" in c_lower or "3" in norm_content:
+        session["state"] = STATE_BATTLE_SELECT
+        if "チャレンジ" in content or "3" in norm_content: return handle_battle_select(user_id, content)
+        mode_text = "【真・キメラマスターロード】" if is_hard else "チャレンジモード"
+        msg = f"{get_k_text(user_id, 'battle_select_title')}\n{get_k_text(user_id, 'battle_opts', mode_text=mode_text)}"
+        if not is_hard:
+            normal_ud = core.get_user_data(user_id, hard_mode=False)
+            if "story_page_2" in normal_ud["items"]: msg += "\n\n★『真なるキメラマスターロード』と言えば、裏世界へ連れて行ってあげるわよ♪"
+        return msg, []
+    if "編成" in content or "ボックス" in content:
+        session["state"] = STATE_BOX
+        return _get_box_menu_text(user_id), []
+    if "装備" in content:
+        session["state"] = STATE_EQUIP
+        return _get_equip_menu_text(user_id), []
+    if "詳細" in content:
+        base_msg = get_k_text(user_id, "status_trainer", lv=ud['trainer_level'], xp=ud['trainer_xp'], money=ud['money'])
+        if is_hard: base_msg += "\n★ Hard Mode ★\n"
+        if not ud['party']: return base_msg + get_k_text(user_id, "no_items_to_use"), []
+        chimera = ud['party'][0]
+        return f"{base_msg}【Lead】\n{core.get_chimera_display_stats(chimera)}", []
+    if "ショップ" in content:
+        session["state"] = STATE_SHOP
+        tlv = ud["trainer_level"]
+        lines = []
+        for k, v in data.ITEMS.items():
+            if v["price"] > 0 and v.get("unlock_rank", 1) <= tlv:
+                lines.append(f"・**{v['name']}**: {v['price']}G")
+        return get_k_text(user_id, "shop_welcome", money=ud['money'], level=tlv, items="\n".join(lines)), []
+    if "回復" in content:
+        core.heal_all_kimeras(ud)
+        core.save_user_data(user_id, ud, hard_mode=is_hard)
+        return get_k_text(user_id, "healed"), []
+    if "図鑑" in content or "dex" in c_lower:
+        if "技" in content or "move" in c_lower:
+             m_srch = re.search(r"(?:技|moves)\s+(.+)", content)
+             if m_srch:
+                 t_move = m_srch.group(1).strip()
+                 found = None
+                 for k, v in data.MOVES.items():
+                     if v["name"] == t_move: found = v; break
+                 if found:
+                     cat = found['category']
+                     return f"📖 **{found['name']}** ({cat})\nType: {found['type']} / Power: {found['power']} / Acc: {found.get('accuracy', 100)}\nEffect: {found.get('desc', 'なし')}", []
+                 return "その技は見つからないわ。", []
+             move_list = sorted([v['name'] for v in data.MOVES.values()])
+             return f"【技図鑑】\n{', '.join(move_list)}\n\n『図鑑 技 10万ボルト』のように検索してね。", []
+        if "アイテム" in content or "item" in c_lower:
+             m_srch = re.search(r"(?:アイテム|items)\s+(.+)", content)
+             if m_srch:
+                 t_item = m_srch.group(1).strip()
+                 found = None
+                 for k, v in data.ITEMS.items():
+                     if v["name"] == t_item: found = v; break
+                 if found:
+                     return f"📖 **{found['name']}** (Price: {found['price']}G)\n{found.get('desc', '効果不明')}", []
+                 return "そのアイテムは見つからないわ。", []
+             item_list = sorted([v['name'] for v in data.ITEMS.values()])
+             return f"【アイテム図鑑】\n{', '.join(item_list)}\n\n『図鑑 アイテム モンスターボール』のように検索してね。", []
+        m_search = re.search(r"(?:図鑑|dex)\s+(.+)", content, re.IGNORECASE)
+        if m_search:
+            target_name = m_search.group(1).strip()
+            found_key = None
+            for k, v in data.BASE_CHIMERAS.items():
+                if v["name"] == target_name or v.get("name_en", "").lower() == target_name.lower():
+                    found_key = k; break
+            if not found_key: return "その名前のキメラはデータにないわね。", []
+            status = ud["dex"].get(found_key)
+            if not status: return "そのキメラはまだ発見していないみたい。", []
+            base = data.BASE_CHIMERAS[found_key]
+            if status == "seen":
+                return f"📖 **No.{found_key} {base['name']}**\n{get_k_text(user_id, 'dex_seen')}", []
+            elif status == "caught":
+                rarity = "★" * base.get('rarity', 1)
+                bs = base['base_stats']
+                desc = base.get('description', 'No Data.')
+                total_bs = sum(bs.values())
+                msg = (f"━━━━━━━━━━━━━━━\n📖 **No.{found_key} {base['name']}** {rarity}\n━━━━━━━━━━━━━━━\n"
+                       f"Type: {base['type']}\nAbility: **{base['ability']}**\n-------------------------------\n{desc}\n-------------------------------\n"
+                       f"HP:{bs['hp']} Atk:{bs['atk']} Def:{bs['def']} SpA:{bs['spa']} SpD:{bs['spd']} Spe:{bs['spe']} (Total:{total_bs})\n━━━━━━━━━━━━━━━")
+                return msg, []
+        total = len(data.BASE_CHIMERAS)
+        caught = sum(1 for v in ud["dex"].values() if v == "caught")
+        seen = len(ud["dex"])
+        lines = [f"【Dex】 Caught: {caught}/{total} / Seen: {seen}/{total}"]
+        for k in sorted(data.BASE_CHIMERAS.keys()):
+            base = data.BASE_CHIMERAS[k]
+            status = ud["dex"].get(k)
+            if status == "caught": mark = "★"; dname = base['name']
+            elif status == "seen": mark = "○"; dname = base['name']
+            else: mark = "・"; dname = "？？？"
+            lines.append(f"{mark} {dname}")
+        return "\n".join(lines) + "\n" + get_k_text(user_id, 'dex_help'), []
+    if "アイテム" in content:
+        items_txt = ", ".join([f"{data.ITEMS[k]['name']}x{v}" for k, v in ud['items'].items()])
+        return get_k_text(user_id, "items_list", items=items_txt), []
+    m = re.match(r"(.+)(?:を使う| use)", content, re.IGNORECASE)
+    if m:
+        item_name = m.group(1).replace("use ", "").strip()
+        item_key = next((k for k, v in data.ITEMS.items() if v["name"] == item_name), None)
+        if item_key:
+            if not ud["party"]: return get_k_text(user_id, "no_items_to_use"), []
+            res = core.apply_item_effect_logic(ud, item_key, ud["party"][0])
+            core.save_user_data(user_id, ud, hard_mode=is_hard)
+            return res, []
+    new_unlocks = logic.check_all_achievements(user_id)
+    extra_msg = ""
+    if new_unlocks: extra_msg = "\n" + "\n".join(new_unlocks)
+    return f"{get_k_text(user_id, 'menu_title')}\n{get_k_text(user_id, 'menu_opts')}\n{get_k_text(user_id, 'menu_prompt')}{extra_msg}", []
 
 def _get_move_manage_text(user_id):
     session = KIMERA_SESSIONS[user_id]
@@ -1171,148 +1603,6 @@ def handle_pvp_action(user_id, content):
             return _check_pvp_turn_ready(battle)
         return get_k_text(user_id, "cmd_prompt"), []
     return "...", []
-
-def handle_menu(user_id, content):
-    session = KIMERA_SESSIONS[user_id]
-    is_hard = session.get("is_hard_mode", False)
-    ud = core.get_user_data(user_id, hard_mode=is_hard)
-    if content == "デバッグ解放":
-        normal_ud = core.get_user_data(user_id, hard_mode=False)
-        normal_ud["items"]["story_page_2"] = 1
-        core.save_user_data(user_id, normal_ud, hard_mode=False)
-        return "【Debug】 Added 'story_page_2'.", []
-    if content == "デバッグ封印":
-        normal_ud = core.get_user_data(user_id, hard_mode=False)
-        if "story_page_2" in normal_ud["items"]: del normal_ud["items"]["story_page_2"]
-        core.save_user_data(user_id, normal_ud, hard_mode=False)
-        return "【Debug】 Removed 'story_page_2'.", []
-    if "真なるキメラマスターロード" in content:
-        if is_hard: return "既にハードモードよ。", []
-        normal_ud = core.get_user_data(user_id, hard_mode=False)
-        if "story_page_2" in normal_ud["items"]:
-            session["is_hard_mode"] = True
-            core.get_user_data(user_id, hard_mode=True)
-            return get_k_text(user_id, "hard_mode_warning"), []
-        else: return "まだその資格はないみたい。", []
-    if "ノーマルに戻る" in content:
-        if is_hard:
-            session["is_hard_mode"] = False
-            return "平和な世界（ノーマルモード）のデータに戻したわよ♪", []
-        return "既にノーマルモードよ。", []
-    norm_content = content.translate(str.maketrans({chr(0xFF10 + i): chr(0x30 + i) for i in range(10)}))
-    c_lower = content.lower()
-    if "技" in content or "moves" in c_lower:
-        session["state"] = STATE_MOVE_MANAGE
-        return _get_move_manage_text(user_id), []
-    if "バトル" in content or "battle" in c_lower or "3" in norm_content:
-        session["state"] = STATE_BATTLE_SELECT
-        if "チャレンジ" in content or "3" in norm_content: return handle_battle_select(user_id, content)
-        mode_text = "【真・キメラマスターロード】" if is_hard else "チャレンジモード"
-        msg = f"{get_k_text(user_id, 'battle_select_title')}\n{get_k_text(user_id, 'battle_opts', mode_text=mode_text)}"
-        if not is_hard:
-            normal_ud = core.get_user_data(user_id, hard_mode=False)
-            if "story_page_2" in normal_ud["items"]: msg += "\n\n★『真なるキメラマスターロード』と言えば、裏世界へ連れて行ってあげるわよ♪"
-        return msg, []
-    if "編成" in content or "ボックス" in content:
-        session["state"] = STATE_BOX
-        return _get_box_menu_text(user_id), []
-    if "装備" in content:
-        session["state"] = STATE_EQUIP
-        return _get_equip_menu_text(user_id), []
-    if "詳細" in content:
-        base_msg = get_k_text(user_id, "status_trainer", lv=ud['trainer_level'], xp=ud['trainer_xp'], money=ud['money'])
-        if is_hard: base_msg += "\n★ Hard Mode ★\n"
-        if not ud['party']: return base_msg + get_k_text(user_id, "no_items_to_use"), []
-        chimera = ud['party'][0]
-        return f"{base_msg}【Lead】\n{core.get_chimera_display_stats(chimera)}", []
-    if "ショップ" in content:
-        session["state"] = STATE_SHOP
-        tlv = ud["trainer_level"]
-        lines = []
-        for k, v in data.ITEMS.items():
-            if v["price"] > 0 and v.get("unlock_rank", 1) <= tlv:
-                lines.append(f"・**{v['name']}**: {v['price']}G")
-        return get_k_text(user_id, "shop_welcome", money=ud['money'], level=tlv, items="\n".join(lines)), []
-    if "回復" in content:
-        core.heal_all_kimeras(ud)
-        core.save_user_data(user_id, ud, hard_mode=is_hard)
-        return get_k_text(user_id, "healed"), []
-    if "図鑑" in content or "dex" in c_lower:
-        if "技" in content or "move" in c_lower:
-             m_srch = re.search(r"(?:技|moves)\s+(.+)", content)
-             if m_srch:
-                 t_move = m_srch.group(1).strip()
-                 found = None
-                 for k, v in data.MOVES.items():
-                     if v["name"] == t_move: found = v; break
-                 if found:
-                     cat = found['category']
-                     return f"📖 **{found['name']}** ({cat})\nType: {found['type']} / Power: {found['power']} / Acc: {found.get('accuracy', 100)}\nEffect: {found.get('desc', 'なし')}", []
-                 return "その技は見つからないわ。", []
-             move_list = sorted([v['name'] for v in data.MOVES.values()])
-             return f"【技図鑑】\n{', '.join(move_list)}\n\n『図鑑 技 10万ボルト』のように検索してね。", []
-        if "アイテム" in content or "item" in c_lower:
-             m_srch = re.search(r"(?:アイテム|items)\s+(.+)", content)
-             if m_srch:
-                 t_item = m_srch.group(1).strip()
-                 found = None
-                 for k, v in data.ITEMS.items():
-                     if v["name"] == t_item: found = v; break
-                 if found:
-                     return f"📖 **{found['name']}** (Price: {found['price']}G)\n{found.get('desc', '効果不明')}", []
-                 return "そのアイテムは見つからないわ。", []
-             item_list = sorted([v['name'] for v in data.ITEMS.values()])
-             return f"【アイテム図鑑】\n{', '.join(item_list)}\n\n『図鑑 アイテム モンスターボール』のように検索してね。", []
-        m_search = re.search(r"(?:図鑑|dex)\s+(.+)", content, re.IGNORECASE)
-        if m_search:
-            target_name = m_search.group(1).strip()
-            found_key = None
-            for k, v in data.BASE_CHIMERAS.items():
-                if v["name"] == target_name or v.get("name_en", "").lower() == target_name.lower():
-                    found_key = k; break
-            if not found_key: return "その名前のキメラはデータにないわね。", []
-            status = ud["dex"].get(found_key)
-            if not status: return "そのキメラはまだ発見していないみたい。", []
-            base = data.BASE_CHIMERAS[found_key]
-            if status == "seen":
-                return f"📖 **No.{found_key} {base['name']}**\n{get_k_text(user_id, 'dex_seen')}", []
-            elif status == "caught":
-                rarity = "★" * base.get('rarity', 1)
-                bs = base['base_stats']
-                desc = base.get('description', 'No Data.')
-                total_bs = sum(bs.values())
-                msg = (f"━━━━━━━━━━━━━━━\n📖 **No.{found_key} {base['name']}** {rarity}\n━━━━━━━━━━━━━━━\n"
-                       f"Type: {base['type']}\nAbility: **{base['ability']}**\n-------------------------------\n{desc}\n-------------------------------\n"
-                       f"HP:{bs['hp']} Atk:{bs['atk']} Def:{bs['def']} SpA:{bs['spa']} SpD:{bs['spd']} Spe:{bs['spe']} (Total:{total_bs})\n━━━━━━━━━━━━━━━")
-                return msg, []
-        total = len(data.BASE_CHIMERAS)
-        caught = sum(1 for v in ud["dex"].values() if v == "caught")
-        seen = len(ud["dex"])
-        lines = [f"【Dex】 Caught: {caught}/{total} / Seen: {seen}/{total}"]
-        for k in sorted(data.BASE_CHIMERAS.keys()):
-            base = data.BASE_CHIMERAS[k]
-            status = ud["dex"].get(k)
-            if status == "caught": mark = "★"; dname = base['name']
-            elif status == "seen": mark = "○"; dname = base['name']
-            else: mark = "・"; dname = "？？？"
-            lines.append(f"{mark} {dname}")
-        return "\n".join(lines) + "\n" + get_k_text(user_id, 'dex_help'), []
-    if "アイテム" in content:
-        items_txt = ", ".join([f"{data.ITEMS[k]['name']}x{v}" for k, v in ud['items'].items()])
-        return get_k_text(user_id, "items_list", items=items_txt), []
-    m = re.match(r"(.+)(?:を使う| use)", content, re.IGNORECASE)
-    if m:
-        item_name = m.group(1).replace("use ", "").strip()
-        item_key = next((k for k, v in data.ITEMS.items() if v["name"] == item_name), None)
-        if item_key:
-            if not ud["party"]: return get_k_text(user_id, "no_items_to_use"), []
-            res = core.apply_item_effect_logic(ud, item_key, ud["party"][0])
-            core.save_user_data(user_id, ud, hard_mode=is_hard)
-            return res, []
-    new_unlocks = logic.check_all_achievements(user_id)
-    extra_msg = ""
-    if new_unlocks: extra_msg = "\n" + "\n".join(new_unlocks)
-    return f"{get_k_text(user_id, 'menu_title')}\n{get_k_text(user_id, 'menu_opts')}\n{get_k_text(user_id, 'menu_prompt')}{extra_msg}", []
 
 def process_kimera_command(user_id, content):
     session = get_session(user_id)
