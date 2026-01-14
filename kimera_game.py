@@ -37,7 +37,7 @@ BATTLE_SUB_WAIT = "wait"
 KIMERA_SESSIONS = {}
 PVP_CHALLENGES = {}
 PVP_BATTLES = {}
-RAID_SESSIONS = {} 
+RAID_SESSIONS = {} # {raid_id: {host, members:[], state, boss, turn_inputs, turn_count}}
 
 # --- テキスト辞書 (Localization) ---
 GAME_TEXT = {
@@ -73,7 +73,10 @@ GAME_TEXT = {
         "jp": "1. **確保ゾーン** (野生捕獲)\n2. **レベル上げゾーン** (CPU戦)\n3. **{mode_text}** (黄金裔13人抜き)\n4. **対戦ゾーン** (PvP)\n5. **実験場** (DPS/検証)\n6. **レイドバトル** (協力プレイ)",
         "en": "1. **Catch Zone** (Wild)\n2. **Training Zone** (CPU)\n3. **{mode_text}** (Challenge)\n4. **PvP Zone** (Versus)\n5. **Lab** (DPS/Test)\n6. **Raid Battle** (Co-op)"
     },
-    "hard_mode_warning": {"jp": "【警告: 真なるキメラマスターロード解放】...", "en": "【Warning: True Kimera Master Road Unlocked】..."},
+    "hard_mode_warning": {
+        "jp": "【警告: 真なるキメラマスターロード解放】\n\n世界が反転し、黄金裔たちの真の力が解放されたわ……。\nこれより『ハードモード』のセーブデータに切り替えるわね。\n敵は神の個体値を持ち、全力で牙を剥くわ。\n準備はいい？ 死にゲーの始まりよ♪",
+        "en": "【Warning: True Kimera Master Road Unlocked】\n\nSwitching to 'Hard Mode'. Enemies use full power with max stats.\nPrepare for death♪"
+    },
     "raid_menu": {"jp": "【レイドバトル】\n最大4人で強力なボスに挑むわよ！\n報酬は3V確定の強力なキメラ！\n\n・『募集』: 部屋を作る\n・『参加 [ID]』: 部屋に入る\n・『戻る』", "en": "【Raid Battle】\nCo-op with 4 players!\nRewards: 3V Chimera!\n\n・'Create': Host room\n・'Join [ID]': Join room\n・'Back'"},
     "raid_created": {"jp": "レイド部屋を作成したわ！ (ID: **{id}**)\n他の人は『参加 {id}』と言ってね。\n集まったら『開始』よ！", "en": "Raid room created! (ID: **{id}**)\nOthers say 'Join {id}'.\nSay 'Start' when ready!"},
     "raid_joined": {"jp": "レイド部屋 {id} に参加したわ！\n現在の参加者: {members}", "en": "Joined raid {id}!\nMembers: {members}"},
@@ -237,11 +240,15 @@ def _distribute_raid_rewards(sess):
             rare_txt = "✨ **特別個体ゲット！** (専用技・特性持ち)"
         core.update_chimera_stats(reward_c)
         reward_c["current_hp"] = reward_c["stats"]["max_hp"]
-        ud = core.get_user_data(uid, hard_mode=False)
+        
+        # 修正: 正しいモードのデータを読み書き
+        is_hard = KIMERA_SESSIONS.get(uid, {}).get("is_hard_mode", False)
+        ud = core.get_user_data(uid, hard_mode=is_hard)
+        
         if len(ud["party"]) < 3: ud["party"].append(reward_c)
         else: ud["box"].append(reward_c)
         core.register_dex(ud, boss_base_id, caught=True)
-        core.save_user_data(uid, ud, hard_mode=False)
+        core.save_user_data(uid, ud, hard_mode=is_hard)
         msgs.append(f"<@{uid}>: {data.BASE_CHIMERAS[boss_base_id]['name']} を獲得！ {rare_txt}")
     return msgs
 
@@ -786,6 +793,7 @@ def _execute_raid_turn(raid_id):
     sess["turn_count"] += 1
     logs = [f"--- Turn {sess['turn_count']} ---"]
     actions = []
+    
     for uid in members:
         ud = core.get_user_data(uid, hard_mode=KIMERA_SESSIONS[uid].get("is_hard_mode",False))
         pc = ud["party"][0]
@@ -794,9 +802,11 @@ def _execute_raid_turn(raid_id):
             speed = pc["stats"]["spe"]
             if cmd["type"] == "cheer": speed = 9999
             actions.append({"uid": uid, "unit": pc, "cmd": cmd, "speed": speed, "is_player": True})
+            
     boss_speed = boss["stats"]["spe"]
     actions.append({"unit": boss, "cmd": {"type": "boss_atk"}, "speed": boss_speed, "is_player": False})
     actions.sort(key=lambda x: x["speed"], reverse=True)
+    
     for act in actions:
         if act["is_player"]:
             unit = act["unit"]
@@ -809,18 +819,31 @@ def _execute_raid_turn(raid_id):
                 if eff["type"] == "buff_all":
                     stat = eff["stat"]
                     for m_uid in members:
-                        m_ud = core.get_user_data(m_uid, hard_mode=False)
+                        m_ud = core.get_user_data(m_uid, hard_mode=False) # Temp read, update later
                         m_pc = m_ud["party"][0]
-                        if m_pc["current_hp"] > 0: m_pc["stat_stages"][stat] = min(6, m_pc["stat_stages"][stat] + 1)
+                        if m_pc["current_hp"] > 0: 
+                            pass # Actual stat update should happen on save context, here just logs
                     logs.append(eff_data["msg"])
-                elif eff["type"] == "heal_all":
+                    # Apply to session members in memory/next save
                     for m_uid in members:
-                        m_ud = core.get_user_data(m_uid, hard_mode=False)
+                        is_hard = KIMERA_SESSIONS[m_uid].get("is_hard_mode", False)
+                        m_ud = core.get_user_data(m_uid, hard_mode=is_hard)
+                        m_pc = m_ud["party"][0]
+                        if m_pc["current_hp"] > 0: 
+                            m_pc["stat_stages"][stat] = min(6, m_pc["stat_stages"][stat] + 1)
+                        core.save_user_data(m_uid, m_ud, hard_mode=is_hard)
+
+                elif eff["type"] == "heal_all":
+                    logs.append(eff_data["msg"])
+                    for m_uid in members:
+                        is_hard = KIMERA_SESSIONS[m_uid].get("is_hard_mode", False)
+                        m_ud = core.get_user_data(m_uid, hard_mode=is_hard)
                         m_pc = m_ud["party"][0]
                         if m_pc["current_hp"] > 0:
                             rec = int(m_pc["stats"]["max_hp"] * eff["percent"])
                             m_pc["current_hp"] = min(m_pc["stats"]["max_hp"], m_pc["current_hp"] + rec)
-                    logs.append(eff_data["msg"])
+                        core.save_user_data(m_uid, m_ud, hard_mode=is_hard)
+
             elif cmd["type"] == "move" and unit["current_hp"] > 0:
                 m_id = cmd["value"]
                 m_data = data.MOVES[m_id]
@@ -845,15 +868,18 @@ def _execute_raid_turn(raid_id):
                 targets = []
                 if target_type == "AllEnemies":
                     for m_uid in members:
-                        m_ud = core.get_user_data(m_uid, hard_mode=False)
-                        if m_ud["party"][0]["current_hp"] > 0: targets.append(m_ud["party"][0])
+                        is_hard = KIMERA_SESSIONS[m_uid].get("is_hard_mode", False)
+                        m_ud = core.get_user_data(m_uid, hard_mode=is_hard)
+                        if m_ud["party"][0]["current_hp"] > 0: targets.append((m_uid, m_ud["party"][0]))
                 else:
                     alive = []
                     for m_uid in members:
-                        m_ud = core.get_user_data(m_uid, hard_mode=False)
-                        if m_ud["party"][0]["current_hp"] > 0: alive.append(m_ud["party"][0])
+                        is_hard = KIMERA_SESSIONS[m_uid].get("is_hard_mode", False)
+                        m_ud = core.get_user_data(m_uid, hard_mode=is_hard)
+                        if m_ud["party"][0]["current_hp"] > 0: alive.append((m_uid, m_ud["party"][0]))
                     if alive: targets.append(random.choice(alive))
-                for t in targets:
+                
+                for t_uid, t in targets:
                     power = m_data["power"]
                     if m_data["category"] == "Physical":
                         atk = boss["stats"]["atk"]
@@ -862,6 +888,7 @@ def _execute_raid_turn(raid_id):
                         atk = boss["stats"]["spa"]
                         defense = t["stats"]["spd"] * (1.0 + 0.5 * t["stat_stages"]["spd"])
                     else: atk = 0; defense = 1
+                    
                     if m_data["category"] != "Status":
                         dmg = int((power * atk / defense) * (boss["level"] / 50 + 2) * 0.5)
                         t["current_hp"] -= dmg
@@ -870,6 +897,13 @@ def _execute_raid_turn(raid_id):
                             t["current_hp"] = 0
                             logs.append(f"{t['nickname']} は倒れた！ (次回から応援のみ可能)")
                     else: logs.append(f"{t['nickname']} は {m_data.get('desc','')} を受けた！")
+                    
+                    # Apply damage to DB
+                    is_hard = KIMERA_SESSIONS[t_uid].get("is_hard_mode", False)
+                    t_ud = core.get_user_data(t_uid, hard_mode=is_hard)
+                    t_ud["party"][0]["current_hp"] = t["current_hp"]
+                    core.save_user_data(t_uid, t_ud, hard_mode=is_hard)
+
     if boss["current_hp"] <= 0:
         reward_msgs = _distribute_raid_rewards(sess)
         final_log = "\n".join(logs) + "\n\n" + "\n".join(reward_msgs)
@@ -877,34 +911,42 @@ def _execute_raid_turn(raid_id):
         for uid in members:
             msgs.append((uid, final_log + "\n(メニューに戻りました)"))
             KIMERA_SESSIONS[uid]["state"] = STATE_MENU
-            ud = core.get_user_data(uid, hard_mode=False)
+            is_hard = KIMERA_SESSIONS[uid].get("is_hard_mode", False)
+            ud = core.get_user_data(uid, hard_mode=is_hard)
             ud["party"][0]["current_hp"] = ud["party"][0]["stats"]["max_hp"]
-            core.save_user_data(uid, ud, hard_mode=False)
+            core.save_user_data(uid, ud, hard_mode=is_hard)
         del RAID_SESSIONS[raid_id]
         return msgs[0][1], msgs[1:]
+
     all_dead = True
     for m_uid in members:
-        m_ud = core.get_user_data(m_uid, hard_mode=False)
+        is_hard = KIMERA_SESSIONS[m_uid].get("is_hard_mode", False)
+        m_ud = core.get_user_data(m_uid, hard_mode=is_hard)
         if m_ud["party"][0]["current_hp"] > 0: all_dead = False; break
+            
     if all_dead:
         final_log = "\n".join(logs) + "\n\n💀 **全滅しました...**"
         msgs = []
         for uid in members:
             msgs.append((uid, final_log))
             KIMERA_SESSIONS[uid]["state"] = STATE_MENU
-            core.heal_all_kimeras(core.get_user_data(uid, hard_mode=False))
+            is_hard = KIMERA_SESSIONS[uid].get("is_hard_mode", False)
+            core.heal_all_kimeras(core.get_user_data(uid, hard_mode=is_hard))
         del RAID_SESSIONS[raid_id]
         return msgs[0][1], msgs[1:]
+
     final_log = "\n".join(logs)
     msgs = []
     for uid in members:
-        ud = core.get_user_data(uid, hard_mode=False)
+        is_hard = KIMERA_SESSIONS[uid].get("is_hard_mode", False)
+        ud = core.get_user_data(uid, hard_mode=is_hard)
         pc = ud["party"][0]
         status_line = f"あなた: {pc['nickname']} HP: {pc['current_hp']}/{pc['stats']['max_hp']}"
         boss_line = f"BOSS: {boss['nickname']} HP: {boss['current_hp']}/{boss['stats']['max_hp']}"
         prompt = get_k_text(uid, "cmd_prompt") if pc["current_hp"] > 0 else get_k_text(uid, "raid_dead")
         msgs.append((uid, f"{final_log}\n\n{boss_line}\n{status_line}\n{prompt}"))
-        core.save_user_data(uid, ud, hard_mode=False)
+        core.save_user_data(uid, ud, hard_mode=is_hard)
+
     return msgs[0][1], msgs[1:]
 
 def _start_raid_battle(raid_id):
@@ -912,7 +954,8 @@ def _start_raid_battle(raid_id):
     sess["state"] = "battle"
     boss_base = random.choice(data.RAID_BOSS_CANDIDATES)
     boss = core.create_chimera_instance(boss_base, level=100)
-    boss["stats"]["max_hp"] *= 15 
+    # Boss HP adjustment: 10000
+    boss["stats"]["max_hp"] = 10000 
     boss["current_hp"] = boss["stats"]["max_hp"]
     for k in ["atk", "def", "spa", "spd", "spe"]: boss["stats"][k] = int(boss["stats"][k] * 2.0)
     boss["moves"] = random.sample(list(data.RAID_MOVES.keys()), 2) + boss["moves"][:2]
@@ -930,148 +973,6 @@ def _start_raid_battle(raid_id):
     return start_msg + "\n" + get_k_text(sess["host"], "cmd_prompt"), msgs[1:]
 
 # --- メインハンドラ (依存関数が定義済みなので安全) ---
-
-def handle_menu(user_id, content):
-    session = KIMERA_SESSIONS[user_id]
-    is_hard = session.get("is_hard_mode", False)
-    ud = core.get_user_data(user_id, hard_mode=is_hard)
-    if content == "デバッグ解放":
-        normal_ud = core.get_user_data(user_id, hard_mode=False)
-        normal_ud["items"]["story_page_2"] = 1
-        core.save_user_data(user_id, normal_ud, hard_mode=False)
-        return "【Debug】 Added 'story_page_2'.", []
-    if content == "デバッグ封印":
-        normal_ud = core.get_user_data(user_id, hard_mode=False)
-        if "story_page_2" in normal_ud["items"]: del normal_ud["items"]["story_page_2"]
-        core.save_user_data(user_id, normal_ud, hard_mode=False)
-        return "【Debug】 Removed 'story_page_2'.", []
-    if "真なるキメラマスターロード" in content:
-        if is_hard: return "既にハードモードよ。", []
-        normal_ud = core.get_user_data(user_id, hard_mode=False)
-        if "story_page_2" in normal_ud["items"]:
-            session["is_hard_mode"] = True
-            core.get_user_data(user_id, hard_mode=True)
-            return get_k_text(user_id, "hard_mode_warning"), []
-        else: return "まだその資格はないみたい。", []
-    if "ノーマルに戻る" in content:
-        if is_hard:
-            session["is_hard_mode"] = False
-            return "平和な世界（ノーマルモード）のデータに戻したわよ♪", []
-        return "既にノーマルモードよ。", []
-    norm_content = content.translate(str.maketrans({chr(0xFF10 + i): chr(0x30 + i) for i in range(10)}))
-    c_lower = content.lower()
-    if "技" in content or "moves" in c_lower:
-        session["state"] = STATE_MOVE_MANAGE
-        return _get_move_manage_text(user_id), []
-    if "バトル" in content or "battle" in c_lower or "3" in norm_content:
-        session["state"] = STATE_BATTLE_SELECT
-        if "チャレンジ" in content or "3" in norm_content: return handle_battle_select(user_id, content)
-        mode_text = "【真・キメラマスターロード】" if is_hard else "チャレンジモード"
-        msg = f"{get_k_text(user_id, 'battle_select_title')}\n{get_k_text(user_id, 'battle_opts', mode_text=mode_text)}"
-        if not is_hard:
-            normal_ud = core.get_user_data(user_id, hard_mode=False)
-            if "story_page_2" in normal_ud["items"]: msg += "\n\n★『真なるキメラマスターロード』と言えば、裏世界へ連れて行ってあげるわよ♪"
-        return msg, []
-    if "編成" in content or "ボックス" in content:
-        session["state"] = STATE_BOX
-        return _get_box_menu_text(user_id), []
-    if "装備" in content:
-        session["state"] = STATE_EQUIP
-        return _get_equip_menu_text(user_id), []
-    if "詳細" in content:
-        base_msg = get_k_text(user_id, "status_trainer", lv=ud['trainer_level'], xp=ud['trainer_xp'], money=ud['money'])
-        if is_hard: base_msg += "\n★ Hard Mode ★\n"
-        if not ud['party']: return base_msg + get_k_text(user_id, "no_items_to_use"), []
-        chimera = ud['party'][0]
-        return f"{base_msg}【Lead】\n{core.get_chimera_display_stats(chimera)}", []
-    if "ショップ" in content:
-        session["state"] = STATE_SHOP
-        tlv = ud["trainer_level"]
-        lines = []
-        for k, v in data.ITEMS.items():
-            if v["price"] > 0 and v.get("unlock_rank", 1) <= tlv:
-                lines.append(f"・**{v['name']}**: {v['price']}G")
-        return get_k_text(user_id, "shop_welcome", money=ud['money'], level=tlv, items="\n".join(lines)), []
-    if "回復" in content:
-        core.heal_all_kimeras(ud)
-        core.save_user_data(user_id, ud, hard_mode=is_hard)
-        return get_k_text(user_id, "healed"), []
-    if "図鑑" in content or "dex" in c_lower:
-        if "技" in content or "move" in c_lower:
-             m_srch = re.search(r"(?:技|moves)\s+(.+)", content)
-             if m_srch:
-                 t_move = m_srch.group(1).strip()
-                 found = None
-                 for k, v in data.MOVES.items():
-                     if v["name"] == t_move: found = v; break
-                 if found:
-                     cat = found['category']
-                     return f"📖 **{found['name']}** ({cat})\nType: {found['type']} / Power: {found['power']} / Acc: {found.get('accuracy', 100)}\nEffect: {found.get('desc', 'なし')}", []
-                 return "その技は見つからないわ。", []
-             move_list = sorted([v['name'] for v in data.MOVES.values()])
-             return f"【技図鑑】\n{', '.join(move_list)}\n\n『図鑑 技 10万ボルト』のように検索してね。", []
-        if "アイテム" in content or "item" in c_lower:
-             m_srch = re.search(r"(?:アイテム|items)\s+(.+)", content)
-             if m_srch:
-                 t_item = m_srch.group(1).strip()
-                 found = None
-                 for k, v in data.ITEMS.items():
-                     if v["name"] == t_item: found = v; break
-                 if found:
-                     return f"📖 **{found['name']}** (Price: {found['price']}G)\n{found.get('desc', '効果不明')}", []
-                 return "そのアイテムは見つからないわ。", []
-             item_list = sorted([v['name'] for v in data.ITEMS.values()])
-             return f"【アイテム図鑑】\n{', '.join(item_list)}\n\n『図鑑 アイテム モンスターボール』のように検索してね。", []
-        m_search = re.search(r"(?:図鑑|dex)\s+(.+)", content, re.IGNORECASE)
-        if m_search:
-            target_name = m_search.group(1).strip()
-            found_key = None
-            for k, v in data.BASE_CHIMERAS.items():
-                if v["name"] == target_name or v.get("name_en", "").lower() == target_name.lower():
-                    found_key = k; break
-            if not found_key: return "その名前のキメラはデータにないわね。", []
-            status = ud["dex"].get(found_key)
-            if not status: return "そのキメラはまだ発見していないみたい。", []
-            base = data.BASE_CHIMERAS[found_key]
-            if status == "seen":
-                return f"📖 **No.{found_key} {base['name']}**\n{get_k_text(user_id, 'dex_seen')}", []
-            elif status == "caught":
-                rarity = "★" * base.get('rarity', 1)
-                bs = base['base_stats']
-                desc = base.get('description', 'No Data.')
-                total_bs = sum(bs.values())
-                msg = (f"━━━━━━━━━━━━━━━\n📖 **No.{found_key} {base['name']}** {rarity}\n━━━━━━━━━━━━━━━\n"
-                       f"Type: {base['type']}\nAbility: **{base['ability']}**\n-------------------------------\n{desc}\n-------------------------------\n"
-                       f"HP:{bs['hp']} Atk:{bs['atk']} Def:{bs['def']} SpA:{bs['spa']} SpD:{bs['spd']} Spe:{bs['spe']} (Total:{total_bs})\n━━━━━━━━━━━━━━━")
-                return msg, []
-        total = len(data.BASE_CHIMERAS)
-        caught = sum(1 for v in ud["dex"].values() if v == "caught")
-        seen = len(ud["dex"])
-        lines = [f"【Dex】 Caught: {caught}/{total} / Seen: {seen}/{total}"]
-        for k in sorted(data.BASE_CHIMERAS.keys()):
-            base = data.BASE_CHIMERAS[k]
-            status = ud["dex"].get(k)
-            if status == "caught": mark = "★"; dname = base['name']
-            elif status == "seen": mark = "○"; dname = base['name']
-            else: mark = "・"; dname = "？？？"
-            lines.append(f"{mark} {dname}")
-        return "\n".join(lines) + "\n" + get_k_text(user_id, 'dex_help'), []
-    if "アイテム" in content:
-        items_txt = ", ".join([f"{data.ITEMS[k]['name']}x{v}" for k, v in ud['items'].items()])
-        return get_k_text(user_id, "items_list", items=items_txt), []
-    m = re.match(r"(.+)(?:を使う| use)", content, re.IGNORECASE)
-    if m:
-        item_name = m.group(1).replace("use ", "").strip()
-        item_key = next((k for k, v in data.ITEMS.items() if v["name"] == item_name), None)
-        if item_key:
-            if not ud["party"]: return get_k_text(user_id, "no_items_to_use"), []
-            res = core.apply_item_effect_logic(ud, item_key, ud["party"][0])
-            core.save_user_data(user_id, ud, hard_mode=is_hard)
-            return res, []
-    new_unlocks = logic.check_all_achievements(user_id)
-    extra_msg = ""
-    if new_unlocks: extra_msg = "\n" + "\n".join(new_unlocks)
-    return f"{get_k_text(user_id, 'menu_title')}\n{get_k_text(user_id, 'menu_opts')}\n{get_k_text(user_id, 'menu_prompt')}{extra_msg}", []
 
 def _get_move_manage_text(user_id):
     session = KIMERA_SESSIONS[user_id]
@@ -1532,6 +1433,148 @@ def handle_pvp_action(user_id, content):
             return _check_pvp_turn_ready(battle)
         return get_k_text(user_id, "cmd_prompt"), []
     return "...", []
+
+def handle_menu(user_id, content):
+    session = KIMERA_SESSIONS[user_id]
+    is_hard = session.get("is_hard_mode", False)
+    ud = core.get_user_data(user_id, hard_mode=is_hard)
+    if content == "デバッグ解放":
+        normal_ud = core.get_user_data(user_id, hard_mode=False)
+        normal_ud["items"]["story_page_2"] = 1
+        core.save_user_data(user_id, normal_ud, hard_mode=False)
+        return "【Debug】 Added 'story_page_2'.", []
+    if content == "デバッグ封印":
+        normal_ud = core.get_user_data(user_id, hard_mode=False)
+        if "story_page_2" in normal_ud["items"]: del normal_ud["items"]["story_page_2"]
+        core.save_user_data(user_id, normal_ud, hard_mode=False)
+        return "【Debug】 Removed 'story_page_2'.", []
+    if "真なるキメラマスターロード" in content:
+        if is_hard: return "既にハードモードよ。", []
+        normal_ud = core.get_user_data(user_id, hard_mode=False)
+        if "story_page_2" in normal_ud["items"]:
+            session["is_hard_mode"] = True
+            core.get_user_data(user_id, hard_mode=True)
+            return get_k_text(user_id, "hard_mode_warning"), []
+        else: return "まだその資格はないみたい。", []
+    if "ノーマルに戻る" in content:
+        if is_hard:
+            session["is_hard_mode"] = False
+            return "平和な世界（ノーマルモード）のデータに戻したわよ♪", []
+        return "既にノーマルモードよ。", []
+    norm_content = content.translate(str.maketrans({chr(0xFF10 + i): chr(0x30 + i) for i in range(10)}))
+    c_lower = content.lower()
+    if "技" in content or "moves" in c_lower:
+        session["state"] = STATE_MOVE_MANAGE
+        return _get_move_manage_text(user_id), []
+    if "バトル" in content or "battle" in c_lower or "3" in norm_content:
+        session["state"] = STATE_BATTLE_SELECT
+        if "チャレンジ" in content or "3" in norm_content: return handle_battle_select(user_id, content)
+        mode_text = "【真・キメラマスターロード】" if is_hard else "チャレンジモード"
+        msg = f"{get_k_text(user_id, 'battle_select_title')}\n{get_k_text(user_id, 'battle_opts', mode_text=mode_text)}"
+        if not is_hard:
+            normal_ud = core.get_user_data(user_id, hard_mode=False)
+            if "story_page_2" in normal_ud["items"]: msg += "\n\n★『真なるキメラマスターロード』と言えば、裏世界へ連れて行ってあげるわよ♪"
+        return msg, []
+    if "編成" in content or "ボックス" in content:
+        session["state"] = STATE_BOX
+        return _get_box_menu_text(user_id), []
+    if "装備" in content:
+        session["state"] = STATE_EQUIP
+        return _get_equip_menu_text(user_id), []
+    if "詳細" in content:
+        base_msg = get_k_text(user_id, "status_trainer", lv=ud['trainer_level'], xp=ud['trainer_xp'], money=ud['money'])
+        if is_hard: base_msg += "\n★ Hard Mode ★\n"
+        if not ud['party']: return base_msg + get_k_text(user_id, "no_items_to_use"), []
+        chimera = ud['party'][0]
+        return f"{base_msg}【Lead】\n{core.get_chimera_display_stats(chimera)}", []
+    if "ショップ" in content:
+        session["state"] = STATE_SHOP
+        tlv = ud["trainer_level"]
+        lines = []
+        for k, v in data.ITEMS.items():
+            if v["price"] > 0 and v.get("unlock_rank", 1) <= tlv:
+                lines.append(f"・**{v['name']}**: {v['price']}G")
+        return get_k_text(user_id, "shop_welcome", money=ud['money'], level=tlv, items="\n".join(lines)), []
+    if "回復" in content:
+        core.heal_all_kimeras(ud)
+        core.save_user_data(user_id, ud, hard_mode=is_hard)
+        return get_k_text(user_id, "healed"), []
+    if "図鑑" in content or "dex" in c_lower:
+        if "技" in content or "move" in c_lower:
+             m_srch = re.search(r"(?:技|moves)\s+(.+)", content)
+             if m_srch:
+                 t_move = m_srch.group(1).strip()
+                 found = None
+                 for k, v in data.MOVES.items():
+                     if v["name"] == t_move: found = v; break
+                 if found:
+                     cat = found['category']
+                     return f"📖 **{found['name']}** ({cat})\nType: {found['type']} / Power: {found['power']} / Acc: {found.get('accuracy', 100)}\nEffect: {found.get('desc', 'なし')}", []
+                 return "その技は見つからないわ。", []
+             move_list = sorted([v['name'] for v in data.MOVES.values()])
+             return f"【技図鑑】\n{', '.join(move_list)}\n\n『図鑑 技 10万ボルト』のように検索してね。", []
+        if "アイテム" in content or "item" in c_lower:
+             m_srch = re.search(r"(?:アイテム|items)\s+(.+)", content)
+             if m_srch:
+                 t_item = m_srch.group(1).strip()
+                 found = None
+                 for k, v in data.ITEMS.items():
+                     if v["name"] == t_item: found = v; break
+                 if found:
+                     return f"📖 **{found['name']}** (Price: {found['price']}G)\n{found.get('desc', '効果不明')}", []
+                 return "そのアイテムは見つからないわ。", []
+             item_list = sorted([v['name'] for v in data.ITEMS.values()])
+             return f"【アイテム図鑑】\n{', '.join(item_list)}\n\n『図鑑 アイテム モンスターボール』のように検索してね。", []
+        m_search = re.search(r"(?:図鑑|dex)\s+(.+)", content, re.IGNORECASE)
+        if m_search:
+            target_name = m_search.group(1).strip()
+            found_key = None
+            for k, v in data.BASE_CHIMERAS.items():
+                if v["name"] == target_name or v.get("name_en", "").lower() == target_name.lower():
+                    found_key = k; break
+            if not found_key: return "その名前のキメラはデータにないわね。", []
+            status = ud["dex"].get(found_key)
+            if not status: return "そのキメラはまだ発見していないみたい。", []
+            base = data.BASE_CHIMERAS[found_key]
+            if status == "seen":
+                return f"📖 **No.{found_key} {base['name']}**\n{get_k_text(user_id, 'dex_seen')}", []
+            elif status == "caught":
+                rarity = "★" * base.get('rarity', 1)
+                bs = base['base_stats']
+                desc = base.get('description', 'No Data.')
+                total_bs = sum(bs.values())
+                msg = (f"━━━━━━━━━━━━━━━\n📖 **No.{found_key} {base['name']}** {rarity}\n━━━━━━━━━━━━━━━\n"
+                       f"Type: {base['type']}\nAbility: **{base['ability']}**\n-------------------------------\n{desc}\n-------------------------------\n"
+                       f"HP:{bs['hp']} Atk:{bs['atk']} Def:{bs['def']} SpA:{bs['spa']} SpD:{bs['spd']} Spe:{bs['spe']} (Total:{total_bs})\n━━━━━━━━━━━━━━━")
+                return msg, []
+        total = len(data.BASE_CHIMERAS)
+        caught = sum(1 for v in ud["dex"].values() if v == "caught")
+        seen = len(ud["dex"])
+        lines = [f"【Dex】 Caught: {caught}/{total} / Seen: {seen}/{total}"]
+        for k in sorted(data.BASE_CHIMERAS.keys()):
+            base = data.BASE_CHIMERAS[k]
+            status = ud["dex"].get(k)
+            if status == "caught": mark = "★"; dname = base['name']
+            elif status == "seen": mark = "○"; dname = base['name']
+            else: mark = "・"; dname = "？？？"
+            lines.append(f"{mark} {dname}")
+        return "\n".join(lines) + "\n" + get_k_text(user_id, 'dex_help'), []
+    if "アイテム" in content:
+        items_txt = ", ".join([f"{data.ITEMS[k]['name']}x{v}" for k, v in ud['items'].items()])
+        return get_k_text(user_id, "items_list", items=items_txt), []
+    m = re.match(r"(.+)(?:を使う| use)", content, re.IGNORECASE)
+    if m:
+        item_name = m.group(1).replace("use ", "").strip()
+        item_key = next((k for k, v in data.ITEMS.items() if v["name"] == item_name), None)
+        if item_key:
+            if not ud["party"]: return get_k_text(user_id, "no_items_to_use"), []
+            res = core.apply_item_effect_logic(ud, item_key, ud["party"][0])
+            core.save_user_data(user_id, ud, hard_mode=is_hard)
+            return res, []
+    new_unlocks = logic.check_all_achievements(user_id)
+    extra_msg = ""
+    if new_unlocks: extra_msg = "\n" + "\n".join(new_unlocks)
+    return f"{get_k_text(user_id, 'menu_title')}\n{get_k_text(user_id, 'menu_opts')}\n{get_k_text(user_id, 'menu_prompt')}{extra_msg}", []
 
 def process_kimera_command(user_id, content):
     session = get_session(user_id)
