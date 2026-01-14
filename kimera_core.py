@@ -3,6 +3,7 @@ import json
 import random
 import math
 from pathlib import Path
+import kimera_data as data
 from kimera_data import BASE_CHIMERAS, MOVES, ITEMS, TYPES, TYPE_CHART
 
 # データ保存ディレクトリ
@@ -49,19 +50,19 @@ def get_user_data(user_id, hard_mode=False):
         return initial_data
 
     try:
-        data = json.loads(file_path.read_text(encoding="utf-8"))
+        data_json = json.loads(file_path.read_text(encoding="utf-8"))
         # マイグレーション
-        if "items" not in data: data["items"] = {}
-        if "money" not in data: data["money"] = 1000
-        if "box" not in data: data["box"] = []
-        if "trainer_level" not in data: data["trainer_level"] = 1
-        if "challenge_stage" not in data: data["challenge_stage"] = 1
-        if "dex" not in data: data["dex"] = {}
-        if "titles" not in data: data["titles"] = []
-        data["is_hard_mode"] = hard_mode
+        if "items" not in data_json: data_json["items"] = {}
+        if "money" not in data_json: data_json["money"] = 1000
+        if "box" not in data_json: data_json["box"] = []
+        if "trainer_level" not in data_json: data_json["trainer_level"] = 1
+        if "challenge_stage" not in data_json: data_json["challenge_stage"] = 1
+        if "dex" not in data_json: data_json["dex"] = {}
+        if "titles" not in data_json: data_json["titles"] = []
+        data_json["is_hard_mode"] = hard_mode
         
         # キメラデータのマイグレーション (learned_movesの追加)
-        for c in data.get("party", []) + data.get("box", []):
+        for c in data_json.get("party", []) + data_json.get("box", []):
             if "learned_moves" not in c:
                 base = BASE_CHIMERAS.get(c["base_id"])
                 if base:
@@ -71,7 +72,7 @@ def get_user_data(user_id, hard_mode=False):
                         if m not in c["learned_moves"]:
                             c["learned_moves"].append(m)
 
-        return data
+        return data_json
     except Exception:
         return get_user_data(user_id, hard_mode)
 
@@ -93,7 +94,7 @@ def heal_all_kimeras(ud):
     for c in ud["party"] + ud["box"]:
         c["current_hp"] = c["stats"]["max_hp"]
         c["status_condition"] = None
-        c["stat_stages"] = {"atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0}
+        c["stat_stages"] = {"atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0, "acc": 0, "eva": 0}
         c["battle_state"] = {} # バトル中の一時状態クリア
         c["form"] = None # 変身解除
 
@@ -190,8 +191,10 @@ def apply_item_effect_logic(ud, item_key, target_chimera):
             return "その薬じゃ治らないみたい。"
 
     elif item["effect_type"] == "exp":
-        limit = get_level_limit(ud)
-        if target_chimera["level"] >= limit: return "これ以上は育たないわ。"
+        # 修正: ここで ud を渡す
+        lv_msg = level_up_chimera(target_chimera, ud=ud, limit=None)
+        if not lv_msg:
+             return "これ以上は育たないわ。"
 
         exp_val = item["value"]
         is_hard = ud.get("is_hard_mode", False)
@@ -200,11 +203,10 @@ def apply_item_effect_logic(ud, item_key, target_chimera):
         target_chimera["xp"] += exp_val
         msg = f"{target_chimera['nickname']} に経験値 {exp_val} をあげた！"
         
-        # level_up_chimera に ud を渡す
         while target_chimera["xp"] >= target_chimera["next_xp"]:
-            lv_msg = level_up_chimera(target_chimera, ud=ud, is_hard_mode=is_hard)
-            if not lv_msg: break # 上限到達
-            msg += "\n" + lv_msg
+            lv_up_res = level_up_chimera(target_chimera, ud=ud)
+            if not lv_up_res: break # 上限到達
+            msg += "\n" + lv_up_res
         consumed = True
 
     if consumed:
@@ -326,10 +328,8 @@ def create_chimera_instance(base_id, level=5, nickname=None, held_item=None, fix
     for lv, mid in base["learnset"].items():
         if lv <= level: learned_moves.append(mid)
     
-    # Default move if none learned
     if not learned_moves: learned_moves = ["tackle"]
     
-    # Active moves (max 4) - take last 4 learned
     active_moves = learned_moves[-4:]
 
     instance = {
@@ -343,13 +343,13 @@ def create_chimera_instance(base_id, level=5, nickname=None, held_item=None, fix
         "ivs": generate_ivs(fixed_iv),
         "stats": {},
         "moves": active_moves,
-        "learned_moves": learned_moves, # Added: All known moves
+        "learned_moves": learned_moves,
         "held_item": held_item,
         "friendship": 0,
         "rarity": base.get("rarity", 1),
         
         "status_condition": None,
-        "stat_stages": {"atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
+        "stat_stages": {"atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0, "acc": 0, "eva": 0},
         "battle_state": {},
         "form": None,
     }
@@ -392,16 +392,18 @@ def get_chimera_display_stats(instance):
         f"(『技』と言えば、習得済みの技を入れ替えられるわよ♪)"
     )
 
-def level_up_chimera(instance, ud=None, is_hard_mode=False):
+def level_up_chimera(instance, ud=None, is_hard_mode=False, limit=None):
     """
     キメラをレベルアップさせる。
-    ud (User Data) が渡された場合は称号に基づき上限をチェックする。
+    limit が指定されていればそれを優先。
+    指定されていなければ ud や is_hard_mode から算出。
     """
-    limit = 100
-    if ud:
-        limit = get_level_limit(ud)
-    elif is_hard_mode:
-        limit = 200
+    if limit is None:
+        limit = 100
+        if ud:
+            limit = get_level_limit(ud)
+        elif is_hard_mode:
+            limit = 200
 
     if instance["level"] >= limit: return ""
     
@@ -413,7 +415,7 @@ def level_up_chimera(instance, ud=None, is_hard_mode=False):
     instance["next_xp"] = instance["level"] * base_req
     
     update_chimera_stats(instance)
-    instance["current_hp"] = instance["stats"]["max_hp"] # 全回復に統一
+    instance["current_hp"] = instance["stats"]["max_hp"] # 全回復
     
     msg = f"**{instance['nickname']}** は Lv.{instance['level']} になった！ (全回復)"
     
@@ -425,7 +427,6 @@ def level_up_chimera(instance, ud=None, is_hard_mode=False):
         if new_move not in instance["learned_moves"]:
             instance["learned_moves"].append(new_move)
             
-            # Auto-equip if slot available, otherwise just notify
             if len(instance["moves"]) < 4:
                 instance["moves"].append(new_move)
                 msg += f"\n『{MOVES[new_move]['name']}』を覚えた！"
