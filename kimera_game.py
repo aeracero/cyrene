@@ -37,7 +37,7 @@ BATTLE_SUB_WAIT = "wait"
 KIMERA_SESSIONS = {}
 PVP_CHALLENGES = {}
 PVP_BATTLES = {}
-RAID_SESSIONS = {} # {raid_id: {host, members:[], state, boss, turn_inputs, turn_count}}
+RAID_SESSIONS = {} 
 
 # --- テキスト辞書 (Localization) ---
 GAME_TEXT = {
@@ -80,7 +80,7 @@ GAME_TEXT = {
     "raid_menu": {"jp": "【レイドバトル】\n最大4人で強力なボスに挑むわよ！\n報酬は3V確定の強力なキメラ！\n\n・『募集』: 部屋を作る\n・『参加 [ID]』: 部屋に入る\n・『戻る』", "en": "【Raid Battle】\nCo-op with 4 players!\nRewards: 3V Chimera!\n\n・'Create': Host room\n・'Join [ID]': Join room\n・'Back'"},
     "raid_created": {"jp": "レイド部屋を作成したわ！ (ID: **{id}**)\n他の人は『参加 {id}』と言ってね。\n集まったら『開始』よ！", "en": "Raid room created! (ID: **{id}**)\nOthers say 'Join {id}'.\nSay 'Start' when ready!"},
     "raid_joined": {"jp": "レイド部屋 {id} に参加したわ！\n現在の参加者: {members}", "en": "Joined raid {id}!\nMembers: {members}"},
-    "raid_started": {"jp": "レイドバトル開始！\nBOSS: **{name}** (HP: {hp}) が現れた！\n(4人で協力して倒してね！)", "en": "Raid Start!\nBOSS: **{name}** (HP: {hp}) appeared!"},
+    "raid_started": {"jp": "レイドバトル開始！\nBOSS: **{name}** (HP: {hp}) が現れた！\n(素早さ順で行動するわよ！)", "en": "Raid Start!\nBOSS: **{name}** (HP: {hp}) appeared!"},
     "raid_win": {"jp": "やったわ！ ボスを討伐したわよ！\n報酬として **{reward}** をゲットしたわ！\n(個体値3V以上確定！)", "en": "We won! You got **{reward}**!\n(Guaranteed 3V!)"},
     "raid_lose": {"jp": "全滅しちゃったわね…強すぎたかしら…。", "en": "We were wiped out..."},
     "raid_turn_wait": {"jp": "他のプレイヤーの入力を待っているわ… ({count}/4)", "en": "Waiting for others... ({count}/4)"},
@@ -241,10 +241,8 @@ def _distribute_raid_rewards(sess):
         core.update_chimera_stats(reward_c)
         reward_c["current_hp"] = reward_c["stats"]["max_hp"]
         
-        # 修正: 正しいモードのデータを読み書き
         is_hard = KIMERA_SESSIONS.get(uid, {}).get("is_hard_mode", False)
         ud = core.get_user_data(uid, hard_mode=is_hard)
-        
         if len(ud["party"]) < 3: ud["party"].append(reward_c)
         else: ud["box"].append(reward_c)
         core.register_dex(ud, boss_base_id, caught=True)
@@ -805,6 +803,8 @@ def _execute_raid_turn(raid_id):
             
     boss_speed = boss["stats"]["spe"]
     actions.append({"unit": boss, "cmd": {"type": "boss_atk"}, "speed": boss_speed, "is_player": False})
+    
+    # Speed sorting logic: descending order
     actions.sort(key=lambda x: x["speed"], reverse=True)
     
     for act in actions:
@@ -819,12 +819,10 @@ def _execute_raid_turn(raid_id):
                 if eff["type"] == "buff_all":
                     stat = eff["stat"]
                     for m_uid in members:
-                        m_ud = core.get_user_data(m_uid, hard_mode=False) # Temp read, update later
-                        m_pc = m_ud["party"][0]
-                        if m_pc["current_hp"] > 0: 
-                            pass # Actual stat update should happen on save context, here just logs
+                        # Apply to in-memory check
+                        pass 
                     logs.append(eff_data["msg"])
-                    # Apply to session members in memory/next save
+                    # Save to DB
                     for m_uid in members:
                         is_hard = KIMERA_SESSIONS[m_uid].get("is_hard_mode", False)
                         m_ud = core.get_user_data(m_uid, hard_mode=is_hard)
@@ -843,6 +841,10 @@ def _execute_raid_turn(raid_id):
                             rec = int(m_pc["stats"]["max_hp"] * eff["percent"])
                             m_pc["current_hp"] = min(m_pc["stats"]["max_hp"], m_pc["current_hp"] + rec)
                         core.save_user_data(m_uid, m_ud, hard_mode=is_hard)
+                
+                elif eff["type"] == "restore_pp":
+                    logs.append(eff_data["msg"])
+                    # No PP implemented yet, placeholder log
 
             elif cmd["type"] == "move" and unit["current_hp"] > 0:
                 m_id = cmd["value"]
