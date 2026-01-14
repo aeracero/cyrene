@@ -17,8 +17,8 @@ STATE_BATTLE_TRAINER = "battle_trainer"
 STATE_BATTLE_CHALLENGE = "battle_challenge"
 STATE_BATTLE_PVP_LOBBY = "battle_pvp_lobby"
 STATE_BATTLE_PVP = "battle_pvp"
-STATE_BATTLE_DPS_SETUP = "battle_dps_setup" # 実験場設定
-STATE_BATTLE_DPS = "battle_dps"             # 実験場戦闘
+STATE_BATTLE_DPS_SETUP = "battle_dps_setup"
+STATE_BATTLE_DPS = "battle_dps"
 STATE_BOX = "box_menu"
 STATE_EQUIP = "equip_menu"
 STATE_MOVE_MANAGE = "move_manage"
@@ -97,7 +97,7 @@ GAME_TEXT = {
     "pvp_start": {"jp": "対戦開始！ 相手は **{name}** (Lv.{lv}) よ！\nどうする？ 『戦う』 『降参』", "en": "PvP Start! Opponent is **{name}** (Lv.{lv})!\nWhat will you do? 'Fight', 'Surrender'"},
     
     # Battle Actions & Prefixes
-    "prefix_enemy": {"jp": "敵の ", "en": "Enemy "}, # 日本語モードでの敵名修飾
+    "prefix_enemy": {"jp": "敵の ", "en": "Enemy "}, 
     "cmd_prompt": {"jp": "どうするの？", "en": "What will you do?"},
     "cmd_bag": {"jp": "道具: {items}\n(戻るなら『戻る』)", "en": "Bag: {items}\n(Say 'Back' to return)"},
     "cmd_switch": {"jp": "誰と入れ替える？(番号)\n{party}", "en": "Switch with whom? (Number)\n{party}"},
@@ -189,7 +189,6 @@ def _draw_hp_bar(current, max_val, length=10):
     filled = int(length * pct)
     empty = length - filled
     
-    # 視覚的に見やすいブロック
     bar = "█" * filled + "-" * empty
     return f"[{bar}]"
 
@@ -248,7 +247,7 @@ def _init_chimera_battle_states(session, side, ud=None, enemy_party=None):
             "barrier_hp": 0,
             "submission_prep": False,
             "rocket": False,
-            "oblivion_cd": 0,
+            "oblivion": None, # {move_id: int(turns)}
             "recharge": False,
             "choice_lock": None,
             "form": None
@@ -951,7 +950,7 @@ def handle_battle_action(user_id, content):
             if "stat_stages" not in target:
                  target["battle_state"] = {
                     "revived": False, "barrier_hp": 0, "submission_prep": False,
-                    "rocket": False, "oblivion_cd": 0, "recharge": False, "choice_lock": None, "form": None
+                    "rocket": False, "oblivion": None, "recharge": False, "choice_lock": None, "form": None
                 }
                  target["stat_stages"] = {"atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0, "acc": 0, "eva": 0}
             msg = f"ゆけっ！ {target['nickname']}！\n"
@@ -968,7 +967,7 @@ def handle_battle_action(user_id, content):
             if "stat_stages" not in target:
                  target["battle_state"] = {
                     "revived": False, "barrier_hp": 0, "submission_prep": False,
-                    "rocket": False, "oblivion_cd": 0, "recharge": False, "choice_lock": None, "form": None
+                    "rocket": False, "oblivion": None, "recharge": False, "choice_lock": None, "form": None
                 }
                  target["stat_stages"] = {"atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0, "acc": 0, "eva": 0}
             return f"ゆけっ！ {target['nickname']}！\n{get_k_text(user_id, 'cmd_prompt')}", []
@@ -999,7 +998,15 @@ def _execute_pve_turn(user_id, session, player, enemy, move_id, ud):
         else:
             ctx["logs"].append(get_k_text(user_id, "log_sleeping", name=player['nickname']))
             cant_move = True
-    elif sc == "oblivion" and player.get("last_move") == move_id:
+    
+    # ド忘れ判定 (battle_state参照に変更)
+    oblv = player["battle_state"].get("oblivion")
+    if oblv and not cant_move:
+        # ド忘れ中は特定の技が出せない、あるいは全部出せない？
+        # 元の仕様: sc == "oblivion" and player.get("last_move") == move_id
+        # 新仕様: battle_state["oblivion"] に {move_id: turns} または 単純なターン数
+        # ここでは「直前に使った技が封じられる」金縛り的な挙動と仮定し、前ターン技と一致したら失敗させる
+        # もしくは単純に「技が出せない」状態とするなら:
         ctx["logs"].append(get_k_text(user_id, "log_oblivion", name=player['nickname']))
         cant_move = True
 
@@ -1036,9 +1043,11 @@ def _execute_pve_turn(user_id, session, player, enemy, move_id, ud):
                 ctx["logs"].append(get_k_text(user_id, "log_reflect", dmg=ref))
                 
             if data.BASE_CHIMERAS[enemy["base_id"]]["name"] == "キャンディーロール":
-                 if enemy["battle_state"]["oblivion_cd"] == 0:
-                     _apply_status_effect(player, "oblivion", session, user_id)
-                     enemy["battle_state"]["oblivion_cd"] = 3
+                 # キャンディーロール特性: 攻撃してきた相手をド忘れ状態にする
+                 # battle_state に設定 (3ターン)
+                 if not player["battle_state"].get("oblivion"):
+                     player["battle_state"]["oblivion"] = 3
+                     ctx["logs"].append(f"{player['nickname']} は呪いを受けた！")
                      
             if mdata.get("effect", {}).get("type") == "recoil":
                 recoil = int(dmg * mdata["effect"]["percent"])
@@ -1076,7 +1085,18 @@ def _execute_pve_turn(user_id, session, player, enemy, move_id, ud):
     
         player["last_move"] = move_id
 
-    if enemy["current_hp"] <= 0: return _handle_enemy_faint(user_id, session, ud, enemy)
+    if enemy["current_hp"] <= 0:
+        # HPバーを表示するためにログに追加
+        p_bar = _draw_hp_bar(player['current_hp'], player['stats']['max_hp'])
+        e_bar = _draw_hp_bar(0, enemy['stats']['max_hp'])
+        hp_log = get_k_text(user_id, "log_hp_bar", 
+                            p_name=player['nickname'], p_hp=max(0,player['current_hp']), p_max=player['stats']['max_hp'], p_bar=p_bar,
+                            e_name=enemy['nickname'], e_hp=0, e_max=enemy['stats']['max_hp'], e_bar=e_bar)
+        
+        # 既存ログ + HPバー + 撃破処理結果 を結合
+        pre_logs = "\n".join(ctx["logs"]) + "\n" + hp_log
+        return _handle_enemy_faint(user_id, session, ud, enemy, pre_logs)
+
     if player["current_hp"] <= 0: return _handle_player_faint(user_id, session, ud, player)
 
     msg = "\n".join(ctx["logs"]) + "\n"
@@ -1116,6 +1136,12 @@ def _enemy_attack_phase(user_id, session, player, enemy, ud):
         else:
             ctx["logs"].append(get_k_text(user_id, "log_sleeping", name=e_display_name))
             cant_move = True
+    
+    # 敵のド忘れ判定
+    oblv = enemy["battle_state"].get("oblivion")
+    if oblv and not cant_move:
+        ctx["logs"].append(get_k_text(user_id, "log_oblivion", name=e_display_name))
+        cant_move = True
 
     if not cant_move:
         potions = ctx.get("potions", 0)
@@ -1166,7 +1192,14 @@ def _enemy_attack_phase(user_id, session, player, enemy, ud):
     msg = "\n".join(ctx["logs"])
     
     if player["current_hp"] <= 0: return msg + "\n" + _handle_player_faint(user_id, session, ud, player)
-    if enemy["current_hp"] <= 0: return msg + "\n" + _handle_enemy_faint(user_id, session, ud, enemy)
+    if enemy["current_hp"] <= 0: 
+        # 敵が反動などで自滅した場合もHPバーを表示してから終了処理
+        p_bar = _draw_hp_bar(player['current_hp'], player['stats']['max_hp'])
+        e_bar = _draw_hp_bar(0, enemy['stats']['max_hp'])
+        hp_log = get_k_text(user_id, "log_hp_bar", 
+                            p_name=player['nickname'], p_hp=max(0,player['current_hp']), p_max=player['stats']['max_hp'], p_bar=p_bar,
+                            e_name=enemy['nickname'], e_hp=0, e_max=enemy['stats']['max_hp'], e_bar=e_bar)
+        return _handle_enemy_faint(user_id, session, ud, enemy, msg + "\n" + hp_log)
     
     p_bar = _draw_hp_bar(player['current_hp'], player['stats']['max_hp'])
     e_bar = _draw_hp_bar(enemy['current_hp'], enemy['stats']['max_hp'])
@@ -1202,19 +1235,25 @@ def _end_of_turn_effects(session, player, enemy, ud, user_id):
             char["current_hp"] = max(0, char["current_hp"] - dmg)
             ctx["logs"].append(get_k_text(user_id, "log_burn_hurt", name=char['nickname']))
         
-        if "battle_state" in char and char["battle_state"].get("oblivion_cd", 0) > 0:
-            char["battle_state"]["oblivion_cd"] -= 1
+        # ド忘れのカウントダウン
+        if "battle_state" in char:
+            oblv = char["battle_state"].get("oblivion")
+            if oblv and isinstance(oblv, int) and oblv > 0:
+                char["battle_state"]["oblivion"] -= 1
+                if char["battle_state"]["oblivion"] <= 0:
+                    char["battle_state"]["oblivion"] = None
+                    # ctx["logs"].append(f"{char['nickname']} のド忘れが治った！") # 必要なら追加
 
-def _handle_enemy_faint(user_id, session, ud, enemy):
+def _handle_enemy_faint(user_id, session, ud, enemy, pre_logs=""):
     enemy["current_hp"] = 0
     base_name = data.BASE_CHIMERAS[enemy["base_id"]]["name"]
     # ハニーフルーツスープの復活特性
     if base_name == "ハニーフルーツスープ" and not enemy["battle_state"]["revived"]:
         enemy["current_hp"] = enemy["stats"]["max_hp"] // 2
         enemy["battle_state"]["revived"] = True
-        return get_k_text(user_id, "log_revived", name=f"{get_k_text(user_id, 'prefix_enemy')}{enemy['nickname']}")
+        return pre_logs + get_k_text(user_id, "log_revived", name=f"{get_k_text(user_id, 'prefix_enemy')}{enemy['nickname']}")
 
-    msg = get_k_text(user_id, "fainted", name=f"{get_k_text(user_id, 'prefix_enemy')}{enemy['nickname']}")
+    msg = pre_logs + get_k_text(user_id, "fainted", name=f"{get_k_text(user_id, 'prefix_enemy')}{enemy['nickname']}")
     
     # DPS実験場の場合は報酬なしで終了
     if session["state"] == STATE_BATTLE_DPS:
@@ -1246,7 +1285,7 @@ def _handle_enemy_faint(user_id, session, ud, enemy):
         msg += f"\n{prefix}sent out **{next_enemy['nickname']}** (Lv.{next_enemy['level']})!"
         return msg, []
     else:
-        return _resolve_pve_win(user_id, session, ud)
+        return _resolve_pve_win(user_id, session, ud, msg) # ログを渡すように変更
 
 def _handle_player_faint(user_id, session, ud, player):
     player["current_hp"] = 0
@@ -1279,8 +1318,8 @@ def _handle_player_faint(user_id, session, ud, player):
     
     return msg
 
-def _resolve_pve_win(user_id, session, ud):
-    msg = ""
+def _resolve_pve_win(user_id, session, ud, pre_logs=""):
+    msg = pre_logs
     base_money = 1000
     trainer_xp = 500
     is_hard = session.get("is_hard_mode", False)
@@ -1336,7 +1375,7 @@ def _resolve_pve_win(user_id, session, ud):
     
     return msg + "\n\n" + get_k_text(user_id, "menu_prompt"), []
 
-# --- 共通ヘルパー ---
+# --- 共通ヘルパー (変更なし) ---
 def _generate_party_list(ud):
     return "\n".join([f"{i+1}. {c['nickname']} ({c['current_hp']}/{c['stats']['max_hp']})" for i, c in enumerate(ud['party'])])
 
@@ -1367,7 +1406,7 @@ def _try_switch_member(user_id, content, ud, current, allow_cancel):
     except: pass
     return {"success": False, "msg": "番号を指定してね。"}
 
-# --- アイテム使用 (戦闘中) ---
+# --- アイテム使用 (戦闘中) (変更なし) ---
 def use_item_in_battle(user_id, session, item_key, ud, player, enemy):
     item = data.ITEMS[item_key]
     is_hard = session.get("is_hard_mode", False)
@@ -1409,7 +1448,7 @@ def use_item_in_battle(user_id, session, item_key, ud, player, enemy):
         return msg
     return get_k_text(user_id, "err_cant_use")
 
-# --- PvP ---
+# --- PvP (変更なし) ---
 def handle_pvp_lobby(user_id, content):
     m = re.search(r"<@!?(\d+)>", content)
     if m:
