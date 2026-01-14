@@ -299,6 +299,68 @@ ITEMS = {
     "story_page_2": {"name": "失われし紡がれた物語のページその2", "effect_type": "key_item", "value": 0, "price": 0, "unlock_rank": 999, "desc": "隠された真実が記されたページの一部。"},
 }
 
+# --- レイドボス専用データ ---
+
+# レイドボスとして出現する黄金裔モチーフの候補
+RAID_BOSS_CANDIDATES = [
+    "oatmeal", "ringo_ame", "nunusu", "cheribis", "honey_fruit_soup",
+    "nyanko_dorobou", "cho_cho_cake", "biguruyashi", "harapekono_sakana",
+    "kijyukyou", "candy_roll", "onkouna_ryu", "kyunure"
+]
+
+# レイド専用技 (全体攻撃や特殊効果)
+RAID_MOVES = {
+    "cataclysm": {
+        "name": "天地崩壊", "type": "Dark", "category": "Special", "power": 120, "accuracy": 90, "max_pp": 5,
+        "target": "AllEnemies", "desc": "敵全体に壊滅的なダメージを与える。"
+    },
+    "golden_wave": {
+        "name": "黄金の波", "type": "Light", "category": "Special", "power": 90, "accuracy": 100, "max_pp": 10,
+        "target": "AllEnemies", "effect": {"type": "debuff", "stat": "acc", "stage": 1},
+        "desc": "敵全体を攻撃し、命中率を下げる。"
+    },
+    "inferno_burst": {
+        "name": "インフェルノ", "type": "Fire", "category": "Special", "power": 100, "accuracy": 85, "max_pp": 5,
+        "target": "AllEnemies", "effect": {"type": "chance_status", "status": "burn", "chance": 0.3},
+        "desc": "敵全体を焼き尽くす。火傷にすることがある。"
+    },
+    "absolute_zero": {
+        "name": "絶対零度", "type": "Water", "category": "Special", "power": 90, "accuracy": 90, "max_pp": 5,
+        "target": "AllEnemies", "effect": {"type": "debuff", "stat": "spe", "stage": 1},
+        "desc": "敵全体を凍らせ、素早さを下げる。"
+    },
+    "thorn_hell": {
+        "name": "茨の地獄", "type": "Grass", "category": "Physical", "power": 100, "accuracy": 90, "max_pp": 5,
+        "target": "AllEnemies", "effect": {"type": "chance_status", "status": "poison", "chance": 0.3},
+        "desc": "敵全体を茨で締め上げる。毒にすることがある。"
+    },
+    "judgement": {
+        "name": "裁きの光", "type": "Fairy", "category": "Special", "power": 150, "accuracy": 80, "max_pp": 5,
+        "target": "AllEnemies", "desc": "敵全体に神の裁きを下す。"
+    },
+    "boss_roar": {
+        "name": "覇王の咆哮", "type": "Normal", "category": "Status", "power": 0, "accuracy": 100, "max_pp": 10,
+        "target": "AllEnemies", "effect": {"type": "debuff", "stat": "atk", "stage": 1},
+        "desc": "敵全体の攻撃を下げる。"
+    }
+}
+
+# レイドボス専用特性 (捕獲後に継承される可能性がある)
+RAID_ABILITIES = {
+    "boss_armor": {"name": "ボスの威厳", "desc": "受けるダメージを常に少し軽減する。"},
+    "pressure_king": {"name": "プレッシャー", "desc": "相手のPPを多く減らす。"},
+    "gutsy_boss": {"name": "ド根性", "desc": "状態異常の時、攻撃力が上がる。"},
+    "regenerator_boss": {"name": "超回復", "desc": "毎ターンHPが回復する。"}
+}
+
+# 応援コマンドの効果
+CHEER_EFFECTS = {
+    "cheer_atk": {"name": "攻撃応援", "msg": "味方全体の攻撃が上がった！", "effect": {"type": "buff_all", "stat": "atk", "stage": 1}},
+    "cheer_def": {"name": "防御応援", "msg": "味方全体の防御が上がった！", "effect": {"type": "buff_all", "stat": "def", "stage": 1}},
+    "cheer_heal": {"name": "癒やしの芝生", "msg": "味方全体に癒やしの芝生が生えた！(HP回復)", "effect": {"type": "heal_all", "percent": 0.2}},
+    "cheer_spirit": {"name": "気合注入", "msg": "味方全体のゲージ(PP)が少し回復した！", "effect": {"type": "restore_pp", "amount": 5}}
+}
+
 # --- 新規システム: パーティシナジー ---
 # 特定の組み合わせがパーティ内にいると発動する効果
 TEAM_SYNERGIES = {
@@ -551,9 +613,9 @@ CHALLENGE_TRAINERS_HARD = {
     14: {
         "name": "制作者 aeracero",
         "party": [
-            {"base_id": "candy_roll", "level": 1000, "item": "life_orb"}, 
-            {"base_id": "kyunure", "level": 1000, "item": "choice_specs"}, 
-            {"base_id": "cheribis", "level": 1000, "item": "leftovers"}
+            {"base_id": "cheribis", "level": 1000, "item": "leftovers"},
+            {"base_id": "candy_roll", "level": 1000, "item": "life_orb"},
+            {"base_id": "kyunure", "level": 1000, "item": "choice_specs"},  
         ], "potions": 33350337,
         "reward_title": "制作者泣かせ",
         "dialogue_start": "どうも、制作者のaeraceroです。今は暇なんで、相手してあげますよ。",
