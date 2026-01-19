@@ -12,7 +12,6 @@ from forms import get_user_form, set_user_form, resolve_form_code, get_form_disp
 from special_unlocks import inc_janken_win, get_janken_wins, is_nanoka_unlocked, set_nanoka_unlocked, has_danheng_stage1, mark_danheng_stage1, is_danheng_unlocked, set_danheng_unlocked
 import kimera_game
 import cthulhu_game  # 新規追加：TRPGモジュール
-import gemini_chat  # AI対話モジュール
 
 # --- Discord Setup ---
 intents = discord.Intents.default()
