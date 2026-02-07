@@ -333,8 +333,29 @@ def _init_battle_context(session, enemy_party, enemy_name, stage=None, potions=0
         _apply_team_synergies(session, "p1", ud["party"])
     _init_chimera_battle_states(session, "p2", enemy_party=enemy_party)
 
+# --- 脆弱性対策: 技データ取得ヘルパー ---
+def get_move_data(move_id):
+    """
+    通常の技リストとレイド専用技リストの両方を検索して返す。
+    存在しないIDの場合はダミーデータを返すことでエラー落ちを防ぐ。
+    """
+    if move_id in data.MOVES:
+        return data.MOVES[move_id]
+    if move_id in data.RAID_MOVES:
+        return data.RAID_MOVES[move_id]
+    
+    # フォールバック処理
+    return {
+        "name": f"Unknown({move_id})",
+        "type": "Normal",
+        "category": "Physical",
+        "power": 40,
+        "accuracy": 100,
+        "desc": "データが存在しません"
+    }
+
 def _calculate_damage(attacker, defender, move_id, session):
-    move = data.MOVES[move_id]
+    move = get_move_data(move_id)
     is_burn = attacker.get("status_condition") == "burn"
     power = move["power"]
     if move["category"] == "Status": return 0, 1.0
@@ -419,27 +440,32 @@ def _resolve_pve_win(user_id, session, ud, pre_logs=""):
     if session["state"] == STATE_BATTLE_CHALLENGE:
         st = session["context"]["stage"]
         if st == 14 and is_hard:
-             t_data = {"name": "aeracero", "dialogue_win": "見事だ……。君こそ真のキメラマスターだ。"}
+             t_data = {"name": "aeracero", "dialogue_win": "見事だ……。君こそ真のキメラマスターだ。", "reward_title": "制作者泣かせ"}
         else:
              trainer_source = data.CHALLENGE_TRAINERS_HARD if is_hard else data.CHALLENGE_TRAINERS
              t_data = trainer_source.get(st, {})
         win_msg = t_data.get("dialogue_win", "Well done...")
         msg += f"\n**{t_data.get('name', 'Unknown')}**: \"{win_msg}\"\n"
-        ud["challenge_stage"] = st + 1
+        
+        # ステージクリア処理
+        if ud["challenge_stage"] == st:
+            ud["challenge_stage"] = st + 1
+            
         base_money = st * 5000
         trainer_xp = st * 1000
-        if is_hard:
-             if st == 13: msg += "\n🔓 **レベル上限解放**: Lv.2000まで育成可能になったわ！\n"
-             if st == 14:
-                 msg += "\n🔓 **レベル上限撤廃**: レベルの枷は外されたわ！無限の彼方へ！\n"
-                 new_unlocks = logic.check_all_achievements(user_id)
-                 if new_unlocks: msg += "\n" + "\n".join(new_unlocks)
-        else:
-            if st == 14:
-                reward_title = t_data.get("reward_title")
-                if reward_title:
-                     msg += f"\n🏆 称号獲得: **{reward_title}**\n"
-                     if reward_title not in ud["titles"]: ud["titles"].append(reward_title)
+        
+        # ハードモードレベル上限解放修正
+        if st == 14:
+             msg += "\n🔓 **レベル上限撤廃**: レベルの枷は外されたわ！無限の彼方へ！\n"
+        if st == 13 and is_hard:
+             msg += "\n🔓 **レベル上限解放**: Lv.2000まで育成可能になったわ！\n"
+
+        # 称号付与
+        reward_title = t_data.get("reward_title")
+        if reward_title:
+             msg += f"\n🏆 称号獲得: **{reward_title}**\n"
+             if reward_title not in ud["titles"]: ud["titles"].append(reward_title)
+
     ud["money"] += base_money
     ud["trainer_xp"] += trainer_xp
     leveled = False
@@ -557,7 +583,7 @@ def _enemy_attack_phase(user_id, session, player, enemy, ud):
             ctx["logs"].append(get_k_text(user_id, "log_potion", name=enemy['nickname']))
         else:
             emove_id = random.choice(enemy["moves"])
-            emove = data.MOVES[emove_id]
+            emove = get_move_data(emove_id)
             dmg, type_eff = _calculate_damage(enemy, player, emove_id, session)
             
             if emove["category"] != "Status":
@@ -599,7 +625,7 @@ def _enemy_attack_phase(user_id, session, player, enemy, ud):
 def _execute_pve_turn(user_id, session, player, enemy, move_id, ud):
     ctx = session["context"]
     ctx["logs"] = []
-    mdata = data.MOVES[move_id]
+    mdata = get_move_data(move_id)
     cant_move = False
     
     if player["battle_state"].get("recharge"):
@@ -681,6 +707,11 @@ def _execute_pve_turn(user_id, session, player, enemy, move_id, ud):
                 ctx["logs"].append(get_k_text(user_id, "log_icarun_start"))
         player["last_move"] = move_id
 
+    # --- ゾンビ化対策: 相打ち判定 ---
+    # 敵を倒したが、自分も反動などで死んでしまった場合は「全滅」を優先
+    if player["current_hp"] <= 0:
+        return _handle_player_faint(user_id, session, ud, player)
+
     if enemy["current_hp"] <= 0:
         p_bar = _draw_hp_bar(player['current_hp'], player['stats']['max_hp'])
         e_bar = _draw_hp_bar(0, enemy['stats']['max_hp'])
@@ -688,7 +719,6 @@ def _execute_pve_turn(user_id, session, player, enemy, move_id, ud):
         pre_logs = "\n".join(ctx["logs"]) + "\n" + hp_log
         return _handle_enemy_faint(user_id, session, ud, enemy, pre_logs)
 
-    if player["current_hp"] <= 0: return _handle_player_faint(user_id, session, ud, player)
     msg = "\n".join(ctx["logs"]) + "\n"
     msg += _enemy_attack_phase(user_id, session, player, enemy, ud)
     return msg, []
@@ -782,7 +812,7 @@ def _resolve_pvp_turn(battle):
         if actor_c["current_hp"] <= 0: continue
         if act["type"] == "move":
             mid = act["value"]
-            mdata = data.MOVES[mid]
+            mdata = get_move_data(mid)
             dmg = int(mdata["power"] * (actor_c["stats"]["atk"] / target_c["stats"]["def"]) * 0.4)
             if dmg < 1: dmg = 1
             target_c["current_hp"] -= dmg
@@ -897,7 +927,7 @@ def _execute_raid_turn(raid_id):
 
             elif cmd["type"] == "move" and unit["current_hp"] > 0:
                 m_id = cmd["value"]
-                m_data = data.MOVES[m_id]
+                m_data = get_move_data(m_id)
                 logs.append(f"**{unit['nickname']}** の {m_data['name']}！")
                 power = m_data["power"]
                 if m_data["category"] == "Physical":
@@ -1031,6 +1061,70 @@ def handle_menu(user_id, content):
         return "既にノーマルモードよ。", []
     norm_content = content.translate(str.maketrans({chr(0xFF10 + i): chr(0x30 + i) for i in range(10)}))
     c_lower = content.lower()
+
+    # --- 修正: コマンド優先順位変更 ---
+    # 図鑑コマンドを技管理よりも先に判定することで「図鑑 技」が「技」に吸われるのを防ぐ
+    if "図鑑" in content or "dex" in c_lower:
+        if "技" in content or "move" in c_lower:
+            m_srch = re.search(r"(?:技|moves)\s+(.+)", content)
+            if m_srch:
+                t_move = m_srch.group(1).strip()
+                found = None
+                for k, v in data.MOVES.items():
+                    if v["name"] == t_move: found = v; break
+                if found:
+                    cat = found['category']
+                    return f"📖 **{found['name']}** ({cat})\nType: {found['type']} / Power: {found['power']} / Acc: {found.get('accuracy', 100)}\nEffect: {found.get('desc', 'なし')}", []
+                return "その技は見つからないわ。", []
+            move_list = sorted([v['name'] for v in data.MOVES.values()])
+            return f"【技図鑑】\n{', '.join(move_list)}\n\n『図鑑 技 10万ボルト』のように検索してね。", []
+        if "アイテム" in content or "item" in c_lower:
+            m_srch = re.search(r"(?:アイテム|items)\s+(.+)", content)
+            if m_srch:
+                t_item = m_srch.group(1).strip()
+                found = None
+                for k, v in data.ITEMS.items():
+                    if v["name"] == t_item: found = v; break
+                if found:
+                     return f"📖 **{found['name']}** (Price: {found['price']}G)\n{found.get('desc', '効果不明')}", []
+                return "そのアイテムは見つからないわ。", []
+            item_list = sorted([v['name'] for v in data.ITEMS.values()])
+            return f"【アイテム図鑑】\n{', '.join(item_list)}\n\n『図鑑 アイテム モンスターボール』のように検索してね。", []
+        m_search = re.search(r"(?:図鑑|dex)\s+(.+)", content, re.IGNORECASE)
+        if m_search:
+            target_name = m_search.group(1).strip()
+            found_key = None
+            for k, v in data.BASE_CHIMERAS.items():
+                if v["name"] == target_name or v.get("name_en", "").lower() == target_name.lower():
+                    found_key = k; break
+            if not found_key: return "その名前のキメラはデータにないわね。", []
+            status = ud["dex"].get(found_key)
+            if not status: return "そのキメラはまだ発見していないみたい。", []
+            base = data.BASE_CHIMERAS[found_key]
+            if status == "seen":
+                return f"📖 **No.{found_key} {base['name']}**\n{get_k_text(user_id, 'dex_seen')}", []
+            elif status == "caught":
+                rarity = "★" * base.get('rarity', 1)
+                bs = base['base_stats']
+                desc = base.get('description', 'No Data.')
+                total_bs = sum(bs.values())
+                msg = (f"━━━━━━━━━━━━━━━\n📖 **No.{found_key} {base['name']}** {rarity}\n━━━━━━━━━━━━━━━\n"
+                       f"Type: {base['type']}\nAbility: **{base['ability']}**\n-------------------------------\n{desc}\n-------------------------------\n"
+                       f"HP:{bs['hp']} Atk:{bs['atk']} Def:{bs['def']} SpA:{bs['spa']} SpD:{bs['spd']} Spe:{bs['spe']} (Total:{total_bs})\n━━━━━━━━━━━━━━━")
+                return msg, []
+        total = len(data.BASE_CHIMERAS)
+        caught = sum(1 for v in ud["dex"].values() if v == "caught")
+        seen = len(ud["dex"])
+        lines = [f"【Dex】 Caught: {caught}/{total} / Seen: {seen}/{total}"]
+        for k in sorted(data.BASE_CHIMERAS.keys()):
+            base = data.BASE_CHIMERAS[k]
+            status = ud["dex"].get(k)
+            if status == "caught": mark = "★"; dname = base['name']
+            elif status == "seen": mark = "○"; dname = base['name']
+            else: mark = "・"; dname = "？？？"
+            lines.append(f"{mark} {dname}")
+        return "\n".join(lines) + "\n" + get_k_text(user_id, 'dex_help'), []
+
     if "技" in content or "moves" in c_lower:
         session["state"] = STATE_MOVE_MANAGE
         return _get_move_manage_text(user_id), []
@@ -1067,66 +1161,6 @@ def handle_menu(user_id, content):
         core.heal_all_kimeras(ud)
         core.save_user_data(user_id, ud, hard_mode=is_hard)
         return get_k_text(user_id, "healed"), []
-    if "図鑑" in content or "dex" in c_lower:
-        if "技" in content or "move" in c_lower:
-             m_srch = re.search(r"(?:技|moves)\s+(.+)", content)
-             if m_srch:
-                 t_move = m_srch.group(1).strip()
-                 found = None
-                 for k, v in data.MOVES.items():
-                     if v["name"] == t_move: found = v; break
-                 if found:
-                     cat = found['category']
-                     return f"📖 **{found['name']}** ({cat})\nType: {found['type']} / Power: {found['power']} / Acc: {found.get('accuracy', 100)}\nEffect: {found.get('desc', 'なし')}", []
-                 return "その技は見つからないわ。", []
-             move_list = sorted([v['name'] for v in data.MOVES.values()])
-             return f"【技図鑑】\n{', '.join(move_list)}\n\n『図鑑 技 10万ボルト』のように検索してね。", []
-        if "アイテム" in content or "item" in c_lower:
-             m_srch = re.search(r"(?:アイテム|items)\s+(.+)", content)
-             if m_srch:
-                 t_item = m_srch.group(1).strip()
-                 found = None
-                 for k, v in data.ITEMS.items():
-                     if v["name"] == t_item: found = v; break
-                 if found:
-                     return f"📖 **{found['name']}** (Price: {found['price']}G)\n{found.get('desc', '効果不明')}", []
-                 return "そのアイテムは見つからないわ。", []
-             item_list = sorted([v['name'] for v in data.ITEMS.values()])
-             return f"【アイテム図鑑】\n{', '.join(item_list)}\n\n『図鑑 アイテム モンスターボール』のように検索してね。", []
-        m_search = re.search(r"(?:図鑑|dex)\s+(.+)", content, re.IGNORECASE)
-        if m_search:
-            target_name = m_search.group(1).strip()
-            found_key = None
-            for k, v in data.BASE_CHIMERAS.items():
-                if v["name"] == target_name or v.get("name_en", "").lower() == target_name.lower():
-                    found_key = k; break
-            if not found_key: return "その名前のキメラはデータにないわね。", []
-            status = ud["dex"].get(found_key)
-            if not status: return "そのキメラはまだ発見していないみたい。", []
-            base = data.BASE_CHIMERAS[found_key]
-            if status == "seen":
-                return f"📖 **No.{found_key} {base['name']}**\n{get_k_text(user_id, 'dex_seen')}", []
-            elif status == "caught":
-                rarity = "★" * base.get('rarity', 1)
-                bs = base['base_stats']
-                desc = base.get('description', 'No Data.')
-                total_bs = sum(bs.values())
-                msg = (f"━━━━━━━━━━━━━━━\n📖 **No.{found_key} {base['name']}** {rarity}\n━━━━━━━━━━━━━━━\n"
-                       f"Type: {base['type']}\nAbility: **{base['ability']}**\n-------------------------------\n{desc}\n-------------------------------\n"
-                       f"HP:{bs['hp']} Atk:{bs['atk']} Def:{bs['def']} SpA:{bs['spa']} SpD:{bs['spd']} Spe:{bs['spe']} (Total:{total_bs})\n━━━━━━━━━━━━━━━")
-                return msg, []
-        total = len(data.BASE_CHIMERAS)
-        caught = sum(1 for v in ud["dex"].values() if v == "caught")
-        seen = len(ud["dex"])
-        lines = [f"【Dex】 Caught: {caught}/{total} / Seen: {seen}/{total}"]
-        for k in sorted(data.BASE_CHIMERAS.keys()):
-            base = data.BASE_CHIMERAS[k]
-            status = ud["dex"].get(k)
-            if status == "caught": mark = "★"; dname = base['name']
-            elif status == "seen": mark = "○"; dname = base['name']
-            else: mark = "・"; dname = "？？？"
-            lines.append(f"{mark} {dname}")
-        return "\n".join(lines) + "\n" + get_k_text(user_id, 'dex_help'), []
     if "アイテム" in content:
         items_txt = ", ".join([f"{data.ITEMS[k]['name']}x{v}" for k, v in ud['items'].items()])
         return get_k_text(user_id, "items_list", items=items_txt), []
@@ -1149,10 +1183,22 @@ def _get_move_manage_text(user_id):
     ud = core.get_user_data(user_id, hard_mode=session.get("is_hard_mode", False))
     if not ud["party"]: return get_k_text(user_id, "no_items_to_use")
     c = ud["party"][0]
-    current = ", ".join([f"[{i+1}]{data.MOVES[m]['name']}" for i, m in enumerate(c["moves"])])
+    
+    # 技名取得にヘルパーを使用
+    current = []
+    for i, m in enumerate(c["moves"]):
+        m_data = get_move_data(m)
+        current.append(f"[{i+1}]{m_data['name']}")
+    current_txt = ", ".join(current)
+    
     available = [m for m in c["learned_moves"] if m not in c["moves"]]
-    learned = ", ".join([f"[{i+1}]{data.MOVES[m]['name']}" for i, m in enumerate(available)]) if available else "(なし)"
-    return get_k_text(user_id, "move_title", name=c['nickname']) + "\n" + get_k_text(user_id, "move_list", current=current, learned=learned)
+    learned = []
+    for i, m in enumerate(available):
+        m_data = get_move_data(m)
+        learned.append(f"[{i+1}]{m_data['name']}")
+    learned_txt = ", ".join(learned) if learned else "(なし)"
+    
+    return get_k_text(user_id, "move_title", name=c['nickname']) + "\n" + get_k_text(user_id, "move_list", current=current_txt, learned=learned_txt)
 
 def handle_move_manage(user_id, content):
     session = KIMERA_SESSIONS[user_id]
@@ -1166,6 +1212,7 @@ def handle_move_manage(user_id, content):
     m_swap_learn = re.search(r"(\d+)(?:を覚える| learn)", content)
     m_learn_only = re.search(r"(\d+)(?:を覚える| learn)", content)
     m_forget_only = re.search(r"(\d+)(?:を忘れる| forget)", content)
+    
     if m_swap_forget and m_swap_learn:
         f_idx = int(m_swap_forget.group(1)) - 1
         l_idx = int(m_swap_learn.group(1)) - 1
@@ -1174,7 +1221,8 @@ def handle_move_manage(user_id, content):
             learn_move = available[l_idx]
             c["moves"][f_idx] = learn_move
             core.save_user_data(user_id, ud, hard_mode=session.get("is_hard_mode", False))
-            msg = get_k_text(user_id, "move_changed", out=data.MOVES[forget_move]['name'], in_=data.MOVES[learn_move]['name'])
+            # 技名取得にヘルパー使用
+            msg = get_k_text(user_id, "move_changed", out=get_move_data(forget_move)['name'], in_=get_move_data(learn_move)['name'])
             return msg + "\n\n" + _get_move_manage_text(user_id), []
         else: return "指定された番号が正しくないわ。", []
     elif m_learn_only and not m_swap_forget:
@@ -1184,7 +1232,7 @@ def handle_move_manage(user_id, content):
                 learn_move = available[l_idx]
                 c["moves"].append(learn_move)
                 core.save_user_data(user_id, ud, hard_mode=session.get("is_hard_mode", False))
-                msg = get_k_text(user_id, "move_learned", in_=data.MOVES[learn_move]['name'])
+                msg = get_k_text(user_id, "move_learned", in_=get_move_data(learn_move)['name'])
                 return msg + "\n\n" + _get_move_manage_text(user_id), []
             else: return "技がいっぱいで覚えられないわ。忘れる技も指定してね。", []
         else: return "指定された番号の技は習得リストにないわ。", []
@@ -1194,7 +1242,7 @@ def handle_move_manage(user_id, content):
             if len(c["moves"]) > 1:
                 forgot_move = c["moves"].pop(f_idx)
                 core.save_user_data(user_id, ud, hard_mode=session.get("is_hard_mode", False))
-                msg = get_k_text(user_id, "move_forgot", out=data.MOVES[forgot_move]['name'])
+                msg = get_k_text(user_id, "move_forgot", out=get_move_data(forgot_move)['name'])
                 return msg + "\n\n" + _get_move_manage_text(user_id), []
             else: return "全ての技を忘れることはできないわ。", []
         else: return "指定された番号の技は持っていないわ。", []
@@ -1311,6 +1359,12 @@ def handle_battle_select(user_id, content):
     session = KIMERA_SESSIONS[user_id]
     is_hard = session.get("is_hard_mode", False)
     ud = core.get_user_data(user_id, hard_mode=is_hard)
+    
+    # --- ゾンビ出撃対策 ---
+    # 先頭がひんしの場合、バトル開始を拒否
+    if ud["party"] and ud["party"][0]["current_hp"] <= 0:
+        return "先頭のキメラがひんし状態よ！回復してから来てね。", []
+
     tlv = ud["trainer_level"]
     content = content.translate(str.maketrans({chr(0xFF10 + i): chr(0x30 + i) for i in range(10)}))
     if "真なるキメラマスターロード" in content:
@@ -1439,10 +1493,10 @@ def handle_raid_battle(user_id, content):
     cmd = None
     if pc["current_hp"] > 0:
         if "戦" in content or "Fight" in content:
-            moves = [data.MOVES[m]['name'] for m in pc["moves"]]
+            moves = [get_move_data(m)['name'] for m in pc["moves"]]
             return get_k_text(user_id, "cmd_moves", moves=", ".join(moves)), []
         for m_id in pc["moves"]:
-            if data.MOVES[m_id]["name"] in content:
+            if get_move_data(m_id)["name"] in content:
                 cmd = {"type": "move", "value": m_id}; break
         if not cmd and "回復" in content: cmd = {"type": "heal_spam"}
     else:
@@ -1514,14 +1568,16 @@ def handle_battle_action(user_id, content):
             ctx["sub_state"] = BATTLE_SUB_SWITCH
             return get_k_text(user_id, "cmd_switch", party=_generate_party_list(ud)), []
         if "戦" in content:
-            moves = [data.MOVES[m]['name'] for m in player["moves"]]
+            moves = [get_move_data(m)['name'] for m in player["moves"]]
             return get_k_text(user_id, "cmd_moves", moves=", ".join(moves)), []
-        matched_moves = [m for m in player["moves"] if data.MOVES[m]["name"] in content]
+        
+        # 技名マッチングにヘルパーを使用
+        matched_moves = [m for m in player["moves"] if get_move_data(m)["name"] in content]
         if matched_moves:
-            sel_move = max(matched_moves, key=lambda m: len(data.MOVES[m]["name"]))
+            sel_move = max(matched_moves, key=lambda m: len(get_move_data(m)["name"]))
             locked = player["battle_state"].get("choice_lock")
             if locked and sel_move != locked:
-                return f"こだわりアイテムの効果で『{data.MOVES[locked]['name']}』しか出せない！", []
+                return f"こだわりアイテムの効果で『{get_move_data(locked)['name']}』しか出せない！", []
             held = player.get("held_item")
             if held in ["choice_band", "choice_specs"] and not locked:
                 player["battle_state"]["choice_lock"] = sel_move
@@ -1591,11 +1647,11 @@ def handle_pvp_action(user_id, content):
     if sub == BATTLE_SUB_MAIN:
         if "降参" in content: return _resolve_pvp_end(battle, loser_id=user_id)
         if "戦" in content:
-            moves_txt = " / ".join([f"{data.MOVES[m]['name']}" for m in player_chimera["moves"]])
+            moves_txt = " / ".join([f"{get_move_data(m)['name']}" for m in player_chimera["moves"]])
             return f"技を選んでね:\n[{moves_txt}]", []
         selected_move = None
         for mid in player_chimera["moves"]:
-            if data.MOVES[mid]["name"] in content:
+            if get_move_data(mid)["name"] in content:
                 selected_move = mid; break
         if selected_move:
             battle["actions"][user_id] = {"type": "move", "value": selected_move}
