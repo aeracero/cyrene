@@ -1,5 +1,7 @@
+# logic.py
 import random
 import re
+import datetime
 from config import today_str, PRIMARY_ADMIN_ID
 import database as db
 import kimera_core as k_core
@@ -11,7 +13,34 @@ from special_unlocks import get_janken_wins, is_nanoka_unlocked, is_danheng_unlo
 # 現在開催中のピックアップキャラ
 CURRENT_BANNER_KEY = "cyrene"
 
+# 割引イベントの状態管理 (メモリ上で管理)
+# { "active": bool, "percent": int, "end_time": datetime }
+GLOBAL_DISCOUNT_STATE = {
+    "active": False,
+    "percent": 0,
+    "end_time": None
+}
+
+def set_discount_event(active: bool, percent: int = 0, duration_minutes: int = 30):
+    GLOBAL_DISCOUNT_STATE["active"] = active
+    if active:
+        GLOBAL_DISCOUNT_STATE["percent"] = percent
+        GLOBAL_DISCOUNT_STATE["end_time"] = datetime.datetime.now() + datetime.timedelta(minutes=duration_minutes)
+    else:
+        GLOBAL_DISCOUNT_STATE["percent"] = 0
+        GLOBAL_DISCOUNT_STATE["end_time"] = None
+
+def get_current_discount() -> int:
+    if GLOBAL_DISCOUNT_STATE["active"]:
+        if GLOBAL_DISCOUNT_STATE["end_time"] and datetime.datetime.now() < GLOBAL_DISCOUNT_STATE["end_time"]:
+            return GLOBAL_DISCOUNT_STATE["percent"]
+        else:
+            # 時間切れならオフにする
+            set_discount_event(False)
+    return 0
+
 # 黄金裔（全員限定キャラ扱い）の定義
+# 凸数上限: 13凸 (Base + 13 duplicates)
 LIMITED_CHARACTERS = {
     "cyrene": {
         "name": "キュレネ", 
@@ -20,7 +49,7 @@ LIMITED_CHARACTERS = {
         "buff_type": "affection_boost", 
         "buff_base": 0.20,
         "buff_scale": 0.10,
-        "desc": "【愛の加護】好感度XP獲得量UP (完凸: +80%)"
+        "desc": "【愛の加護】好感度XP獲得量UP (13凸: +150%)"
     },
     "aglaia": {
         "name": "アグライア", 
@@ -29,7 +58,7 @@ LIMITED_CHARACTERS = {
         "buff_type": "training_crit", 
         "buff_base": 0.05,
         "buff_scale": 0.02,
-        "desc": "【審美眼】キメラトレーニングで「大成功」が出る確率UP (完凸: 17%)"
+        "desc": "【審美眼】キメラトレーニングで「大成功」が出る確率UP (13凸: 31%)"
     },
     "trisbeas": {
         "name": "トリスビアス", 
@@ -38,7 +67,7 @@ LIMITED_CHARACTERS = {
         "buff_type": "daily_income", 
         "buff_base": 2000,
         "buff_scale": 500,
-        "desc": "【パトロン】デイリー配布石が増加 (完凸: +5000)"
+        "desc": "【パトロン】デイリー配布石が増加 (13凸: +8500)"
     },
     "anaxagoras": {
         "name": "アナクサゴラス", 
@@ -47,7 +76,7 @@ LIMITED_CHARACTERS = {
         "buff_type": "rps_win_bonus", 
         "buff_base": 5,
         "buff_scale": 2,
-        "desc": "【演算】じゃんけん勝利時の獲得XPボーナス (完凸: +17)"
+        "desc": "【演算】じゃんけん勝利時の獲得XPボーナス (13凸: +31)"
     },
     "medimos": {
         "name": "メデイモス", 
@@ -56,7 +85,7 @@ LIMITED_CHARACTERS = {
         "buff_type": "trainer_xp_mult", 
         "buff_base": 0.1,
         "buff_scale": 0.05,
-        "desc": "【スパルタ】キメラ育成XPの倍率UP (完凸: +40%)"
+        "desc": "【スパルタ】キメラ育成XPの倍率UP (13凸: +75%)"
     },
     "sepharia": {
         "name": "セファリア", 
@@ -65,19 +94,65 @@ LIMITED_CHARACTERS = {
         "buff_type": "gacha_refund", 
         "buff_base": 0.05,
         "buff_scale": 0.02,
-        "desc": "【キャッシュバック】石消費時に確率で一部還元 (完凸: 17%)"
+        "desc": "【キャッシュバック】石消費時に確率で一部還元 (13凸: 31%)"
+    },
+    "hyacinthia": {
+        "name": "ヒアシンシア",
+        "title": "慈愛の",
+        "secret_voice_id": "voice_hyacinthia_heal",
+        "buff_type": "shop_discount",
+        "buff_base": 0.05,
+        "buff_scale": 0.02,
+        "desc": "【奉仕】ショップの購入価格が割引 (13凸: 31%OFF)"
+    },
+    "castoris": {
+        "name": "キャストリス",
+        "title": "甘味の",
+        "secret_voice_id": "voice_castoris_eat",
+        "buff_type": "recovery_boost",
+        "buff_base": 0.10,
+        "buff_scale": 0.05,
+        "desc": "【糖分】回復アイテムの効果量がUP (13凸: +75%)"
+    },
+    "phainon": {
+        "name": "ファイノン",
+        "title": "夢追う",
+        "secret_voice_id": "voice_phainon_dream",
+        "buff_type": "battle_money_boost",
+        "buff_base": 0.10,
+        "buff_scale": 0.05,
+        "desc": "【野望】バトル勝利時の獲得金UP (13凸: +75%)"
+    },
+    "seireness": {
+        "name": "セイレンス",
+        "title": "深海の",
+        "secret_voice_id": "voice_seireness_song",
+        "buff_type": "shiny_rate_boost",
+        "buff_base": 0.05,
+        "buff_scale": 0.01,
+        "desc": "【潮目】高レアキメラとの遭遇率UP (13凸: +18%)"
+    },
+    "kerydra": {
+        "name": "ケリュドラ",
+        "title": "覇道の",
+        "secret_voice_id": "voice_kerydra_king",
+        "buff_type": "drop_rate_boost",
+        "buff_base": 0.15,
+        "buff_scale": 0.02,
+        "desc": "【徴収】敵からのアイテムドロップ率UP (13凸: +41%)"
     },
 }
 
-# 恒常（すり抜け）★5枠
-STANDARD_POOL_5 = [
-    {"name": "量産型メカキュレネ", "type": "item", "id": "mecha_cyrene_doll", "desc": "高値で売れるフィギュア"},
-    {"name": "太古の記憶データ", "type": "item", "id": "ancient_memory", "desc": "未知の技術が記されたデータ"}
+# --- 新規: キュレネの持ち物 (すり抜け枠) ---
+CYRENE_BELONGINGS = [
+    {"name": "古びた懐中時計", "type": "belonging", "id": "cyrene_watch", "desc": "針の止まった懐中時計。裏面にイニシャルが刻まれている。"},
+    {"name": "色褪せたリボン", "type": "belonging", "id": "cyrene_ribbon", "desc": "かつて誰かが髪に結んでいたリボン。微かに甘い香りがする。"},
+    {"name": "書きかけの手紙", "type": "belonging", "id": "cyrene_letter", "desc": "宛名のない手紙。「愛しています」とだけ読める。"},
+    {"name": "欠けた手鏡", "type": "belonging", "id": "cyrene_mirror", "desc": "縁が装飾された手鏡。自分自身の顔は映らない。"},
+    {"name": "乾いた花弁", "type": "belonging", "id": "cyrene_flower", "desc": "本の間に挟まれていた押し花。何の花かはもう分からない。"}
 ]
 
 GACHA_ITEMS_R4 = ["hyper_ball", "exp_candy_m", "super_potion", "wise_glasses", "power_band", "full_heal"]
-# ★3はアイテムではなく石変換になるため、ここでのリストは使われませんが、念のため残しておきます
-GACHA_ITEMS_R3 = ["monster_ball", "super_ball", "potion", "antidote", "paralyze_heal"]
 
 # --- アチーブメント定義 ---
 ACHIEVEMENTS = {
@@ -89,40 +164,79 @@ ACHIEVEMENTS = {
     },
     "gacha_cyrene_e6": {
         "name_jp": "運命の再会", "name_en": "Fated Reunion",
-        "desc_jp": "キュレネを合計7体（完凸）所持する", "desc_en": "Own 7 copies of Cyrene (E6)",
+        "desc_jp": "キュレネを合計7体所持する", "desc_en": "Own 7 copies of Cyrene",
         "title_jp": "豪運の", "title_en": "Lucky",
         "type": "cyrene_copies", "threshold": 7
     },
     "gacha_aglaia_e6": {
         "name_jp": "美の極致", "name_en": "Perfection of Beauty",
-        "desc_jp": "アグライアを合計7体（完凸）所持する", "desc_en": "Own 7 copies of Aglaia (E6)",
+        "desc_jp": "アグライアを合計7体所持する", "desc_en": "Own 7 copies of Aglaia",
         "title_jp": "審美眼を持つ", "title_en": "Aesthetic",
         "type": "aglaia_copies", "threshold": 7
     },
     "gacha_trisbeas_e6": {
         "name_jp": "黄金の出資者", "name_en": "Golden Investor",
-        "desc_jp": "トリスビアスを合計7体（完凸）所持する", "desc_en": "Own 7 copies of Trisbeas (E6)",
+        "desc_jp": "トリスビアスを合計7体所持する", "desc_en": "Own 7 copies of Trisbeas",
         "title_jp": "大富豪の", "title_en": "Billionaire",
         "type": "trisbeas_copies", "threshold": 7
     },
     "gacha_anaxagoras_e6": {
         "name_jp": "真理の演算", "name_en": "Logic of Truth",
-        "desc_jp": "アナクサゴラスを合計7体（完凸）所持する", "desc_en": "Own 7 copies of Anaxagoras (E6)",
+        "desc_jp": "アナクサゴラスを合計7体所持する", "desc_en": "Own 7 copies of Anaxagoras",
         "title_jp": "全知の", "title_en": "Omniscient",
         "type": "anaxagoras_copies", "threshold": 7
     },
     "gacha_medimos_e6": {
         "name_jp": "不敗の軍神", "name_en": "Invincible God of War",
-        "desc_jp": "メデイモスを合計7体（完凸）所持する", "desc_en": "Own 7 copies of Medimos (E6)",
+        "desc_jp": "メデイモスを合計7体所持する", "desc_en": "Own 7 copies of Medimos",
         "title_jp": "常勝無敗の", "title_en": "Ever-Victorious",
         "type": "medimos_copies", "threshold": 7
     },
     "gacha_sepharia_e6": {
         "name_jp": "伝説の大泥棒", "name_en": "Legendary Phantom Thief",
-        "desc_jp": "セファリアを合計7体（完凸）所持する", "desc_en": "Own 7 copies of Sepharia (E6)",
+        "desc_jp": "セファリアを合計7体所持する", "desc_en": "Own 7 copies of Sepharia",
         "title_jp": "世間を騒がす", "title_en": "Notorious",
         "type": "sepharia_copies", "threshold": 7
     },
+    # --- 新規追加実績 ---
+    "gacha_hyacinthia_e6": {
+        "name_jp": "慈愛の聖女", "name_en": "Saint of Charity",
+        "desc_jp": "ヒアシンシアを合計7体所持する", "desc_en": "Own 7 copies of Hyacinthia",
+        "title_jp": "博愛の", "title_en": "Philanthropic",
+        "type": "hyacinthia_copies", "threshold": 7
+    },
+    "gacha_castoris_e6": {
+        "name_jp": "至高のパティシエ", "name_en": "Supreme Patissier",
+        "desc_jp": "キャストリスを合計7体所持する", "desc_en": "Own 7 copies of Castoris",
+        "title_jp": "甘党の", "title_en": "Sweet Tooth",
+        "type": "castoris_copies", "threshold": 7
+    },
+    "gacha_phainon_e6": {
+        "name_jp": "夢見る冒険者", "name_en": "Dreaming Adventurer",
+        "desc_jp": "ファイノンを合計7体所持する", "desc_en": "Own 7 copies of Phainon",
+        "title_jp": "野心的な", "title_en": "Ambitious",
+        "type": "phainon_copies", "threshold": 7
+    },
+    "gacha_seireness_e6": {
+        "name_jp": "深海の歌姫", "name_en": "Diva of the Deep",
+        "desc_jp": "セイレンスを合計7体所持する", "desc_en": "Own 7 copies of Seireness",
+        "title_jp": "深淵を覗く", "title_en": "Abyssal",
+        "type": "seireness_copies", "threshold": 7
+    },
+    "gacha_kerydra_e6": {
+        "name_jp": "覇王の凱旋", "name_en": "Return of the King",
+        "desc_jp": "ケリュドラを合計7体所持する", "desc_en": "Own 7 copies of Kerydra",
+        "title_jp": "絶対的な", "title_en": "Absolute",
+        "type": "kerydra_copies", "threshold": 7
+    },
+    # --- 持ち物返却実績 ---
+    "return_belongings": {
+        "name_jp": "思い出の返却", "name_en": "Return of Memories",
+        "desc_jp": "キュレネの持ち物を全て集めて返却する", "desc_en": "Return all of Cyrene's belongings",
+        "title_jp": "と共に時間を分かち合う", "title_en": "Sharing Time Together",
+        "type": "manual", "threshold": 1
+    },
+    # --- 既存実績 ---
     "maker_cry": {
         "name_jp": "製作者泣かせ", "name_en": "Developer's Nightmare",
         "desc_jp": "真なるキメラマスターロードの裏ボスを撃破する", "desc_en": "Defeat the hidden boss of True Kimera Master Road",
@@ -204,7 +318,8 @@ def get_gacha_buff_multiplier(user_id: int, buff_type: str) -> float:
             if c_data.get("buff_type") == buff_type:
                 base = c_data.get("buff_base", 0)
                 scale = c_data.get("buff_scale", 0)
-                eidolon_count = min(count - 1, 6)
+                # 凸数上限を13凸 (計14体) に変更
+                eidolon_count = min(count - 1, 13)
                 val = base + (eidolon_count * scale)
                 total_val += val
     return total_val
@@ -216,6 +331,35 @@ def check_secret_voice(user_id: int, char_key: str) -> bool:
         target_id = LIMITED_CHARACTERS[char_key]["secret_voice_id"]
         return target_id in unlocked
     return False
+
+# 持ち物返却イベントのチェック関数
+def check_cyrene_collection(user_id: int) -> tuple[bool, str]:
+    state = db.get_gacha_state(user_id)
+    belongings = state.get("belongings", [])
+    
+    # 必要なアイテムIDリスト
+    required_ids = [item["id"] for item in CYRENE_BELONGINGS]
+    
+    # 所持しているかチェック
+    owned_ids = set(belongings)
+    if all(req in owned_ids for req in required_ids):
+        # 実績解除処理
+        if db.unlock_achievement(user_id, "return_belongings"):
+            # アイテムを削除（返却）
+            state["belongings"] = []
+            db.save_gacha_state(user_id, state)
+            
+            ach = ACHIEVEMENTS["return_belongings"]
+            msg = (f"「…これ、私の…？ 拾ってくれていたのね。\n"
+                   f"ありがとう。失くしたと思っていた時間たちが、今戻ってきたみたい…。」\n\n"
+                   f"🏆 **実績解除: 【{ach['name_jp']}】**\n"
+                   f"二つ名獲得: **【{ach['title_jp']}】**")
+            return True, msg
+        else:
+            return False, "（もう返してあげたはずよ。手元には何もないわ。）"
+    else:
+        missing = [item["name"] for item in CYRENE_BELONGINGS if item["id"] not in owned_ids]
+        return False, f"まだ全ての持ち物が揃っていないみたい。\n不足: {', '.join(missing)}"
 
 def check_all_achievements(user_id: int) -> list[str]:
     newly_unlocked = []
@@ -231,13 +375,11 @@ def check_all_achievements(user_id: int) -> list[str]:
     if "cyrene_copies" in gacha_state:
         char_counts["cyrene"] = max(char_counts.get("cyrene", 0), gacha_state["cyrene_copies"])
     
-    # 全員完凸チェック (製作者泣かせ判定用)
+    # 全員完凸チェック
     all_limited_e6 = 1 if all(char_counts.get(k, 0) >= 7 for k in LIMITED_CHARACTERS.keys()) else 0
 
     rps_wins = get_janken_wins(user_id)
     
-    # キメラゲーム進行度取得
-    # ステージ14をクリアすると15になる
     k_ud_normal = k_core.get_user_data(user_id, hard_mode=False)
     k_ud_hard = k_core.get_user_data(user_id, hard_mode=True)
     kimera_stage = k_ud_normal.get("challenge_stage", 1)
@@ -252,6 +394,13 @@ def check_all_achievements(user_id: int) -> list[str]:
         "anaxagoras_copies": char_counts.get("anaxagoras", 0),
         "medimos_copies": char_counts.get("medimos", 0),
         "sepharia_copies": char_counts.get("sepharia", 0),
+        # --- 新規キャラ分 ---
+        "hyacinthia_copies": char_counts.get("hyacinthia", 0),
+        "castoris_copies": char_counts.get("castoris", 0),
+        "phainon_copies": char_counts.get("phainon", 0),
+        "seireness_copies": char_counts.get("seireness", 0),
+        "kerydra_copies": char_counts.get("kerydra", 0),
+        # -------------------
         "all_limited_e6": all_limited_e6,
         "rps_win": rps_wins,
         "kimera_stage": kimera_stage,
@@ -318,6 +467,13 @@ def format_achievement_progress(user_id: int) -> str:
         "anaxagoras_copies": char_counts.get("anaxagoras", 0),
         "medimos_copies": char_counts.get("medimos", 0),
         "sepharia_copies": char_counts.get("sepharia", 0),
+        # --- 新規キャラ分 ---
+        "hyacinthia_copies": char_counts.get("hyacinthia", 0),
+        "castoris_copies": char_counts.get("castoris", 0),
+        "phainon_copies": char_counts.get("phainon", 0),
+        "seireness_copies": char_counts.get("seireness", 0),
+        "kerydra_copies": char_counts.get("kerydra", 0),
+        # -------------------
         "all_limited_e6": all_limited_e6,
         "rps_win": get_janken_wins(user_id), 
         "kimera_stage": kimera_stage,
@@ -506,43 +662,58 @@ def perform_gacha_pulls(user_id: int, num_pulls: int, use_ticket: bool = False) 
     pickup_key = state.get("selected_pickup", CURRENT_BANNER_KEY)
     if pickup_key not in LIMITED_CHARACTERS:
         pickup_key = CURRENT_BANNER_KEY
-    
     pickup_char = LIMITED_CHARACTERS[pickup_key]
 
+    # --- コスト計算 (割引適用) ---
+    discount_percent = get_current_discount()
+    base_cost = 160 * num_pulls
+    
     if use_ticket:
         if num_pulls != 10: return False, "チケットは10連専用です。"
         if state.get("offbanner_tickets", 0) <= 0: return False, "チケットが足りません。"
         state["offbanner_tickets"] -= 1
         cost_str = "(チケット消費)"
     else:
-        cost = 160 * num_pulls
+        # 割引適用
+        final_cost = int(base_cost * (1.0 - discount_percent / 100.0))
+        
+        # セファリアのキャッシュバックバフ
         refund_chance = get_gacha_buff_multiplier(user_id, "gacha_refund")
+        is_refunded = False
         if refund_chance > 0 and random.random() < refund_chance:
-             cost = int(cost * 0.5)
-             cost_str = f"({cost} 個消費 - 怪盗の還元発動!)"
-        else:
-             cost_str = f"({cost} 個消費)"
+             final_cost = int(final_cost * 0.5)
+             is_refunded = True
 
-        if state.get("stones", 0) < cost: return False, f"石が足りません（必要: {cost}）"
-        state["stones"] -= cost
+        cost_str = f"({final_cost} 個消費)"
+        if discount_percent > 0:
+            cost_str += f" **[{discount_percent}% OFF!]**"
+        if is_refunded:
+            cost_str += " [怪盗の還元発動!]"
+
+        if state.get("stones", 0) < final_cost: return False, f"石が足りません（必要: {final_cost}）"
+        state["stones"] -= final_cost
 
     pity_5 = state.get("pity_5", 0)
     pity_4 = state.get("pity_4", 0)
-    guaranteed = state.get("guaranteed_pickup", False)
+    spark_counter = state.get("spark_counter", 0) # 300連天井用カウンター
     
     if "characters" not in state: state["characters"] = {}
     if "unlocked_voices" not in state: state["unlocked_voices"] = []
-    
-    if "cyrene_copies" in state and "cyrene" not in state["characters"]:
-        if state["cyrene_copies"] > 0:
-            state["characters"]["cyrene"] = state["cyrene_copies"]
+    if "belongings" not in state: state["belongings"] = [] # キュレネの持ち物リスト
 
     results = []
     new_features = []
 
     for _ in range(num_pulls):
         rank = 3
-        if random.random() < calc_main_5star_rate(pity_5):
+        # 300連天井 (Spark) チェック
+        spark_counter += 1
+        is_spark_trigger = False
+        
+        if spark_counter >= 300:
+            rank = 5
+            is_spark_trigger = True
+        elif random.random() < calc_main_5star_rate(pity_5):
             rank = 5
         else:
             pity_5 += 1
@@ -556,56 +727,49 @@ def perform_gacha_pulls(user_id: int, num_pulls: int, use_ticket: bool = False) 
             pity_5 = 0
             is_pickup_win = False
             
-            if guaranteed:
+            # 確定ロジック: 300連天井到達なら確定, それ以外は常に50% (すり抜け後の確定廃止)
+            if is_spark_trigger:
                 is_pickup_win = True
-                guaranteed = False
             elif random.random() < 0.5:
                 is_pickup_win = True
-                guaranteed = False
             else:
                 is_pickup_win = False
-                guaranteed = True
             
             if is_pickup_win:
+                # ピックアップ入手時は天井カウンターリセット
+                spark_counter = 0
+                
                 char_key = pickup_key
                 char_info = pickup_char
-                
                 count = state["characters"].get(char_key, 0) + 1
                 state["characters"][char_key] = count
                 
-                if char_key == "cyrene":
-                    state["cyrene_copies"] = count
+                if char_key == "cyrene": state["cyrene_copies"] = count
 
                 if count == 7:
                     if char_info["secret_voice_id"] not in state["unlocked_voices"]:
                         state["unlocked_voices"].append(char_info["secret_voice_id"])
-                    
                     voice_text = get_secret_voice(char_key, lang)
                     new_features.append(f"🎉 **完凸達成！シークレットボイス解放**: \n「{voice_text}」")
-                    # ここでの「二つ名解放」表示は flavor text として残し、
-                    # 実際の実績解除通知は後述の check_all_achievements で行う
-                    # new_features.append(f"👑 **二つ名解放**: 【{char_info['title']}】")
 
                 eidolon = count - 1 
+                prefix = "🌠 **[天井]** " if is_spark_trigger else ""
                 if count == 1:
-                    res_txt = f"**★5 [限定] {char_info['name']}** (New!)"
+                    res_txt = f"{prefix}**★5 [限定] {char_info['name']}** (New!)"
                     new_features.append(f"✨ バフ獲得: {char_info['desc']}")
                 else:
-                    res_txt = f"**★5 [限定] {char_info['name']}** ({eidolon}凸)"
+                    res_txt = f"{prefix}**★5 [限定] {char_info['name']}** ({eidolon}凸)"
             else:
-                spook_item = random.choice(STANDARD_POOL_5)
+                # すり抜け (キュレネの持ち物)
+                spook_item = random.choice(CYRENE_BELONGINGS)
+                item_id = spook_item["id"]
                 
-                if spook_item["id"] == "mecha_cyrene_doll":
-                    state["stones"] += 1600
-                    res_txt = f"★5 {spook_item['name']} (売却ボーナス: +1600石)"
-                elif spook_item["id"] == "ancient_memory":
-                    state["offbanner_tickets"] = state.get("offbanner_tickets", 0) + 5
-                    res_txt = f"★5 {spook_item['name']} (貴重な資源: +5 チケット)"
-                else:
-                    res_txt = f"★5 {spook_item['name']}"
+                # 持ち物リストに追加 (重複可)
+                state["belongings"].append(item_id)
                 
+                # すり抜け時はチケットも付与
                 state["offbanner_tickets"] = state.get("offbanner_tickets", 0) + 1
-                res_txt += "\n🎫 **すり抜けチケット** +1"
+                res_txt = f"★5 🗝️ **{spook_item['name']}**\n_{spook_item['desc']}_\n(チケット +1)"
             
             results.append(res_txt)
 
@@ -621,22 +785,26 @@ def perform_gacha_pulls(user_id: int, num_pulls: int, use_ticket: bool = False) 
 
     state["pity_5"] = pity_5
     state["pity_4"] = pity_4
-    state["guaranteed_pickup"] = guaranteed
+    state["spark_counter"] = spark_counter # 天井カウンタ保存
     db.save_gacha_state(user_id, state)
     k_core.save_user_data(user_id, user_kimera_data, hard_mode=False)
 
-    # ガチャ結果確定後、実績をチェックして即時反映させる
     new_unlocks = check_all_achievements(user_id)
 
     header = f"【ガチャ結果】PickUp: {pickup_char['name']}\n"
     body = "\n".join(results)
+    
+    # 持ち物収集状況のヒント
+    owned_ids = set(state.get("belongings", []))
+    total_belongings = len(CYRENE_BELONGINGS)
+    current_belongings = len([i for i in CYRENE_BELONGINGS if i["id"] in owned_ids])
+    
     footer = f"\n\n{cost_str} / 残り石: {state['stones']} / チケット: {state.get('offbanner_tickets',0)}"
+    footer += f"\n天井まで: {300 - spark_counter}連"
+    footer += f"\nキュレネの持ち物: {current_belongings}/{total_belongings} 種"
     
-    if new_features:
-        footer += "\n\n" + "\n".join(new_features)
-    
-    if new_unlocks:
-        footer += "\n" + "\n".join(new_unlocks)
+    if new_features: footer += "\n\n" + "\n".join(new_features)
+    if new_unlocks: footer += "\n" + "\n".join(new_unlocks)
 
     return True, header + body + footer
 
@@ -668,7 +836,7 @@ def format_gacha_status(user_id: int) -> str:
     stones = state.get("stones", 0)
     pity_5 = state.get("pity_5", 0)
     tickets = state.get("offbanner_tickets", 0)
-    guaranteed = state.get("guaranteed_pickup", False)
+    spark_counter = state.get("spark_counter", 0)
     aff_mult = 1.0 + get_gacha_buff_multiplier(user_id, "affection_boost")
     
     chars = state.get("characters", {})
@@ -683,7 +851,7 @@ def format_gacha_status(user_id: int) -> str:
             "【Gacha Menu】\n"
             f"- Stones: {stones}\n"
             f"- Current Banner: {pickup_name}\n"
-            f"- Pity Count: {pity_5}\n"
+            f"- Pity Count: {pity_5} / Spark: {spark_counter}/300\n"
             f"- Ticket: {tickets}\n"
             f"- Affection Bonus: x{aff_mult:.2f}\n"
         )
@@ -696,14 +864,17 @@ def format_gacha_status(user_id: int) -> str:
                 char_list.append(f"{name}({eidolon}凸)")
         
         char_str = ", ".join(char_list) if char_list else "なし"
-        next_up = f"{pickup_name}確定" if guaranteed else f"50%で{pickup_name}"
+        
+        # 割引表示
+        discount = get_current_discount()
+        discount_msg = f"現在 {discount}% OFF中！" if discount > 0 else ""
 
         return (
             "【ガチャメニュー】\n"
-            f"・開催中: {pickup_name} ピックアップ\n"
+            f"・開催中: {pickup_name} ピックアップ {discount_msg}\n"
             f"・所持石: {stones} 個\n"
             f"・チケット: {tickets} 枚\n"
-            f"・天井: {pity_5} / 次の★5: {next_up}\n"
+            f"・天井: {pity_5} (仮) / 確定まで: {300 - spark_counter}連\n"
             f"・好感度倍率: x{aff_mult:.2f}\n"
             f"・所持キャラ: {char_str}\n\n"
             "『単発ガチャ』『10連ガチャ』で運試しよ！"
@@ -723,7 +894,7 @@ def change_pickup_banner(user_id: int, target_name: str) -> tuple[bool, str]:
         return False, "そのキャラクターはピックアップ対象にいないみたい。"
         
     is_main_admin = (user_id == PRIMARY_ADMIN_ID)
-    cost = 1600
+    cost = 3200 # コストを2倍に変更
     state = db.get_gacha_state(user_id)
     
     if is_main_admin:
@@ -734,10 +905,11 @@ def change_pickup_banner(user_id: int, target_name: str) -> tuple[bool, str]:
         state["stones"] -= cost
         
     state["selected_pickup"] = target_key
+    state["spark_counter"] = 0 # ピックアップ変更で300連天井リセット
     db.save_gacha_state(user_id, state)
     
     char_name = LIMITED_CHARACTERS[target_key]['name']
-    msg = f"ピックアップを **{char_name}** に変更したわ♪"
+    msg = f"ピックアップを **{char_name}** に変更したわ♪ (天井カウントはリセットされました)"
     if is_main_admin: msg += "\n(デバッグ権限: 消費なし)"
     else: msg += f"\n({cost}石 消費 / 残り: {state['stones']}個)"
     return True, msg

@@ -2,7 +2,9 @@
 import os
 import re
 import random
+import datetime
 import discord
+from discord.ext import tasks
 from config import DISCORD_TOKEN, PRIMARY_ADMIN_ID
 import database as db
 import logic
@@ -10,8 +12,11 @@ import reply_system as rs
 from lines import ARAFUE_TRIGGER_LINE
 from forms import get_user_form, set_user_form, resolve_form_code, get_form_display_name, get_all_forms
 from special_unlocks import inc_janken_win, get_janken_wins, is_nanoka_unlocked, set_nanoka_unlocked, has_danheng_stage1, mark_danheng_stage1, is_danheng_unlocked, set_danheng_unlocked
-import kimera_game
+
+# アップロードファイルの構成に合わせ、エリアスで読み込み
+import kimera_game as kimera_game_original
 import cthulhu_game  # 新規追加：TRPGモジュール
+import gemini_chat  # AI対話モジュール
 
 # --- Discord Setup ---
 intents = discord.Intents.default()
@@ -58,7 +63,9 @@ ADMIN_COMMANDS_LIST_JP = (
     "- `じゃんけん勝利数追加 @ユーザー 数値`: 運命を少し書き換えるわね\n"
     "- `メッセージ制限bypass編集`: 特別なリストを編集するわ\n"
     "- `変身解放状況確認`: 誰が目覚めているか確認よ\n"
-    "- `全体送信 [メッセージ]`: サーバーのみんなに声を届けるわ♪"
+    "- `全体送信 [メッセージ]`: サーバーのみんなに声を届けるわ♪\n"
+    "- `割引イベント`: 30分間のガチャ割引イベントを強制開始するわ\n"
+    "- `無限デイリーオン` / `オフ`: デイリー制限を解除するわ"
 )
 
 ADMIN_COMMANDS_LIST_EN = (
@@ -79,7 +86,9 @@ ADMIN_COMMANDS_LIST_EN = (
     "- `Add RPS Wins @user [val]`: Rewrite fate a little...\n"
     "- `Edit Bypass`: Manage the whitelist\n"
     "- `Check Unlocks`: See who has awakened\n"
-    "- `Broadcast [msg]`: Send a message to all channels♪"
+    "- `Broadcast [msg]`: Send a message to all channels♪\n"
+    "- `Discount Event`: Force start a gacha discount event\n"
+    "- `Infinite Daily On` / `Off`: Toggle daily limits"
 )
 
 GENERAL_COMMANDS_LIST_JP = (
@@ -107,10 +116,13 @@ GENERAL_COMMANDS_LIST_JP = (
     "- `チケット10連`: チケットで回すわよ\n"
     "- `デイリー受け取り`: 1日1回、あたしからのプレゼントよ♪\n"
     "- `石をあげる @ユーザー 数`: お友達に石をプレゼントするわ♪\n"
-    "- `ピックアップ変更 [キャラ名]`: 狙いを定めるのね？\n\n"
+    "- `ピックアップ変更 [キャラ名]`: 狙いを定めるのね？\n"
+    "- `これ集めたんだけど返してあげる`: キュレネの持ち物を返すわ\n\n"
     "**★ ミニゲーム**\n"
     "- `キメラと遊びたい`: 可愛い子たちと遊びましょ♪\n"
-    "- `天外からのゲームやってみる？`: シンプルなクトゥルフ神話TRPGを始めましょ♪"
+    "- `天外からのゲームやってみる？`: シンプルなクトゥルフ神話TRPGを始めましょ♪\n\n"
+    "**★ その他**\n"
+    "- `ここに設定`: イベント通知をこのチャンネルにするわ（管理者のみ）"
 )
 
 GENERAL_COMMANDS_LIST_EN = (
@@ -138,10 +150,13 @@ GENERAL_COMMANDS_LIST_EN = (
     "- `Ticket 10`: Use tickets\n"
     "- `Daily`: A daily present just for you♪\n"
     "- `Give Stones @user [num]`: Send a gift to your friend♪\n"
-    "- `Change Pickup [Name]`: Set your target\n\n"
+    "- `Change Pickup [Name]`: Set your target\n"
+    "- `I collected these for you`: Return Cyrene's belongings\n\n"
     "**★ Games**\n"
     "- `Play with Kimera`: Let's play with the cute ones♪\n"
-    "- `Play Cthulhu Game`: Start a simple Cthulhu TRPG session♪"
+    "- `Play Cthulhu Game`: Start a simple Cthulhu TRPG session♪\n\n"
+    "**★ Other**\n"
+    "- `Set Here`: Set event notifications to this channel (Admin only)"
 )
 
 async def send_myu(message, user_id, text):
@@ -178,9 +193,37 @@ async def send_myu(message, user_id, text):
         except Exception as e:
             print(f"Failed to send log DM: {e}")
 
+# --- 割引イベントロジック ---
+async def start_random_discount_event():
+    percent = random.randint(10, 70)
+    duration = 30
+    logic.set_discount_event(True, percent, duration)
+    
+    target_channel_id = db.get_event_channel_id()
+    if target_channel_id:
+        channel = client.get_channel(target_channel_id)
+        if channel:
+            try:
+                await channel.send(f"🚨 **【緊急ゲリラ割引！】** 🚨\nこれからの30分間、ガチャ消費石が **{percent}% OFF** よ！\n急いで回してね♪")
+            except Exception as e:
+                print(f"Failed to send event message: {e}")
+
+# 割引イベント監視ループ (1分ごとに抽選)
+@tasks.loop(minutes=1.0)
+async def discount_event_loop():
+    # 既に開催中ならスキップ
+    if logic.GLOBAL_DISCOUNT_STATE["active"]:
+        return
+
+    # ランダム抽選 (約 1/1440 の確率で1日1回程度)
+    if random.random() < 0.0007:
+        await start_random_discount_event()
+
 @client.event
 async def on_ready():
     print(f"Login: {client.user}")
+    if not discount_event_loop.is_running():
+        discount_event_loop.start()
 
 @client.event
 async def on_message(message):
@@ -251,6 +294,25 @@ async def on_message(message):
              await send_myu(message, user_id, "Access denied. Admin only.")
         return
     
+    # --- ★ イベントチャンネル設定 & 強制開始 ---
+    if content_body in ["ここに設定", "set here"]:
+        if db.is_admin(user_id):
+            db.set_event_channel_id(message.channel.id)
+            msg = f"Event channel set to {message.channel.name}." if lang=="en" else f"了解。このチャンネル ({message.channel.name}) にイベント情報を通知するわね♪"
+            await message.channel.send(msg)
+        else:
+            await message.channel.send("Only admins can do that." if lang=="en" else "その設定は管理者しかできないわ。")
+        return
+
+    if content_body in ["割引イベント", "discount event"]:
+        if user_id == PRIMARY_ADMIN_ID:
+            await start_random_discount_event()
+            msg = "Discount event started!" if lang=="en" else "管理者権限で割引イベントを開始したわ！"
+            await message.channel.send(msg)
+        else:
+            await message.channel.send("Permission denied.")
+        return
+
     # --- ★ 全チャンネル送信 (管理者限定) ---
     if content_body.startswith("全体送信") or content_body.startswith("broadcast"):
         # 管理者権限チェック
@@ -270,7 +332,6 @@ async def on_message(message):
 
         # 送信処理開始
         sent_count = 0
-        error_count = 0
         
         # サーバー内の全テキストチャンネルをループ
         for channel in message.guild.text_channels:
@@ -281,7 +342,7 @@ async def on_message(message):
                     await channel.send(broadcast_msg)
                     sent_count += 1
                 except Exception:
-                    error_count += 1
+                    pass
         
         # 結果報告
         res = f"Sent to {sent_count} channels♪" if lang=="en" else f"ふふっ、{sent_count}個のチャンネルに声を届けてきたわ♪"
@@ -328,7 +389,7 @@ async def on_message(message):
          await message.channel.send(msg)
          return
 
-    # 状態チェック (クトゥルフTRPGのセッションも判定に追加)
+    # 状態チェック
     is_active_mode = (
         user_id in waiting_for_nickname or user_id in waiting_for_rename or
         user_id in waiting_for_admin_add or user_id in waiting_for_admin_remove or
@@ -341,7 +402,7 @@ async def on_message(message):
     )
     
     # キメラゲーム中かチェック
-    kimera_session = kimera_game.get_session(user_id)
+    kimera_session = kimera_game_original.get_session(user_id)
     is_playing_kimera = kimera_session is not None
 
     # キーワードトリガー
@@ -830,8 +891,14 @@ async def on_message(message):
             await send_myu(message, user_id, msg)
         return
 
-    # --- ガチャ ---
-    if any(k in content_body_lower for k in GACHA_KEYWORDS):
+    # --- ★ ガチャ関連 (アイテム返却追加) ---
+    if any(k in content_body_lower for k in GACHA_KEYWORDS) or "これ集めたんだけど返してあげる" in content_body:
+        # 持ち物返却
+        if content_body == "これ集めたんだけど返してあげる" or "i collected these for you" in content_body_lower:
+            success, msg = logic.check_cyrene_collection(user_id)
+            await send_myu(message, user_id, f"{message.author.mention} {msg}")
+            return
+
         # ピックアップ変更
         change_cmd = ["ピックアップ変更", "change pickup"]
         if any(c in content_body_lower for c in change_cmd):
@@ -1034,7 +1101,7 @@ async def on_message(message):
         if found_user:
             content_body = f"<@{found_user}>"
 
-    kimera_result = kimera_game.process_kimera_command(user_id, content_body)
+    kimera_result = kimera_game_original.process_kimera_command(user_id, content_body)
     
     if kimera_result:
         if isinstance(kimera_result, tuple):

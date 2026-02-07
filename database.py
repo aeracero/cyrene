@@ -1,14 +1,13 @@
+# database.py
 import json
 from pathlib import Path
 from config import (
     NICKNAMES_FILE, ADMINS_FILE, GUARDIAN_FILE, AFFECTION_FILE,
     AFFECTION_CONFIG_FILE, MESSAGE_LIMIT_FILE, MESSAGE_USAGE_FILE,
     MESSAGE_LIMIT_CONFIG_FILE, GACHA_FILE, MYURION_FILE, SPECIAL_UNLOCKS_FILE,
-    LANGUAGE_FILE, REPLY_MODE_FILE, ACHIEVEMENTS_FILE, LOG_MODE_FILE, # ★追加
+    LANGUAGE_FILE, REPLY_MODE_FILE, ACHIEVEMENTS_FILE, LOG_MODE_FILE,
     PRIMARY_ADMIN_ID, today_str
 )
-
-# 以前のハードコードされたパス定義を削除し、configからインポートしたものを使用します
 
 # --- 共通ユーティリティ ---
 def _load_json(path: Path, default=None):
@@ -27,7 +26,17 @@ def _save_json(path: Path, data):
         path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
-# --- ★追加: ログ確認モード ---
+# --- イベントチャンネル ---
+def get_event_channel_id() -> int | None:
+    path = Path("data/event_channel.json") # 保存先を追加
+    data = _load_json(path, {})
+    return data.get("channel_id")
+
+def set_event_channel_id(channel_id: int):
+    path = Path("data/event_channel.json")
+    _save_json(path, {"channel_id": channel_id})
+
+# --- ログ確認モード ---
 def is_log_mode_enabled():
     data = _load_json(LOG_MODE_FILE, {"enabled": False})
     return data.get("enabled", False)
@@ -178,14 +187,22 @@ def save_gacha_data(data): _save_json(GACHA_FILE, data)
 def get_gacha_state(user_id):
     data = load_gacha_data()
     state = data.get(str(user_id))
+    # State初期化
     if not isinstance(state, dict):
         state = {
-            "stones": 0, "pity_5": 0, "pity_4": 0, "guaranteed_cyrene": False,
-            "cyrene_copies": 0, "page1_count": 0, "offbanner_tickets": 0, "last_daily": None,
+            "stones": 0, "pity_5": 0, "pity_4": 0, 
+            "guaranteed_pickup": False, # 旧仕様のフラグだが互換性のため残す
+            "spark_counter": 0,         # 新規: 300連天井カウンター
+            "cyrene_copies": 0, "offbanner_tickets": 0, "last_daily": None,
+            "characters": {}, "unlocked_voices": [], "belongings": [] # 新規: 持ち物リスト
         }
         data[str(user_id)] = state
         _save_json(GACHA_FILE, data)
+    # 既存データへのフィールド追加補完
+    if "spark_counter" not in state: state["spark_counter"] = 0
+    if "belongings" not in state: state["belongings"] = []
     return state
+
 def save_gacha_state(user_id, state):
     data = load_gacha_data()
     data[str(user_id)] = state
@@ -226,24 +243,15 @@ def set_janken_wins_direct(user_id: int, wins: int):
     data[str(user_id)] = info
     save_special_unlocks(data)
 
-# ★追加: HC愛の進行度更新
 def mark_hc_love_phrase(user_id: int, phrase_index: int):
-    """
-    phrase_index: 0, 1, 2
-    戻り値: True if all 3 collected
-    """
     data = load_special_unlocks()
     info = data.get(str(user_id), {})
     flags = info.get("hc_love_flags", 0)
-    
-    # ビット演算でフラグを立てる
     flags |= (1 << phrase_index)
-    
     info["hc_love_flags"] = flags
     data[str(user_id)] = info
     save_special_unlocks(data)
-    
-    return flags == 7 # 111(binary) -> 7
+    return flags == 7
 
 def get_all_special_status():
     data = load_special_unlocks()
