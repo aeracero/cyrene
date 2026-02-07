@@ -21,12 +21,18 @@ GLOBAL_DISCOUNT_STATE = {
     "end_time": None
 }
 
-def set_discount_event(active: bool, percent: int = 0, duration_minutes: int = 30):
+def set_discount_event(active: bool, percent: int = 0, duration_seconds: int = 1800):
+    """
+    割引イベントを設定する。
+    duration_seconds: 持続時間（秒）。デフォルトは30分(1800秒)。
+    """
     GLOBAL_DISCOUNT_STATE["active"] = active
-    if active:
+    if active and percent > 0:
         GLOBAL_DISCOUNT_STATE["percent"] = percent
-        GLOBAL_DISCOUNT_STATE["end_time"] = datetime.datetime.now() + datetime.timedelta(minutes=duration_minutes)
+        GLOBAL_DISCOUNT_STATE["end_time"] = datetime.datetime.now() + datetime.timedelta(seconds=duration_seconds)
     else:
+        # percentが0以下、またはactive=Falseなら終了
+        GLOBAL_DISCOUNT_STATE["active"] = False
         GLOBAL_DISCOUNT_STATE["percent"] = 0
         GLOBAL_DISCOUNT_STATE["end_time"] = None
 
@@ -49,7 +55,7 @@ LIMITED_CHARACTERS = {
         "buff_type": "affection_boost", 
         "buff_base": 0.20,
         "buff_scale": 0.10,
-        "desc": "【愛の加護】好感度XP獲得量UP (13凸: +150%)"
+        "desc": "【愛の加護】好感度XP獲得量UP (Base: +20%, 1凸毎: +10%)"
     },
     "aglaia": {
         "name": "アグライア", 
@@ -58,7 +64,7 @@ LIMITED_CHARACTERS = {
         "buff_type": "training_crit", 
         "buff_base": 0.05,
         "buff_scale": 0.02,
-        "desc": "【審美眼】キメラトレーニングで「大成功」が出る確率UP (13凸: 31%)"
+        "desc": "【審美眼】キメラトレーニング「大成功」率UP (Base: 5%, 1凸毎: +2%)"
     },
     "trisbeas": {
         "name": "トリスビアス", 
@@ -67,7 +73,7 @@ LIMITED_CHARACTERS = {
         "buff_type": "daily_income", 
         "buff_base": 2000,
         "buff_scale": 500,
-        "desc": "【パトロン】デイリー配布石が増加 (13凸: +8500)"
+        "desc": "【パトロン】デイリー配布石が増加 (Base: +2000, 1凸毎: +500)"
     },
     "anaxagoras": {
         "name": "アナクサゴラス", 
@@ -76,7 +82,7 @@ LIMITED_CHARACTERS = {
         "buff_type": "rps_win_bonus", 
         "buff_base": 5,
         "buff_scale": 2,
-        "desc": "【演算】じゃんけん勝利時の獲得XPボーナス (13凸: +31)"
+        "desc": "【演算】じゃんけん勝利時のXPボーナス (Base: +5, 1凸毎: +2)"
     },
     "medimos": {
         "name": "メデイモス", 
@@ -85,7 +91,7 @@ LIMITED_CHARACTERS = {
         "buff_type": "trainer_xp_mult", 
         "buff_base": 0.1,
         "buff_scale": 0.05,
-        "desc": "【スパルタ】キメラ育成XPの倍率UP (13凸: +75%)"
+        "desc": "【スパルタ】キメラ育成XP倍率UP (Base: +10%, 1凸毎: +5%)"
     },
     "sepharia": {
         "name": "セファリア", 
@@ -94,56 +100,56 @@ LIMITED_CHARACTERS = {
         "buff_type": "gacha_refund", 
         "buff_base": 0.05,
         "buff_scale": 0.02,
-        "desc": "【キャッシュバック】石消費時に確率で一部還元 (13凸: 31%)"
+        "desc": "【キャッシュバック】石消費時に確率で還元 (Base: 5%, 1凸毎: +2%)"
     },
     "hyacinthia": {
-        "name": "ヒアシンシア",
+        "name": "ヒアシンシア", 
         "title": "慈愛の",
         "secret_voice_id": "voice_hyacinthia_heal",
         "buff_type": "shop_discount",
         "buff_base": 0.05,
         "buff_scale": 0.02,
-        "desc": "【奉仕】ショップの購入価格が割引 (13凸: 31%OFF)"
+        "desc": "【奉仕】ショップ価格割引 (Base: 5%OFF, 1凸毎: +2%)"
     },
     "castoris": {
-        "name": "キャストリス",
+        "name": "キャストリス", 
         "title": "甘味の",
         "secret_voice_id": "voice_castoris_eat",
         "buff_type": "recovery_boost",
         "buff_base": 0.10,
         "buff_scale": 0.05,
-        "desc": "【糖分】回復アイテムの効果量がUP (13凸: +75%)"
+        "desc": "【糖分】回復アイテム効果量UP (Base: +10%, 1凸毎: +5%)"
     },
     "phainon": {
-        "name": "ファイノン",
+        "name": "ファイノン", 
         "title": "夢追う",
         "secret_voice_id": "voice_phainon_dream",
         "buff_type": "battle_money_boost",
         "buff_base": 0.10,
         "buff_scale": 0.05,
-        "desc": "【野望】バトル勝利時の獲得金UP (13凸: +75%)"
+        "desc": "【野望】バトル勝利金UP (Base: +10%, 1凸毎: +5%)"
     },
     "seireness": {
-        "name": "セイレンス",
+        "name": "セイレンス", 
         "title": "深海の",
         "secret_voice_id": "voice_seireness_song",
         "buff_type": "shiny_rate_boost",
         "buff_base": 0.05,
         "buff_scale": 0.01,
-        "desc": "【潮目】高レアキメラとの遭遇率UP (13凸: +18%)"
+        "desc": "【潮目】高レア遭遇率UP (Base: +5%, 1凸毎: +1%)"
     },
     "kerydra": {
-        "name": "ケリュドラ",
+        "name": "ケリュドラ", 
         "title": "覇道の",
         "secret_voice_id": "voice_kerydra_king",
         "buff_type": "drop_rate_boost",
         "buff_base": 0.15,
         "buff_scale": 0.02,
-        "desc": "【徴収】敵からのアイテムドロップ率UP (13凸: +41%)"
+        "desc": "【徴収】ドロップ率UP (Base: +15%, 1凸毎: +2%)"
     },
 }
 
-# --- 新規: キュレネの持ち物 (すり抜け枠) ---
+# --- 新規: キュレネの持ち物 (すり抜け枠・レア) ---
 CYRENE_BELONGINGS = [
     {"name": "古びた懐中時計", "type": "belonging", "id": "cyrene_watch", "desc": "針の止まった懐中時計。裏面にイニシャルが刻まれている。"},
     {"name": "色褪せたリボン", "type": "belonging", "id": "cyrene_ribbon", "desc": "かつて誰かが髪に結んでいたリボン。微かに甘い香りがする。"},
@@ -521,7 +527,6 @@ def format_achievement_progress(user_id: int) -> str:
         lines.append("\n『二つ名変更』で獲得した称号をつけられるわよ♪")
     return "\n".join(lines)
 
-# --- 以下、省略・変更なし ---
 def get_level_from_xp(xp: int, cfg: dict) -> int:
     thresholds = [0, 1000, 2000, 3500, 7000, 10000]
     current_level = 1
@@ -645,6 +650,42 @@ async def send_myurion_question(message, user_id, correct_count, state_dict):
     state_dict[user_id] = {"question": q, "options": [c for _, c in indexed], "correct_index": correct_index}
     await message.channel.send(apply_myurion_filter(user_id, f"{message.author.mention} {body}"))
 
+# --- 石の譲渡機能 ---
+def transfer_stones(sender_id: int, receiver_id: int, amount: int) -> str:
+    if amount <= 0:
+        return "あげる数は1以上にしないとね。"
+    if sender_id == receiver_id:
+        return "自分には送れないわ。"
+    
+    sender_state = db.get_gacha_state(sender_id)
+    if sender_state.get("stones", 0) < amount:
+        return "石が足りないみたいよ。"
+    
+    receiver_state = db.get_gacha_state(receiver_id)
+    
+    sender_state["stones"] -= amount
+    receiver_state["stones"] = receiver_state.get("stones", 0) + amount
+    
+    db.save_gacha_state(sender_id, sender_state)
+    db.save_gacha_state(receiver_id, receiver_state)
+    
+    return f"<@{receiver_id}> に {amount}個 の石をプレゼントしたわ♪"
+
+# --- ガチャロジック ---
+
+def calc_pickup_rate(spark_counter: int) -> float:
+    """
+    天井(300連)に近づくほど、すり抜け率が50%に近づく（ピックアップ率が上がる）。
+    0連: ピックアップ率 20% (すり抜け 80%)
+    300連: ピックアップ率 50% (すり抜け 50%)
+    ※300連目自体は別途確定処理される
+    """
+    base_rate = 0.20 # 20%
+    target_rate = 0.50 # 50%
+    progress = min(1.0, spark_counter / 300.0)
+    
+    return base_rate + (target_rate - base_rate) * progress
+
 def calc_main_5star_rate(pity_5: int) -> float:
     base = 0.0006
     if pity_5 <= 73: return base
@@ -699,20 +740,21 @@ def perform_gacha_pulls(user_id: int, num_pulls: int, use_ticket: bool = False) 
     
     if "characters" not in state: state["characters"] = {}
     if "unlocked_voices" not in state: state["unlocked_voices"] = []
-    if "belongings" not in state: state["belongings"] = [] # キュレネの持ち物リスト
+    if "belongings" not in state: state["belongings"] = [] 
 
     results = []
     new_features = []
 
     for _ in range(num_pulls):
         rank = 3
-        # 300連天井 (Spark) チェック
+        # 300連天井 (Spark) チェック: ピックアップ確定
         spark_counter += 1
         is_spark_trigger = False
         
         if spark_counter >= 300:
             rank = 5
             is_spark_trigger = True
+            # 天井到達時は確実にピックアップ
         elif random.random() < calc_main_5star_rate(pity_5):
             rank = 5
         else:
@@ -727,18 +769,19 @@ def perform_gacha_pulls(user_id: int, num_pulls: int, use_ticket: bool = False) 
             pity_5 = 0
             is_pickup_win = False
             
-            # 確定ロジック: 300連天井到達なら確定, それ以外は常に50% (すり抜け後の確定廃止)
+            # ピックアップ判定
             if is_spark_trigger:
                 is_pickup_win = True
-            elif random.random() < 0.5:
-                is_pickup_win = True
             else:
-                is_pickup_win = False
+                # 天井に近づくほど確率は上がる (20% -> 50%)
+                current_pickup_rate = calc_pickup_rate(spark_counter)
+                if random.random() < current_pickup_rate:
+                    is_pickup_win = True
+                else:
+                    is_pickup_win = False
             
             if is_pickup_win:
-                # ピックアップ入手時は天井カウンターリセット
-                spark_counter = 0
-                
+                # ピックアップ入手 (※ここでは天井リセットしない)
                 char_key = pickup_key
                 char_info = pickup_char
                 count = state["characters"].get(char_key, 0) + 1
@@ -760,16 +803,19 @@ def perform_gacha_pulls(user_id: int, num_pulls: int, use_ticket: bool = False) 
                 else:
                     res_txt = f"{prefix}**★5 [限定] {char_info['name']}** ({eidolon}凸)"
             else:
-                # すり抜け (キュレネの持ち物)
-                spook_item = random.choice(CYRENE_BELONGINGS)
-                item_id = spook_item["id"]
+                # すり抜け: 持ち物(レア) or チケットのみ(ハズレ)
+                # 持ち物はレアにする (例: 10%で持ち物, 90%でチケットのみ)
+                if random.random() < 0.10:
+                    spook_item = random.choice(CYRENE_BELONGINGS)
+                    item_id = spook_item["id"]
+                    state["belongings"].append(item_id)
+                    res_txt = f"★5 🗝️ **{spook_item['name']}**\n_{spook_item['desc']}_"
+                else:
+                    res_txt = f"★5 🎫 **幸運のチケット** (ハズレ枠…)"
                 
-                # 持ち物リストに追加 (重複可)
-                state["belongings"].append(item_id)
-                
-                # すり抜け時はチケットも付与
+                # すり抜け時はチケット付与
                 state["offbanner_tickets"] = state.get("offbanner_tickets", 0) + 1
-                res_txt = f"★5 🗝️ **{spook_item['name']}**\n_{spook_item['desc']}_\n(チケット +1)"
+                res_txt += "\n(チケット +1)"
             
             results.append(res_txt)
 
@@ -800,7 +846,7 @@ def perform_gacha_pulls(user_id: int, num_pulls: int, use_ticket: bool = False) 
     current_belongings = len([i for i in CYRENE_BELONGINGS if i["id"] in owned_ids])
     
     footer = f"\n\n{cost_str} / 残り石: {state['stones']} / チケット: {state.get('offbanner_tickets',0)}"
-    footer += f"\n天井まで: {300 - spark_counter}連"
+    footer += f"\n天井(確定)まで: {300 - spark_counter}連"
     footer += f"\nキュレネの持ち物: {current_belongings}/{total_belongings} 種"
     
     if new_features: footer += "\n\n" + "\n".join(new_features)
