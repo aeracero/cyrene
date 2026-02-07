@@ -16,7 +16,6 @@ from special_unlocks import inc_janken_win, get_janken_wins, is_nanoka_unlocked,
 # アップロードファイルの構成に合わせ、エリアスで読み込み
 import kimera_game as kimera_game_original
 import cthulhu_game  # 新規追加：TRPGモジュール
-import gemini_chat  # AI対話モジュール
 
 # --- Discord Setup ---
 intents = discord.Intents.default()
@@ -376,18 +375,6 @@ async def on_message(message):
         await message.channel.send(msg)
         return
 
-    if content_lower == "!chat off":
-        GEMINI_MODE_USERS.discard(user_id)
-        gemini_chat.reset_history(user_id) # 履歴もリセット
-        msg = "わかったわ。いつものおしゃべりに戻りましょ♪" if lang != "en" else "Okay, back to normal chatting♪"
-        await message.channel.send(msg)
-        return
-        
-    if content_lower == "!chat reset":
-         gemini_chat.reset_history(user_id)
-         msg = "記憶を整理したわ。新しいお話をしましょう♪" if lang != "en" else "I've organized my memories. Let's start a new topic♪"
-         await message.channel.send(msg)
-         return
 
     # 状態チェック
     is_active_mode = (
@@ -1120,18 +1107,6 @@ async def on_message(message):
                 try:
                     await message.channel.send(f"<@{target_uid}> {target_msg}")
                 except: pass
-        return
-
-    # --- ★ Gemini 対話モード処理 ---
-    if is_gemini_active and not is_command_query:
-        if not is_mentioned:
-            return
-
-        async with message.channel.typing():
-            ai_reply = await gemini_chat.get_gemini_reply(user_id, raw_name, content_body)
-        
-        await send_myu(message, user_id, f"{message.author.mention} {ai_reply}")
-        logic.add_affection_xp(user_id, 2) 
         return
 
     # --- 通常会話 & 実績判定 ---
