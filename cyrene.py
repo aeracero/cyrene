@@ -13,9 +13,9 @@ from lines import ARAFUE_TRIGGER_LINE
 from forms import get_user_form, set_user_form, resolve_form_code, get_form_display_name, get_all_forms
 from special_unlocks import inc_janken_win, get_janken_wins, is_nanoka_unlocked, set_nanoka_unlocked, has_danheng_stage1, mark_danheng_stage1, is_danheng_unlocked, set_danheng_unlocked
 
-# アップロードファイルの構成に合わせ、エリアスで読み込み
-import kimera_game as kimera_game_original
-import cthulhu_game  # 新規追加：TRPGモジュール
+# アップロードファイルの構成に合わせ、エイリアスで読み込み
+import kimera_game
+import cthulhu_game
 
 # --- Discord Setup ---
 intents = discord.Intents.default()
@@ -63,7 +63,7 @@ ADMIN_COMMANDS_LIST_JP = (
     "- `メッセージ制限bypass編集`: 特別なリストを編集するわ\n"
     "- `変身解放状況確認`: 誰が目覚めているか確認よ\n"
     "- `全体送信 [メッセージ]`: サーバーのみんなに声を届けるわ♪\n"
-    "- `割引イベント`: 30分間のガチャ割引イベントを強制開始するわ\n"
+    "- `割引イベント [率] [秒]`: ガチャ割引イベントを強制開始/終了するわ\n"
     "- `無限デイリーオン` / `オフ`: デイリー制限を解除するわ"
 )
 
@@ -86,7 +86,7 @@ ADMIN_COMMANDS_LIST_EN = (
     "- `Edit Bypass`: Manage the whitelist\n"
     "- `Check Unlocks`: See who has awakened\n"
     "- `Broadcast [msg]`: Send a message to all channels♪\n"
-    "- `Discount Event`: Force start a gacha discount event\n"
+    "- `Discount Event [pct] [sec]`: Force start/end a gacha discount event\n"
     "- `Infinite Daily On` / `Off`: Toggle daily limits"
 )
 
@@ -193,17 +193,39 @@ async def send_myu(message, user_id, text):
             print(f"Failed to send log DM: {e}")
 
 # --- 割引イベントロジック ---
-async def start_random_discount_event():
-    percent = random.randint(10, 70)
-    duration = 30
-    logic.set_discount_event(True, percent, duration)
+async def start_random_discount_event(percent=None, duration=None):
+    """
+    割引イベントを開始する。
+    percent: 指定がなければ 10-70 の乱数
+    duration: 指定がなければ 1800秒 (30分)
+    """
+    if percent is None:
+        p = random.randint(10, 70)
+    else:
+        p = percent
+    
+    if duration is None:
+        d = 1800 # 30分
+    else:
+        d = duration
+
+    # ロジック側に秒単位で渡す
+    logic.set_discount_event(True, p, d)
     
     target_channel_id = db.get_event_channel_id()
     if target_channel_id:
         channel = client.get_channel(target_channel_id)
         if channel:
             try:
-                await channel.send(f"🚨 **【緊急ゲリラ割引！】** 🚨\nこれからの30分間、ガチャ消費石が **{percent}% OFF** よ！\n急いで回してね♪")
+                # 表示用の時間テキスト
+                if d < 60:
+                    time_text = f"{d}秒間"
+                elif d % 60 == 0:
+                    time_text = f"{d // 60}分間"
+                else:
+                    time_text = f"{d // 60}分{d % 60}秒間"
+
+                await channel.send(f"🚨 **【緊急ゲリラ割引！】** 🚨\nこれからの {time_text}、ガチャ消費石が **{p}% OFF** よ！\n急いで回してね♪")
             except Exception as e:
                 print(f"Failed to send event message: {e}")
 
@@ -303,10 +325,36 @@ async def on_message(message):
             await message.channel.send("Only admins can do that." if lang=="en" else "その設定は管理者しかできないわ。")
         return
 
-    if content_body in ["割引イベント", "discount event"]:
+    # ★ 割引イベントコマンド拡張
+    if content_body.startswith("割引イベント") or content_body.startswith("discount event"):
         if user_id == PRIMARY_ADMIN_ID:
-            await start_random_discount_event()
-            msg = "Discount event started!" if lang=="en" else "管理者権限で割引イベントを開始したわ！"
+            # 引数解析: 割引イベント [percent] [seconds]
+            args = content_body.split()
+            p = None
+            d = None
+            
+            # 引数がある場合
+            if len(args) >= 2:
+                try:
+                    p = int(args[1])
+                except: pass
+            if len(args) >= 3:
+                try:
+                    d = int(args[2])
+                except: pass
+
+            # 0%指定なら終了
+            if p is not None and p <= 0:
+                logic.set_discount_event(False)
+                msg = "割引イベントを強制終了させたわ。"
+                await message.channel.send(msg)
+                return
+
+            await start_random_discount_event(percent=p, duration=d)
+            
+            # 管理者へのフィードバック
+            min_text = f"{d}sec" if d and d < 60 else f"{d//60 if d else 30}min"
+            msg = f"Discount event started! ({p if p else 'Random'}%, {min_text})" if lang=="en" else f"管理者権限で割引イベントを開始したわ！ ({p if p else 'ランダム'}%, {min_text})"
             await message.channel.send(msg)
         else:
             await message.channel.send("Permission denied.")
@@ -389,7 +437,7 @@ async def on_message(message):
     )
     
     # キメラゲーム中かチェック
-    kimera_session = kimera_game_original.get_session(user_id)
+    kimera_session = kimera_game.get_session(user_id)
     is_playing_kimera = kimera_session is not None
 
     # キーワードトリガー
@@ -1088,7 +1136,7 @@ async def on_message(message):
         if found_user:
             content_body = f"<@{found_user}>"
 
-    kimera_result = kimera_game_original.process_kimera_command(user_id, content_body)
+    kimera_result = kimera_game.process_kimera_command(user_id, content_body)
     
     if kimera_result:
         if isinstance(kimera_result, tuple):
