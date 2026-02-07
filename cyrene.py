@@ -42,7 +42,6 @@ GEMINI_MODE_USERS = set()
 USER_FORM_HISTORY = {} 
 
 # --- Help Messages ---
-# (省略なしのため記述)
 ADMIN_COMMANDS_LIST_JP = (
     "【データの管理ね？ 任せてちょうだい♪】\n"
     "このモードでは以下のコマンドが使えるわ。\n\n"
@@ -851,16 +850,34 @@ async def on_message(message):
             await send_myu(message, user_id, msg)
         return
 
-    if any(k in content_body_lower for k in GACHA_KEYWORDS) or "これ集めたんだけど返してあげる" in content_body or "バグ修正" in content_body or "fix bug" in content_body_lower:
+    if any(k in content_body_lower for k in GACHA_KEYWORDS) or "これ集めたんだけど返してあげる" in content_body or "バグ修正" in content_body or "fix bug" in content_body_lower or "デバッグ削除" in content_body or "debug remove" in content_body_lower:
         if content_body == "これ集めたんだけど返してあげる" or "i collected these for you" in content_body_lower:
             success, msg = logic.check_cyrene_collection(user_id)
             await send_myu(message, user_id, f"{message.author.mention} {msg}")
             return
             
-        # ★ バグ修正コマンド
         if content_body == "バグ修正" or content_body_lower == "fix bug":
             msg = logic.fix_gacha_bug(user_id)
             await send_myu(message, user_id, msg)
+            return
+
+        # ★ 手動デバッグ削除コマンド
+        if content_body.startswith("デバッグ削除") or content_body.startswith("debug remove"):
+            if user_id != PRIMARY_ADMIN_ID:
+                await send_myu(message, user_id, "権限がないわ。")
+                return
+
+            m = re.search(r"<@!?(\d+)>\s+(\S+)\s+(\d+)", content_body)
+            if m:
+                target_id = int(m.group(1))
+                target_name = m.group(2)
+                amount = int(m.group(3))
+                
+                res = logic.debug_manual_remove(user_id, target_id, target_name, amount)
+                await send_myu(message, user_id, res)
+            else:
+                msg = "書式: `デバッグ削除 @ユーザー [キャラ名] [個数]`\n例: `デバッグ削除 @User キュレネ 5`"
+                await send_myu(message, user_id, msg)
             return
 
         change_cmd = ["ピックアップ変更", "change pickup"]

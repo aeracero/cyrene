@@ -319,7 +319,6 @@ def get_gacha_buff_multiplier(user_id: int, buff_type: str) -> float:
                 total_val += val
     return total_val
 
-# ... (省略なしのため、他の関数もそのまま記述します) ...
 def check_secret_voice(user_id: int, char_key: str) -> bool:
     state = db.get_gacha_state(user_id)
     unlocked = state.get("unlocked_voices", [])
@@ -655,7 +654,7 @@ def calc_main_5star_rate(pity_5: int) -> float:
         return min(1.0, base + (1.0 - base) * ((pity_5 - 73) / 15))
     return 1.0
 
-# --- ガチャロジック修正 ---
+# --- ガチャロジック ---
 def perform_gacha_pulls(user_id: int, num_pulls: int, use_ticket: bool = False) -> tuple[bool, str]:
     from reply_system import get_secret_voice
 
@@ -807,7 +806,6 @@ def perform_gacha_pulls(user_id: int, num_pulls: int, use_ticket: bool = False) 
 
     return True, header + body + footer
 
-# --- ★ バグ修正用ツール ---
 def fix_gacha_bug(user_id: int) -> str:
     """
     バグによって天井カウントが300を超え、
@@ -820,31 +818,20 @@ def fix_gacha_bug(user_id: int) -> str:
     if counter <= 300:
         return "正常なデータのようです。（天井カウントが300以下です）"
     
-    # バグ発生数の計算ロジック
-    # 正規の天井は300回ごと (300, 600, 900...)
-    # カウントが 300 を超えている場合、300回目(正規)以降のすべてのプルで限定が出ている
-    # 例: 305の場合、301〜305 (5回) がバグによる排出
+    total_received_guarantees = counter - 300 + 1 
+    total_valid_sparks = counter // 300 
     
-    total_received_guarantees = counter - 300 + 1 # 300回目も含む
-    total_valid_sparks = counter // 300 # 本来あるべき天井到達回数
-    
-    # バグによる排出数 = 総排出数 - 正規天井数
-    # (例: 305 -> 受取6体 - 正規1体 = 5体削除)
     remove_count = total_received_guarantees - total_valid_sparks
     
-    # カウントの修正 (300で割った余り)
-    # 例: 305 -> 5
     new_counter = counter % 300
-    if new_counter == 0 and counter > 0: new_counter = 0 # 割り切れる場合は0 (300消費済み扱い)
+    if new_counter == 0 and counter > 0: new_counter = 0 
     
-    # 現在のピックアップキャラから削除
     pickup_key = state.get("selected_pickup", CURRENT_BANNER_KEY)
     if pickup_key not in LIMITED_CHARACTERS: pickup_key = CURRENT_BANNER_KEY
     
     chars = state.get("characters", {})
     current_copies = chars.get(pickup_key, 0)
     
-    # 削除実行
     actual_remove = min(remove_count, current_copies)
     
     if actual_remove > 0:
@@ -860,7 +847,6 @@ def fix_gacha_bug(user_id: int) -> str:
             f"削除した増殖キャラ: {actual_remove} 体\n"
             f"修正後の天井カウント: {new_counter}")
 
-# ... (grant_daily_stones 以降は変更なし) ...
 def grant_daily_stones(user_id: int) -> tuple[bool, int, str]:
     state = db.get_gacha_state(user_id)
     lang = db.get_user_lang(user_id)
@@ -992,3 +978,56 @@ def get_bot_hand(user_hand, force_win=False):
     if user_hand == "グー": return "チョキ"
     if user_hand == "チョキ": return "パー"
     return "グー"
+
+# ★ 手動デバッグ用関数追加
+def debug_manual_remove(admin_id: int, target_id: int, target_name: str, amount: int) -> str:
+    """
+    管理者用: 指定ユーザーのキャラ/石/チケットを手動で削除する
+    """
+    if admin_id != PRIMARY_ADMIN_ID:
+        return "権限がありません。"
+
+    state = db.get_gacha_state(target_id)
+    
+    if target_name in ["石", "stones", "stone"]:
+        current = state.get("stones", 0)
+        if current < amount:
+            return f"石が足りません。(所持: {current}, 削除指定: {amount})"
+        state["stones"] -= amount
+        db.save_gacha_state(target_id, state)
+        return f"<@{target_id}> の石を {amount} 個削除しました。(残り: {state['stones']})"
+
+    if target_name in ["チケット", "ticket", "tickets"]:
+        current = state.get("offbanner_tickets", 0)
+        if current < amount:
+            return f"チケットが足りません。(所持: {current}, 削除指定: {amount})"
+        state["offbanner_tickets"] -= amount
+        db.save_gacha_state(target_id, state)
+        return f"<@{target_id}> のチケットを {amount} 枚削除しました。(残り: {state['offbanner_tickets']})"
+
+    char_key = None
+    if target_name in LIMITED_CHARACTERS:
+        char_key = target_name
+    else:
+        for key, data in LIMITED_CHARACTERS.items():
+            if data["name"] == target_name:
+                char_key = key
+                break
+    
+    if not char_key:
+        return f"対象 '{target_name}' が見つかりません。(キャラ名、'石'、'チケット' のいずれかを指定してください)"
+
+    chars = state.get("characters", {})
+    current = chars.get(char_key, 0)
+    
+    if current < amount:
+        return f"{target_name} の所持数が足りません。(所持: {current}, 削除指定: {amount})"
+    
+    chars[char_key] -= amount
+    
+    if char_key == "cyrene":
+        state["cyrene_copies"] = chars[char_key]
+        
+    db.save_gacha_state(target_id, state)
+    
+    return f"<@{target_id}> の {target_name} を {amount} 体削除しました。(残り: {chars[char_key]})"
