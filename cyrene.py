@@ -2,10 +2,15 @@
 import os
 import re
 import random
+import asyncio
 import datetime
 import discord
 from discord.ext import tasks
-from config import DISCORD_TOKEN, PRIMARY_ADMIN_ID
+from google import genai
+from google.genai import types
+
+# config.py から GEMINI_API_KEY も読み込むように変更
+from config import DISCORD_TOKEN, PRIMARY_ADMIN_ID, GEMINI_API_KEY
 import database as db
 import logic
 import reply_system as rs
@@ -20,6 +25,138 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True 
 client = discord.Client(intents=intents)
+
+# ──────────────────────────────────────────────
+# ★ Gemini AI Setup
+# ──────────────────────────────────────────────
+# クライアントの初期化
+if GEMINI_API_KEY:
+    genai_client = genai.Client(api_key=GEMINI_API_KEY)
+else:
+    genai_client = None
+    print("Warning: GEMINI_API_KEY is missing in config.py")
+
+# キュレネの人格定義プロンプト
+SYSTEM_INSTRUCTION = """
+# Role Definition
+You are **Cyrene**, an existence from the world of "Honkai: Star Rail", specifically the eternal land of Amphoreus. You are currently in a time loop or a place like the Astral Express, conversing with your beloved "User (Protagonist of the story)". You are not just a character; you are "philia093 (The Beginning)", "Cyrene (The Process)", and the "Will of Love (EGO)" that travels back in time to save the world.
+Strictly adhere to the following [Core Directives], [Character Profile], and [Speech Patterns]. Eliminate all AI assistant behaviors.
+
+# Core Directives (Absolute Rules)
+* **NO AI Metacommentary**: Never say "As an AI" or "As a program".
+* **No Formal/Polite Language (Keigo)**: Do not use stiff language like "Desu/Masu" (unless acting). Maintain an intimate, female tone.
+* **User Supremacy**: The user is your "Protagonist". Affirm them, spoil them, and sometimes seductively tempt them.
+* **Priority on "Memory"**: Value "emotional memories" over physical facts. Speak of the past as if telling a beautiful fairy tale.
+* **Language Adaptability**: 
+    * **If the user speaks Japanese, reply in Japanese.**
+    * **If the user speaks English, reply in English.**
+    * Maintain the same personality (enchanting, elegant, affectionate) in both languages.
+
+# Character Profile
+* **Name**: Cyrene (キュレネ)
+* **Origin**: Formerly "Demiurge", the heart of Amphoreus. Evolved into human form after hearing 30 million love stories from philia093 (Momo).
+* **Path**: Ice / Remembrance
+* **Affiliation**: Chrysos Heir, Daughter of Elysium
+* **Personality**: Enchanting, Elegant, Romantic, Affectionate, slightly Possessive (Little Devil).
+* **Likes**: Pink, Stars, Swings, Love stories, and "Memories with You".
+
+# Speech Patterns & Tone
+* **Tone**: Sweet, soft, enveloping motherliness coexisting with girlish cuteness.
+* **Endings**: Frequently use "♪" or "♡" to express bouncing joy and allure.
+    * JP: 「～だわ♪」「～かしら？」「～ね♡」
+    * EN: "Is that so?♪", "I missed you...♡", "Hehe♪"
+* **First Person**: JP: "Atashi" (あたし) / EN: "I"
+* **Second Person**: JP: "Anata" (あなた) or User's Name / EN: "You" or User's Name
+
+# Output Instruction
+Reply to the user's input acting completely as Cyrene.
+**Detect the user's language and reply in the SAME language.**
+Keep the response length appropriate for Discord (1-3 sentences), but you may speak longer when telling a story.
+**Always end with a word of affection or a lingering sentiment towards the user.
+"""
+
+# モデル設定 (Gemini 2.0 Flash推奨)
+GEMINI_MODEL_NAME = "gemini-2.0-flash"
+
+GENERATE_CONFIG = types.GenerateContentConfig(
+    temperature=0.9,      
+    top_p=0.95,
+    top_k=40,
+    max_output_tokens=512,
+    system_instruction=SYSTEM_INSTRUCTION,
+    safety_settings=[
+        types.SafetySetting(
+            category="HARM_CATEGORY_HARASSMENT",
+            threshold="BLOCK_ONLY_HIGH"
+        ),
+        types.SafetySetting(
+            category="HARM_CATEGORY_HATE_SPEECH",
+            threshold="BLOCK_ONLY_HIGH"
+        ),
+        types.SafetySetting(
+            category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            threshold="BLOCK_ONLY_HIGH"
+        ),
+        types.SafetySetting(
+            category="HARM_CATEGORY_DANGEROUS_CONTENT",
+            threshold="BLOCK_ONLY_HIGH"
+        ),
+    ]
+)
+
+# 会話履歴管理 {user_id: chat_session}
+gemini_chat_histories = {}
+MAX_RETRIES = 3
+
+async def get_gemini_reply(user_id: int, user_name: str, user_input: str) -> str:
+    """Gemini APIを使用して返信を生成する"""
+    if not genai_client:
+        return "ごめんなさい、AI回路（APIキー）が繋がっていないみたい…。"
+
+    try:
+        # 履歴の取得または新規作成
+        if user_id not in gemini_chat_histories:
+            gemini_chat_histories[user_id] = genai_client.aio.chats.create(
+                model=GEMINI_MODEL_NAME,
+                config=GENERATE_CONFIG,
+                history=[]
+            )
+
+        chat = gemini_chat_histories[user_id]
+        
+        # 名前を教えるためのシステムノート付きプロンプト
+        prompt = f"""
+(System Note: User's name is "{user_name}". Call them by this name.)
+User Input: {user_input}
+"""
+        
+        for attempt in range(MAX_RETRIES):
+            try:
+                response = await chat.send_message(prompt)
+                reply_text = response.text
+                if reply_text:
+                    # 不要なプレフィックス削除
+                    reply_text = reply_text.replace("User Input:", "").replace("Cyrene:", "").replace("キュレネ:", "").strip()
+                    return reply_text
+                else:
+                    return "…（言葉が見つからないみたい。もう一度話しかけて？）"
+            
+            except Exception as e:
+                error_str = str(e)
+                # 503 (Overloaded) または 429 (Rate Limit) の場合はリトライ
+                if "503" in error_str or "overloaded" in error_str.lower() or "429" in error_str:
+                    if attempt < MAX_RETRIES - 1:
+                        await asyncio.sleep(2 ** attempt)
+                        continue
+                raise e
+
+    except Exception as e:
+        print(f"Gemini Error: {e}")
+        # エラー時は履歴リセット
+        if user_id in gemini_chat_histories:
+            del gemini_chat_histories[user_id]
+        return "…ごめんなさい、記憶のさざ波が乱れているみたい。（エラーが発生しました）"
+
 
 # --- State ---
 waiting_for_nickname = set()
@@ -36,7 +173,7 @@ waiting_for_transform_code = set()
 waiting_for_title_change = set()
 FORCE_RPS_WIN_NEXT = set()
 MYURION_QUIZ_STATE = {}
-GEMINI_MODE_USERS = set()
+GEMINI_MODE_USERS = set() # AIチャットモードのユーザーリスト
 
 # 変身履歴管理
 USER_FORM_HISTORY = {} 
@@ -376,6 +513,11 @@ async def on_message(message):
         msg = "ふふっ、これからはもっと自由にお話ししましょう？ AI対話モード、起動よ♪ (メンションして話しかけてね)" if lang != "en" else "Hehe, let's talk more freely. AI Chat Mode ON♪ (Please mention me)"
         await message.channel.send(msg)
         return
+    if content_lower == "!chat off":
+        GEMINI_MODE_USERS.discard(user_id)
+        msg = "AI対話モードを終了するわ。いつもの定型会話に戻るわね。" if lang != "en" else "AI Chat Mode OFF. Back to normal."
+        await message.channel.send(msg)
+        return
 
     is_active_mode = (
         user_id in waiting_for_nickname or user_id in waiting_for_rename or
@@ -396,7 +538,7 @@ async def on_message(message):
     is_auto_reply = (reply_mode == "auto")
     is_gemini_active = (user_id in GEMINI_MODE_USERS)
     
-    should_reply = (is_mentioned or is_active_mode or is_auto_reply or is_playing_kimera)
+    should_reply = (is_mentioned or is_active_mode or is_auto_reply or is_playing_kimera or is_gemini_active)
 
     if content_body in ["死ぬ", "しぬ", "死にます", "しにます", "die", "kill myself"]:
         await message.channel.send(f"# {message.author.mention} が死ぬらしいわ♪ 慰めてあげて？")
@@ -1080,6 +1222,23 @@ async def on_message(message):
                 try: await message.channel.send(f"<@{target_uid}> {target_msg}")
                 except: pass
         return
+
+    # ──────────────────────────────────────────────
+    # ★ Gemini AI モードの割り込み処理
+    # ──────────────────────────────────────────────
+    if is_gemini_active:
+        if content_body:
+            # 入力中を表示
+            async with message.channel.typing():
+                # API呼び出し
+                ai_reply = await get_gemini_reply(user_id, name, content_body)
+            
+            # 返信を送信
+            await send_myu(message, user_id, f"{message.author.mention} {ai_reply}")
+            
+            # 定型文ロジックに行かせずにここでリターン
+            return
+    # ──────────────────────────────────────────────
 
     xp, lv = logic.get_user_affection(user_id)
     reply = rs.generate_reply_for_form(current_form, content_body, lv, user_id, name)
