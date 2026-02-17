@@ -5,7 +5,8 @@ import random
 import asyncio
 import datetime
 import discord
-from discord.ext import tasks
+from discord import app_commands
+from discord.ext import commands, tasks
 from google import genai
 from google.genai import types
 
@@ -24,7 +25,8 @@ import cthulhu_game
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True 
-client = discord.Client(intents=intents)
+# ClientではなくBotを使用（スラッシュコマンド対応のため）
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ──────────────────────────────────────────────
 # ★ Gemini AI Setup
@@ -226,94 +228,89 @@ ADMIN_COMMANDS_LIST_EN = (
 )
 
 GENERAL_COMMANDS_LIST_JP = (
-    "【あたしとできること一覧よ♪】\n\n"
-    "**★ お話ししましょう♪**\n"
-    "- `!mode auto`: メンションなしでもお話しするようになるわ\n"
-    "- `!mode mention`: メンションした時だけお話しするわ\n"
-    "- `!chat on`: AI会話モードON（自由にお話ししましょ♪）\n"
-    "- `!chat off`: AI会話モードOFF（いつものおしゃべりに戻るわ）\n"
-    "- `!lang en`: 英語モードに切り替えるわ\n"
-    "- `こんにちは` / `おやすみ`: 挨拶は大事よね♪\n"
-    "- `みんなについて教えて`: 他の人のこと、こっそり教えるわ\n"
-    "- `甘えていいんだよ`: …ふふっ、遠慮なく甘えちゃうかも？\n"
-    "- `じゃんけん`: あたしに勝てるかしら？\n"
-    "- `あだ名登録 [名前]`: あなただけの呼び方を教えて？\n"
-    "- `二つ名変更`: 獲得した二つ名を名前に付けるわ♪\n"
-    "- `好感度`: わたしたちの仲良し度、チェックしましょ♪\n"
-    "- `進捗`: 実績の解除状況を確認できるわ\n\n"
-    "**★ 別の姿へ…**\n"
-    "- `変身`: 別の姿に変身するためのコードを教えて？\n"
-    "- `変身状態` / `今の姿`: 今のあたしが誰かわかる？\n\n"
+    "【あたしとできること一覧よ♪】\n"
+    "スラッシュコマンド(`/`)でも呼び出せるようになったわよ♪\n\n"
+    "**★ 設定 / システム**\n"
+    "- `/mode`: お返事の仕方を変えるわ\n"
+    "- `/lang`: 言語設定 (JP/EN)\n"
+    "- `/chat`: AI会話モードのON/OFF\n"
+    "- `/nickname`: あなたの呼び方を教えて？\n\n"
+    "**★ ユーザーデータ**\n"
+    "- `/profile`: 好感度や実績を確認しましょ♪\n"
+    "- `/title`: 二つ名の変更よ\n"
+    "- `/transform`: 別の姿に変身するわ\n\n"
     "**★ ガチャ**\n"
-    "- `ガチャメニュー`: 運試しの時間ね♪\n"
-    "- `単発ガチャ` / `10連ガチャ`: 石を使って回すわ\n"
-    "- `チケット10連`: チケットで回すわよ\n"
-    "- `デイリー受け取り`: 1日1回、あたしからのプレゼントよ♪\n"
-    "- `石をあげる @ユーザー 数`: お友達に石をプレゼントするわ♪\n"
-    "- `ピックアップ変更 [キャラ名]`: 狙いを定めるのね？\n"
-    "- `これ集めたんだけど返してあげる`: キュレネの持ち物を返すわ\n"
-    "- `バグ修正`: ガチャの天井バグを直して、増えた分を消すわ\n\n"
-    "**★ ミニゲーム**\n"
-    "- `キメラと遊びたい`: 可愛い子たちと遊びましょ♪\n"
-    "- `天外からのゲームやってみる？`: シンプルなクトゥルフ神話TRPGを始めましょ♪\n\n"
-    "**★ その他**\n"
-    "- `ここに設定`: イベント通知をこのチャンネルにするわ（管理者のみ）"
+    "- `/gacha`: 運試しの時間ね♪\n"
+    "- `/daily`: デイリーボーナスを受け取ってね\n"
+    "- `/pickup`: ピックアップ対象を変更できるわ\n\n"
+    "**★ ゲーム**\n"
+    "- `/kimera`: キメラと遊ぶわよ♪\n"
+    "- `/cthulhu`: クトゥルフ神話TRPGを始めましょ\n"
+    "- `/rps`: じゃんけん勝負よ！"
 )
 
 GENERAL_COMMANDS_LIST_EN = (
-    "【What we can do together♪】\n\n"
-    "**★ Let's Talk**\n"
-    "- `!mode auto`: I will reply to everything\n"
-    "- `!mode mention`: I will only reply to mentions\n"
-    "- `!chat on`: AI Chat ON (Let's talk freely♪)\n"
-    "- `!chat off`: AI Chat OFF (Back to normal)\n"
-    "- `!lang jp`: Switch to Japanese mode\n"
-    "- `Hello` / `Good night`: Greetings are important♪\n"
-    "- `Tell me about everyone`: I'll tell you about my friends\n"
-    "- `Spoil me`: Hehe... maybe I'll spoil you?\n"
-    "- `RPS`: Can you beat me in Rock-Paper-Scissors?\n"
-    "- `Set nickname [name]`: Tell me what to call you\n"
-    "- `Change Title`: Equip a title you've earned\n"
-    "- `Affection`: Let's check our bond level♪\n"
-    "- `Progress`: Check achievement progress\n\n"
-    "**★ Transformation**\n"
-    "- `Transform`: Tell me a code to change my form\n"
-    "- `Current form`: Who am I right now?\n\n"
+    "【What we can do together♪】\n"
+    "You can now use Slash Commands (`/`) too♪\n\n"
+    "**★ Settings / System**\n"
+    "- `/mode`: Switch reply modes\n"
+    "- `/lang`: Language settings (JP/EN)\n"
+    "- `/chat`: AI Chat Mode ON/OFF\n"
+    "- `/nickname`: Set your nickname\n\n"
+    "**★ User Data**\n"
+    "- `/profile`: Check affection & progress♪\n"
+    "- `/title`: Change your title\n"
+    "- `/transform`: Transform into another form\n\n"
     "**★ Gacha**\n"
-    "- `Gacha`: Time to test your luck♪\n"
-    "- `Pull 1` / `Pull 10`: Use gems to pull\n"
-    "- `Ticket 10`: Use tickets\n"
-    "- `Daily`: A daily present just for you♪\n"
-    "- `Give Stones @user [num]`: Send a gift to your friend♪\n"
-    "- `Change Pickup [Name]`: Set your target\n"
-    "- `I collected these for you`: Return Cyrene's belongings\n"
-    "- `Fix Bug`: Fix gacha pity bug\n\n"
+    "- `/gacha`: Time to test your luck♪\n"
+    "- `/daily`: Get your daily bonus\n"
+    "- `/pickup`: Change the pickup target\n\n"
     "**★ Games**\n"
-    "- `Play with Kimera`: Let's play with the cute ones♪\n"
-    "- `Play Cthulhu Game`: Start a simple Cthulhu TRPG session♪\n\n"
-    "**★ Other**\n"
-    "- `Set Here`: Set event notifications to this channel (Admin only)"
+    "- `/kimera`: Play with Kimera♪\n"
+    "- `/cthulhu`: Start Cthulhu TRPG\n"
+    "- `/rps`: Rock-Paper-Scissors!"
 )
 
-async def send_myu(message, user_id, text):
+# 共通送信関数（MessageとInteraction両対応）
+async def send_myu(target, user_id, text):
     final_output = logic.apply_myurion_filter(user_id, text)
+    
+    # 送信処理
     try:
-        await message.channel.send(final_output)
+        if isinstance(target, discord.Interaction):
+            if not target.response.is_done():
+                await target.response.send_message(final_output)
+            else:
+                await target.followup.send(final_output)
+            # ログ用情報の取得
+            guild = target.guild
+            channel = target.channel
+            user_obj = target.user
+        elif hasattr(target, "channel"): # Message Object
+            await target.channel.send(final_output)
+            guild = target.guild
+            channel = target.channel
+            user_obj = target.author
+        else: # Fallback (Channel or Context)
+            await target.send(final_output)
+            return # ログ出力は諦める（コンテキスト不足）
     except Exception as e:
         print(f"Error sending message to channel: {e}")
+        return
 
+    # 管理者へのログ送信
     if db.is_log_mode_enabled():
         try:
-            admin_user = await client.fetch_user(PRIMARY_ADMIN_ID)
-            guild_name = message.guild.name if message.guild else "DM"
-            channel_name = message.channel.name if hasattr(message.channel, 'name') else "DM"
+            admin_user = await bot.fetch_user(PRIMARY_ADMIN_ID)
+            guild_name = guild.name if guild else "DM"
+            channel_name = channel.name if hasattr(channel, 'name') else "DM"
             log_content = (
                 f"━━━━━━━━━━━━━━\n"
                 f"【Log Report】\n"
                 f"**Server**: {guild_name} / **Channel**: {channel_name}\n"
-                f"**User**: {message.author.name} (ID: {user_id})\n"
+                f"**User**: {user_obj.name} (ID: {user_id})\n"
                 f"----------------\n"
-                f"📥 **Input**:\n{message.content}\n"
+                f"📥 **Input**:\n(Command/Slash)\n"
                 f"----------------\n"
                 f"📤 **Output**:\n{final_output}\n"
                 f"━━━━━━━━━━━━━━"
@@ -337,7 +334,7 @@ async def start_random_discount_event(percent=None, duration=None):
     
     target_channel_id = db.get_event_channel_id()
     if target_channel_id:
-        channel = client.get_channel(target_channel_id)
+        channel = bot.get_channel(target_channel_id)
         if channel:
             try:
                 if d < 60:
@@ -357,20 +354,265 @@ async def discount_event_loop():
     if random.random() < 0.0007:
         await start_random_discount_event()
 
-@client.event
+@bot.event
 async def on_ready():
-    print(f"Login: {client.user}")
+    print(f"Login: {bot.user}")
+    try:
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} slash commands.")
+    except Exception as e:
+        print(f"Failed to sync slash commands: {e}")
+
     if not discount_event_loop.is_running():
         discount_event_loop.start()
 
-@client.event
+# ──────────────────────────────────────────────
+# ★ Slash Commands Implementation
+# ──────────────────────────────────────────────
+
+# --- Settings Group ---
+@bot.tree.command(name="mode", description="お返事モードを変更します / Change reply mode")
+@app_commands.describe(type="Mode: Auto (Always reply) or Mention (Only mentions)")
+@app_commands.choices(type=[
+    app_commands.Choice(name="Auto (メンションなしでも反応)", value="auto"),
+    app_commands.Choice(name="Mention (メンションのみ反応)", value="mention")
+])
+async def cmd_mode(interaction: discord.Interaction, type: str):
+    user_id = interaction.user.id
+    lang = db.get_user_lang(user_id)
+    db.set_reply_mode(user_id, type)
+    if lang == "en":
+        msg = f"Got it! I'll reply {'even without mentions' if type == 'auto' else 'only when you mention me'} now."
+    else:
+        msg = f"了解です♪ これからは{'メンションなしでも' if type == 'auto' else '呼んでくれた時（メンション）だけ'}お話ししますね。"
+    await send_myu(interaction, user_id, msg)
+
+@bot.tree.command(name="lang", description="言語設定を変更します / Switch Language")
+@app_commands.choices(code=[
+    app_commands.Choice(name="Japanese (日本語)", value="jp"),
+    app_commands.Choice(name="English (英語)", value="en")
+])
+async def cmd_lang(interaction: discord.Interaction, code: str):
+    user_id = interaction.user.id
+    db.set_user_lang(user_id, code)
+    if code == "en":
+        await interaction.response.send_message(f"Okay, I'll speak in English from now on♪")
+    else:
+        await interaction.response.send_message(f"わかりました、これからは日本語でお話ししますね♪")
+
+@bot.tree.command(name="chat", description="AI会話モードの切り替え / Toggle AI Chat")
+@app_commands.choices(state=[
+    app_commands.Choice(name="ON (AI Chat)", value="on"),
+    app_commands.Choice(name="OFF (Normal)", value="off")
+])
+async def cmd_chat(interaction: discord.Interaction, state: str):
+    user_id = interaction.user.id
+    lang = db.get_user_lang(user_id)
+    if state == "on":
+        GEMINI_MODE_USERS.add(user_id)
+        msg = "AI Chat Mode ON♪ (Please mention me)" if lang == "en" else "AI対話モード、起動よ♪ (メンションして話しかけてね)"
+    else:
+        GEMINI_MODE_USERS.discard(user_id)
+        msg = "AI Chat Mode OFF." if lang == "en" else "AI対話モードを終了するわ。"
+    await send_myu(interaction, user_id, msg)
+
+@bot.tree.command(name="nickname", description="あなたの呼び方を設定します / Set your nickname")
+@app_commands.describe(name="新しい呼び方 / New Nickname")
+async def cmd_nickname(interaction: discord.Interaction, name: str):
+    user_id = interaction.user.id
+    current_form = get_user_form(user_id)
+    db.set_nickname(user_id, name)
+    await send_myu(interaction, user_id, rs.get_nickname_message_for_form(current_form, "confirm", name, user_id))
+
+# --- User Data Group ---
+@bot.tree.command(name="profile", description="ステータス・好感度を表示します / Show profile & affection")
+async def cmd_profile(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    # 親衛隊Lv + 好感度 + 進捗
+    lv = db.get_guardian_level(user_id)
+    aff_msg = logic.get_affection_status_message(user_id)
+    ach_msg = logic.format_achievement_progress(user_id)
+    
+    guardian_text = f"Guardian Lv.{lv}" if lv else ""
+    full_msg = f"{aff_msg}\n{guardian_text}\n\n{ach_msg}"
+    await send_myu(interaction, user_id, full_msg)
+
+@bot.tree.command(name="title", description="二つ名を変更します / Change Title")
+@app_commands.describe(name="二つ名 (空欄で一覧表示) / Title Name (Empty to list)")
+async def cmd_title(interaction: discord.Interaction, name: str = None):
+    user_id = interaction.user.id
+    lang = db.get_user_lang(user_id)
+    
+    if not name:
+        waiting_for_title_change.add(user_id)
+        user_ach = db.get_user_achievements(user_id)
+        unlocked = user_ach["unlocked"]
+        titles_list = []
+        for aid in unlocked:
+            if aid in logic.ACHIEVEMENTS:
+                t_name = logic.ACHIEVEMENTS[aid]["title_en"] if lang=="en" else logic.ACHIEVEMENTS[aid]["title_jp"]
+                titles_list.append(f"・{t_name}")
+        
+        t_text = "\n".join(titles_list) if titles_list else ("(None)" if lang=="en" else "(なし)")
+        msg = f"【Unlocked Titles】\n{t_text}\n\nType the title name to equip (or 'None' to remove)." if lang=="en" else f"【獲得済みの二つ名】\n{t_text}\n\n付けたい二つ名の名前を入力してね。（外す場合は『なし』）"
+        await send_myu(interaction, user_id, msg)
+        return
+
+    # 直接指定の場合
+    if name.lower() in ["none", "remove", "off", "なし"]:
+        db.set_equipped_title(user_id, None)
+        await send_myu(interaction, user_id, "Title removed." if lang=="en" else "二つ名を外したわ。")
+        return
+
+    target_id = None
+    for aid, data in logic.ACHIEVEMENTS.items():
+        if name == data["title_jp"] or name == data["title_en"]:
+            target_id = aid
+            break
+            
+    if target_id:
+        user_ach = db.get_user_achievements(user_id)
+        if target_id in user_ach["unlocked"]:
+            db.set_equipped_title(user_id, target_id)
+            await send_myu(interaction, user_id, f"Title set to **{name}**!" if lang=="en" else f"二つ名を **{name}** に変更したわ♪")
+        else:
+            await send_myu(interaction, user_id, "Locked." if lang=="en" else "まだ獲得していないわ。")
+    else:
+        await send_myu(interaction, user_id, "Unknown title." if lang=="en" else "そんな二つ名はないみたいよ？")
+
+@bot.tree.command(name="transform", description="別の姿に変身します / Transform")
+@app_commands.describe(code="変身コード / Code")
+async def cmd_transform(interaction: discord.Interaction, code: str):
+    user_id = interaction.user.id
+    lang = db.get_user_lang(user_id)
+    
+    # 既存ロジックの再利用
+    clean_code = code.strip()
+    
+    if "march" in clean_code.lower() or "なのか" in clean_code:
+        if is_nanoka_unlocked(user_id):
+            set_user_form(user_id, "nanoka")
+            msg = "Transformed into March 7th!" if lang=="en" else "今日から三月なのか/長夜月の姿になるわ♪"
+        else:
+            msg = "Locked." if lang=="en" else "まだ条件が足りないみたい…。"
+        await send_myu(interaction, user_id, msg)
+        return
+
+    if "danheng" in clean_code.lower() or "たんたん" in clean_code or "丹恒" in clean_code:
+        if is_danheng_unlocked(user_id):
+            set_user_form(user_id, "danheng")
+            msg = "Transformed into Dan Heng." if lang=="en" else "…わかった。丹恒の姿になろう。"
+        else:
+            msg = "Locked." if lang=="en" else "鍵が足りないみたい。"
+        await send_myu(interaction, user_id, msg)
+        return
+
+    fk = resolve_form_code(clean_code)
+    if fk:
+        set_user_form(user_id, fk)
+        dname = get_form_display_name(fk)
+        msg = f"Transformed into **{dname}**!" if lang=="en" else f"**{dname}** に変身したわ♪"
+    else:
+        msg = "Unknown code." if lang=="en" else "そのコードは知らないみたい…。"
+    await send_myu(interaction, user_id, msg)
+
+# --- Gacha Group ---
+@bot.tree.command(name="gacha", description="ガチャを回します / Pull Gacha")
+@app_commands.describe(count="回数 (1 or 10) / Count")
+@app_commands.choices(count=[app_commands.Choice(name="1回 (Single)", value=1), app_commands.Choice(name="10回 (Multi)", value=10)])
+async def cmd_gacha(interaction: discord.Interaction, count: int = 1):
+    user_id = interaction.user.id
+    ok, res = logic.perform_gacha_pulls(user_id, count, use_ticket=False)
+    if ok:
+        db.increment_achievement_stat(user_id, "gacha_count", count)
+        unlocks = logic.check_all_achievements(user_id)
+        if unlocks: res += "\n" + "\n".join(unlocks)
+    await send_myu(interaction, user_id, res)
+
+@bot.tree.command(name="daily", description="デイリーボーナスを受け取ります / Get Daily Bonus")
+async def cmd_daily(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    lang = db.get_user_lang(user_id)
+    ok, stones, reason = logic.grant_daily_stones(user_id)
+    msg = f"{reason}\nStones: {stones}" if lang=="en" else f"{reason}\n所持石: {stones}"
+    await send_myu(interaction, user_id, msg)
+
+@bot.tree.command(name="pickup", description="ピックアップを変更します / Change Pickup")
+@app_commands.describe(name="キャラ名 / Character Name")
+async def cmd_pickup(interaction: discord.Interaction, name: str):
+    user_id = interaction.user.id
+    success, res_msg = logic.change_pickup_banner(user_id, name)
+    await send_myu(interaction, user_id, res_msg)
+
+# --- Games Group ---
+@bot.tree.command(name="kimera", description="キメラゲームを開始・表示します / Play Kimera Game")
+async def cmd_kimera(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    session = kimera_game.get_session(user_id)
+    if not session:
+        kimera_game.start_session(user_id)
+        msg = (f"{kimera_game.get_k_text(user_id, 'menu_title')}\n"
+               f"{kimera_game.get_k_text(user_id, 'menu_opts')}\n"
+               f"{kimera_game.get_k_text(user_id, 'menu_prompt')}")
+        await send_myu(interaction, user_id, msg)
+    else:
+        # 既に開始している場合はメニューを表示するか、継続メッセージ
+        await send_myu(interaction, user_id, "既にゲーム中よ。メニューコマンドを使ってね。\n(終了したい場合は『終了』と打ってね)")
+
+@bot.tree.command(name="cthulhu", description="クトゥルフ神話TRPGを開始します / Play Cthulhu TRPG")
+async def cmd_cthulhu(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    if not cthulhu_game.get_session(user_id):
+        cthulhu_game.start_cthulhu_session(user_id)
+        msg = "【天外からの探索者】へようこそ…。\n『ルーム作成』で新しい物語を紡ぐか、『ルーム参加 [コード]』で既存の狂気に飛び込めるわよ。♪"
+        await send_myu(interaction, user_id, msg)
+    else:
+        await send_myu(interaction, user_id, "既に接続しているわ。")
+
+@bot.tree.command(name="rps", description="じゃんけんをする / Rock Paper Scissors")
+@app_commands.choices(hand=[
+    app_commands.Choice(name="Rock (グー)", value="rock"),
+    app_commands.Choice(name="Paper (パー)", value="paper"),
+    app_commands.Choice(name="Scissors (チョキ)", value="scissors")
+])
+async def cmd_rps(interaction: discord.Interaction, hand: str):
+    user_id = interaction.user.id
+    current_form = get_user_form(user_id)
+    nickname = db.get_nickname(user_id) or interaction.user.display_name
+    title_prefix = logic.get_title_prefix(user_id)
+    name = f"{title_prefix}{nickname}"
+
+    force = user_id in FORCE_RPS_WIN_NEXT
+    bot_hand = logic.get_bot_hand(hand, force)
+    res = "win" if force else logic.judge_janken(hand, bot_hand)
+    
+    if force: FORCE_RPS_WIN_NEXT.discard(user_id)
+    wins = inc_janken_win(user_id) if res == "win" else get_janken_wins(user_id)
+    
+    result_msg = rs.format_rps_result(current_form, name, hand, bot_hand, rs.get_rps_flavor(current_form, res, name, user_id), wins, user_id)
+    if res == "win":
+        unlocks = logic.check_all_achievements(user_id)
+        if unlocks: result_msg += "\n" + "\n".join(unlocks)
+    
+    xp_map = {"win": 10, "lose": 5, "draw": 7}
+    logic.add_affection_xp(user_id, xp_map.get(res, 0))
+    
+    await send_myu(interaction, user_id, result_msg)
+
+
+# ──────────────────────────────────────────────
+# ★ Main Event Loop (Legacy & Text Support)
+# ──────────────────────────────────────────────
+
+@bot.event
 async def on_message(message):
     if message.author.bot: return
     user_id = message.author.id
     content = message.content.strip() 
     content_lower = content.lower()
     
-    content_body = re.sub(rf"<@!?{client.user.id}>", "", content).strip()
+    # Botへのメンション削除
+    content_body = re.sub(rf"<@!?{bot.user.id}>", "", content).strip()
     content_body_lower = content_body.lower()
 
     is_main_admin = (user_id == PRIMARY_ADMIN_ID)
@@ -490,6 +732,7 @@ async def on_message(message):
         await message.channel.send(res)
         return
 
+    # Text command fallbacks (Compatible with Slash commands)
     if content_lower == "!mode auto":
         db.set_reply_mode(user_id, "auto")
         msg = f"Got it! I'll reply even without mentions now, {name}!" if lang=="en" else f"了解です♪ これからはメンションなしでもお話しますね、{name}さん！"
@@ -533,7 +776,7 @@ async def on_message(message):
     kimera_session = kimera_game.get_session(user_id)
     is_playing_kimera = kimera_session is not None
     is_command_query = any(k in content_body_lower for k in CMD_KEYWORDS)
-    is_mentioned = client.user in message.mentions
+    is_mentioned = bot.user in message.mentions
     reply_mode = db.get_reply_mode(user_id)
     is_auto_reply = (reply_mode == "auto")
     is_gemini_active = (user_id in GEMINI_MODE_USERS)
@@ -1178,7 +1421,7 @@ async def on_message(message):
             await send_myu(message, user_id, f"{message.author.mention} {reply_msg}")
         for target_uid, target_msg in extra_messages:
             try:
-                target_user = client.get_user(target_uid) or await client.fetch_user(target_uid)
+                target_user = bot.get_user(target_uid) or await bot.fetch_user(target_uid)
                 await target_user.send(f"【TRPG通信】{target_msg}")
             except Exception: pass
         return
@@ -1192,7 +1435,7 @@ async def on_message(message):
                 found_user = int(uid_str)
                 break
         if not found_user:
-            all_members = list(client.get_all_members())
+            all_members = list(bot.get_all_members())
             for m in all_members:
                 if m.display_name == target_name or m.name == target_name:
                     found_user = m.id
@@ -1216,7 +1459,7 @@ async def on_message(message):
             await send_myu(message, user_id, f"{message.author.mention} {reply_msg}")
         for target_uid, target_msg in extra_messages:
             try:
-                target_user = client.get_user(target_uid) or await client.fetch_user(target_uid)
+                target_user = bot.get_user(target_uid) or await bot.fetch_user(target_uid)
                 await target_user.send(target_msg)
             except:
                 try: await message.channel.send(f"<@{target_uid}> {target_msg}")
@@ -1294,4 +1537,4 @@ async def on_message(message):
     await send_myu(message, user_id, f"{message.author.mention} {reply}")
     logic.add_affection_xp(user_id, 3)
 
-client.run(DISCORD_TOKEN)
+bot.run(DISCORD_TOKEN)
