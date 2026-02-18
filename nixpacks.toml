@@ -1,0 +1,11 @@
+[phases.setup]
+nixPkgs = ["python310", "ffmpeg", "espeak-ng", "git", "gcc"]
+
+[phases.install]
+cmds = [
+    "pip install --upgrade pip",
+    "pip install -r requirements.txt"
+]
+
+[start]
+cmd = "python cyrene.py"

@@ -1,16 +1,27 @@
-# cyrene.py
 import os
 import re
 import random
 import asyncio
 import datetime
 import json
+import functools
 from pathlib import Path
 import discord
 from discord import app_commands
 from discord.ext import tasks
 from google import genai
 from google.genai import types
+
+# ──────────────────────────────────────────────
+# ★ Coqui TTS Import
+# ──────────────────────────────────────────────
+try:
+    from TTS.api import TTS
+    HAS_TTS = True
+    print("TTS library imported.")
+except ImportError:
+    HAS_TTS = False
+    print("TTS library not found. Voice features disabled.")
 
 # 既存のモジュール読み込み
 from config import DISCORD_TOKEN, PRIMARY_ADMIN_ID, GEMINI_API_KEY
@@ -24,14 +35,30 @@ import kimera_game
 import cthulhu_game
 
 # ──────────────────────────────────────────────
-# ★ Memory & Data Management Setup (Railway /data)
+# ★ Memory & Data Management
 # ──────────────────────────────────────────────
 
 DATA_DIR = Path("/data") if os.path.exists("/data") else Path("./data")
 MEMORY_DIR = DATA_DIR / "user_memories"
 SETTINGS_FILE = DATA_DIR / "ai_settings.json"
+VOICE_DIR = Path("./voices") # 音声ファイル置き場
 
 MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+VOICE_DIR.mkdir(parents=True, exist_ok=True)
+
+# TTS Global Model
+tts_model = None
+
+def load_tts_model():
+    global tts_model
+    if not HAS_TTS: return
+    print("Loading TTS model (XTTS v2)... This may take a while.")
+    try:
+        # GPUがない場合はgpu=False。Railwayは基本CPU動作。
+        tts_model = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=False)
+        print("TTS model loaded successfully.")
+    except Exception as e:
+        print(f"Failed to load TTS model: {e}")
 
 def load_ai_settings():
     if SETTINGS_FILE.exists():
@@ -120,7 +147,95 @@ client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
 # ──────────────────────────────────────────────
-# ★ Gemini AI Setup (Gemini 3 Pro Preview)
+# ★ Voice & TTS System (Multi-Speaker Support)
+# ──────────────────────────────────────────────
+
+class VoiceState:
+    def __init__(self, bot):
+        self.bot = bot
+        self.queue = []
+        self.is_playing = False
+
+    def play_next(self, error=None):
+        if error:
+            print(f"Player error: {error}")
+        
+        if self.queue:
+            self.is_playing = True
+            file_path, voice_client = self.queue.pop(0)
+            
+            def after_playing(e):
+                if os.path.exists(file_path):
+                    try:
+                        os.remove(file_path) # 再生終了後に削除
+                    except: pass
+                self.play_next(e)
+
+            if voice_client and voice_client.is_connected():
+                try:
+                    # FFmpegPCMAudioで再生
+                    source = discord.FFmpegPCMAudio(file_path)
+                    voice_client.play(source, after=after_playing)
+                except Exception as e:
+                    print(f"Play error: {e}")
+                    self.play_next(e)
+            else:
+                self.play_next(None)
+        else:
+            self.is_playing = False
+
+    async def add_text_to_queue(self, text: str, voice_client):
+        if not tts_model:
+            return
+
+        # ★ 複数ファイル対応: voicesフォルダ内の全ての.wavファイルを取得
+        ref_wavs = list(VOICE_DIR.glob("*.wav"))
+        
+        if not ref_wavs:
+            print("No reference audio found in voices/ folder.")
+            return
+
+        # パスを文字列のリストに変換
+        speaker_wav_paths = [str(p) for p in ref_wavs]
+
+        timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
+        output_path = DATA_DIR / f"tts_{timestamp}.wav"
+
+        # テキストの整形
+        clean_text = re.sub(r'<[^>]+>', '', text) # メンションなどを削除
+        clean_text = clean_text.replace("http", "URL")
+        clean_text = clean_text.replace("*", "") # 装飾記号削除
+        
+        if not clean_text.strip(): return
+        if len(clean_text) > 150: clean_text = clean_text[:150] + "..."
+
+        try:
+            # 重い処理なのでExecutorで実行
+            func = functools.partial(
+                tts_model.tts_to_file,
+                text=clean_text,
+                file_path=str(output_path),
+                speaker_wav=speaker_wav_paths, # ★リストを渡すことで複数音声を合成
+                language="ja"
+            )
+            await client.loop.run_in_executor(None, func)
+            
+            if output_path.exists():
+                self.queue.append((str(output_path), voice_client))
+                if not self.is_playing:
+                    self.play_next()
+        except Exception as e:
+            print(f"TTS Generation Error: {e}")
+
+voice_states = {}
+
+def get_voice_state(guild_id):
+    if guild_id not in voice_states:
+        voice_states[guild_id] = VoiceState(client)
+    return voice_states[guild_id]
+
+# ──────────────────────────────────────────────
+# ★ Gemini AI Setup
 # ──────────────────────────────────────────────
 if GEMINI_API_KEY:
     genai_client = genai.Client(api_key=GEMINI_API_KEY)
@@ -128,15 +243,11 @@ else:
     genai_client = None
     print("Warning: GEMINI_API_KEY is missing in config.py")
 
-# ★ モデル指定: gemini-3-pro-preview
 GEMINI_MODEL_NAME = "gemini-3-pro-preview"
-
-# ★ 検索ツール
 google_search_tool = types.Tool(
     google_search=types.GoogleSearch()
 )
 
-# ★ プロンプト定義
 def get_system_instruction(mode: str, lang: str, user_name: str) -> str:
     if lang == "en":
         lang_instruction = "You MUST speak in English."
@@ -202,7 +313,6 @@ async def get_gemini_reply(message, mode: str) -> str:
     user_name = message.author.display_name
     user_input = message.content
     
-    # 画像処理
     image_part = None
     if message.attachments:
         for attachment in message.attachments:
@@ -283,8 +393,7 @@ async def get_gemini_reply(message, mode: str) -> str:
 # ★ Slash Commands
 # ──────────────────────────────────────────────
 
-# ★ 追加: ボイスチャンネル参加コマンド
-@tree.command(name="join", description="ボイスチャンネルに参加します。")
+@tree.command(name="join", description="ボイスチャンネルに参加し、読み上げを開始します。")
 async def slash_join(interaction: discord.Interaction):
     if not interaction.user.voice:
         msg = "You are not in a voice channel." if db.get_user_lang(interaction.user.id) == "en" else "ボイスチャンネルに入っていないみたいよ？"
@@ -294,14 +403,17 @@ async def slash_join(interaction: discord.Interaction):
     channel = interaction.user.voice.channel
     if interaction.guild.voice_client:
         await interaction.guild.voice_client.move_to(channel)
-        msg = f"Moved to {channel.name}." if db.get_user_lang(interaction.user.id) == "en" else f"**{channel.name}** に移動したわ。"
+        msg = f"Moved to {channel.name}."
     else:
         await channel.connect()
-        msg = f"Connected to {channel.name}." if db.get_user_lang(interaction.user.id) == "en" else f"**{channel.name}** に接続したわ。"
+        msg = f"Connected to {channel.name}. I'll read my messages for you♪"
+    
+    # モデルのロード状態を確認
+    if not tts_model:
+        msg += "\n(Note: TTS model is loading or failed. Voice may delay.)"
     
     await interaction.response.send_message(msg)
 
-# ★ 追加: ボイスチャンネル退出コマンド
 @tree.command(name="leave", description="ボイスチャンネルから切断します。")
 async def slash_leave(interaction: discord.Interaction):
     if interaction.guild.voice_client:
@@ -327,77 +439,52 @@ async def slash_chat_mode(interaction: discord.Interaction, mode: str):
     else:
         set_ai_mode(user_id, mode)
         mode_name = "【日常・パートナーモード】" if mode == "casual" else "【スターレール・ガイドモード】"
-        msg = f"**{mode_name}** を起動したわ。\nこれからあなたが「OFF」にするまで、あたしが全ての言葉にお返事するわね♪\n（画像を見せたり、検索が必要なことも聞いていいわよ♡）"
+        msg = f"**{mode_name}** を起動したわ。\nこれからあなたが「OFF」にするまで、あたしが全ての言葉にお返事するわね♪"
     
     await interaction.response.send_message(msg)
 
 @tree.command(name="language", description="会話する言語を設定します。")
-@app_commands.choices(lang=[
-    app_commands.Choice(name="日本語 (Japanese)", value="jp"),
-    app_commands.Choice(name="English", value="en")
-])
+@app_commands.choices(lang=[app_commands.Choice(name="日本語 (Japanese)", value="jp"), app_commands.Choice(name="English", value="en")])
 async def slash_language(interaction: discord.Interaction, lang: str):
     user_id = interaction.user.id
     db.set_user_lang(user_id, lang)
-    if user_id in gemini_sessions:
-        del gemini_sessions[user_id]
-
-    if lang == "en":
-        msg = "Understood. I will speak to you in English from now on, Darling♪"
-    else:
-        msg = "わかりました。これからは日本語でお話ししますね、あなた♪"
+    if user_id in gemini_sessions: del gemini_sessions[user_id]
+    msg = "Understood. I will speak to you in English from now on, Darling♪" if lang == "en" else "わかりました。これからは日本語でお話ししますね、あなた♪"
     await interaction.response.send_message(msg)
 
 @tree.command(name="toggle_memory", description="AIとの会話内容を記憶して学習させるかを切り替えます。")
-@app_commands.choices(choice=[
-    app_commands.Choice(name="ON (記憶する・学習させる)", value=1),
-    app_commands.Choice(name="OFF (記憶しない)", value=0)
-])
+@app_commands.choices(choice=[app_commands.Choice(name="ON (記憶する・学習させる)", value=1), app_commands.Choice(name="OFF (記憶しない)", value=0)])
 async def slash_toggle_memory(interaction: discord.Interaction, choice: int):
     user_id = interaction.user.id
     enable = (choice == 1)
     set_memory_enabled(user_id, enable)
-    if user_id in gemini_sessions:
-        del gemini_sessions[user_id]
-
-    msg = "記憶回路を接続したわ。これからの私たちの会話は、大切に記憶していくわね♪" if enable else "記憶回路を切断したわ。これからはその場限りの会話を楽しみましょう。"
+    if user_id in gemini_sessions: del gemini_sessions[user_id]
+    msg = "記憶回路を接続したわ。" if enable else "記憶回路を切断したわ。"
     await interaction.response.send_message(msg, ephemeral=True)
 
 @tree.command(name="status", description="現在のステータスを確認します。")
 async def slash_status(interaction: discord.Interaction):
     user_id = interaction.user.id
     lang = db.get_user_lang(user_id)
-    
     aff_msg = logic.get_affection_status_message(user_id)
     current_form = get_user_form(user_id)
     form_name = get_form_display_name(current_form)
     g_lv = db.get_guardian_level(user_id)
-    
     header = "【Your Status】" if lang=="en" else "【あなたのステータス】"
     content = f"👤 **Form**: {form_name}\n🛡️ **Guardian Lv**: {g_lv or 0}\n❤️ **Affection**: {aff_msg}"
-    
     await interaction.response.send_message(f"{header}\n{content}")
 
 @tree.command(name="daily", description="1日1回、デイリー報酬を受け取ります。")
 async def slash_daily(interaction: discord.Interaction):
     user_id = interaction.user.id
     lang = db.get_user_lang(user_id)
-    
     ok, stones, reason = logic.grant_daily_stones(user_id)
-    
-    if lang == "en":
-        msg = f"{reason}\nCurrent Stones: {stones}"
-    else:
-        msg = f"{reason}\n所持石: {stones}"
-        
+    msg = f"{reason}\nCurrent Stones: {stones}" if lang == "en" else f"{reason}\n所持石: {stones}"
     await interaction.response.send_message(msg)
 
 @tree.command(name="gacha", description="ガチャを回します。")
 @app_commands.describe(pulls="回す回数")
-@app_commands.choices(pulls=[
-    app_commands.Choice(name="単発 (1回)", value=1),
-    app_commands.Choice(name="10連 (10回)", value=10)
-])
+@app_commands.choices(pulls=[app_commands.Choice(name="単発 (1回)", value=1), app_commands.Choice(name="10連 (10回)", value=10)])
 async def slash_gacha(interaction: discord.Interaction, pulls: int):
     user_id = interaction.user.id
     ok, res = logic.perform_gacha_pulls(user_id, pulls, use_ticket=False)
@@ -410,16 +497,13 @@ async def slash_gacha(interaction: discord.Interaction, pulls: int):
 @tree.command(name="transform", description="変身コードを使って別の姿に変身します。")
 async def slash_transform(interaction: discord.Interaction, code: str):
     user_id = interaction.user.id
-    
     if code.lower() in ["nanoka", "march", "march7th"]:
         if is_nanoka_unlocked(user_id):
             set_user_form(user_id, "nanoka")
             await interaction.response.send_message("Transformed into March 7th!")
-            return
         else:
             await interaction.response.send_message("Locked.", ephemeral=True)
-            return
-
+        return
     fk = resolve_form_code(code)
     if fk:
         set_user_form(user_id, fk)
@@ -454,10 +538,9 @@ waiting_for_transform_code = set()
 waiting_for_title_change = set()
 FORCE_RPS_WIN_NEXT = set()
 MYURION_QUIZ_STATE = {}
-
 USER_FORM_HISTORY = {} 
 
-# --- Help Text ---
+# --- Help Text (省略なし) ---
 ADMIN_COMMANDS_LIST_JP = (
     "【データの管理ね？ 任せてちょうだい♪】\n"
     "このモードでは以下のコマンドが使えるわ。\n\n"
@@ -534,10 +617,19 @@ GENERAL_COMMANDS_LIST_EN = (
     "- `/leave`: Leave the voice channel\n"
 )
 
+# ★ 修正: Botが喋った内容を読み上げるためのラッパー関数
 async def send_myu(message, user_id, text):
     final_output = logic.apply_myurion_filter(user_id, text)
+    
     try:
-        await message.channel.send(final_output)
+        sent_msg = await message.channel.send(final_output)
+        
+        # ★ TTS Trigger: Botがメッセージを送った後、VCにいれば読み上げる
+        if message.guild and message.guild.voice_client and message.guild.voice_client.is_connected():
+            state = get_voice_state(message.guild.id)
+            # キューに追加
+            await state.add_text_to_queue(final_output, message.guild.voice_client)
+
     except Exception as e:
         print(f"Error sending message: {e}")
 
@@ -565,6 +657,10 @@ async def discount_event_loop():
 @client.event
 async def on_ready():
     print(f"Login: {client.user}")
+    
+    # Load TTS on startup
+    load_tts_model()
+
     try:
         await tree.sync()
         print("Slash commands synced.")
@@ -578,30 +674,20 @@ async def on_message(message):
     user_id = message.author.id
     content = message.content.strip()
     
-    # ──────────────────────────────────────────────
-    # ★ AI Mode Handling (Priority)
-    # ──────────────────────────────────────────────
     ai_mode = get_ai_mode(user_id)
-    
     is_command_prefix = content.startswith("/") or content.startswith("!")
     is_admin_cmd = content in ["データ管理", "data management"]
     
-    # AIモードがON、かつコマンドではない場合
+    # AI Mode
     if ai_mode and not is_command_prefix and not is_admin_cmd:
-        # メッセージが空で画像もない場合は無視
-        if not content and not message.attachments:
-            return
-
-        # AI生成してリターン (レガシー処理に行かせない)
+        if not content and not message.attachments: return
         ai_reply = await get_gemini_reply(message, ai_mode)
         await send_myu(message, user_id, f"{message.author.mention} {ai_reply}")
         return
 
-    # ──────────────────────────────────────────────
-    # ★ Legacy Commands & Logic (When AI mode is OFF or Command)
-    # ──────────────────────────────────────────────
     content_body = re.sub(rf"<@!?{client.user.id}>", "", content).strip()
     content_body_lower = content_body.lower()
+    content_lower = content_body_lower
 
     is_main_admin = (user_id == PRIMARY_ADMIN_ID)
     nickname = db.get_nickname(user_id)
@@ -719,21 +805,21 @@ async def on_message(message):
         await message.channel.send(res)
         return
 
-    if content_body_lower == "!mode auto":
+    if content_lower == "!mode auto":
         db.set_reply_mode(user_id, "auto")
         msg = f"Got it! I'll reply even without mentions now, {name}!" if lang=="en" else f"了解です♪ これからはメンションなしでもお話しますね、{name}さん！"
         await message.channel.send(msg)
         return
-    if content_body_lower == "!mode mention":
+    if content_lower == "!mode mention":
         db.set_reply_mode(user_id, "mention")
         msg = f"Okay. I'll only reply when you mention me." if lang=="en" else f"わかりました。これからは呼んでくれた時（メンション）だけお返事しますね。"
         await message.channel.send(msg)
         return
-    if content_body_lower == "!lang en":
+    if content_lower == "!lang en":
         db.set_user_lang(user_id, "en")
         await message.channel.send(f"Okay, {name}! I'll speak in English from now on♪")
         return
-    if content_body_lower == "!lang jp":
+    if content_lower == "!lang jp":
         db.set_user_lang(user_id, "jp")
         await message.channel.send(f"わかりました、{name}さん！これからは日本語でお話ししますね♪")
         return
@@ -1221,7 +1307,6 @@ async def on_message(message):
             await send_myu(message, user_id, msg)
             return
 
-        # ★ 手動デバッグ削除コマンド
         if content_body.startswith("デバッグ削除") or content_body.startswith("debug remove"):
             if user_id != PRIMARY_ADMIN_ID:
                 await send_myu(message, user_id, "権限がないわ。")
