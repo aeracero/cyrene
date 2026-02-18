@@ -27,12 +27,10 @@ import cthulhu_game
 # ★ Memory & Data Management Setup (Railway /data)
 # ──────────────────────────────────────────────
 
-# Railwayのボリュームパス。ローカル開発時はカレントディレクトリの data フォルダを使用
 DATA_DIR = Path("/data") if os.path.exists("/data") else Path("./data")
 MEMORY_DIR = DATA_DIR / "user_memories"
 SETTINGS_FILE = DATA_DIR / "ai_settings.json"
 
-# ディレクトリ生成
 MEMORY_DIR.mkdir(parents=True, exist_ok=True)
 
 def load_ai_settings():
@@ -50,7 +48,6 @@ def save_ai_settings(settings):
 
 def is_memory_enabled(user_id: int) -> bool:
     settings = load_ai_settings()
-    # デフォルトは False (プライバシー保護のため)
     return settings.get(str(user_id), {}).get("memory_enabled", False)
 
 def set_memory_enabled(user_id: int, enabled: bool):
@@ -64,21 +61,17 @@ def get_user_memory_path(user_id: int) -> Path:
     return MEMORY_DIR / f"{user_id}.json"
 
 def load_conversation_history(user_id: int, limit: int = 20):
-    """ユーザーの過去の会話履歴を読み込む"""
     path = get_user_memory_path(user_id)
     if not path.exists():
         return []
-    
     try:
         with open(path, "r", encoding="utf-8") as f:
             history = json.load(f)
-            # 古い順に並んでいる前提。最新の limit 件を返す
             return history[-limit:]
     except:
         return []
 
 def append_conversation_history(user_id: int, user_text: str, model_text: str):
-    """会話履歴を追記保存する"""
     if not is_memory_enabled(user_id):
         return
 
@@ -91,13 +84,9 @@ def append_conversation_history(user_id: int, user_text: str, model_text: str):
         except:
             history = []
 
-    # Geminiのhistory形式に合わせて保存
-    # user turn
     history.append({"role": "user", "parts": [{"text": user_text}]})
-    # model turn
     history.append({"role": "model", "parts": [{"text": model_text}]})
 
-    # 容量節約のため、直近50ターン(100メッセージ)程度に制限して保存
     if len(history) > 100:
         history = history[-100:]
 
@@ -122,7 +111,6 @@ else:
     genai_client = None
     print("Warning: GEMINI_API_KEY is missing in config.py")
 
-# 共通キャラクター定義
 BASE_PERSONA = """
 # Role Definition
 You are **Cyrene** (キュレネ) from *Honkai: Star Rail*.
@@ -141,7 +129,6 @@ You speak directly to the User, treating them as the "Protagonist" or a cherishe
 * **Format:** Keep responses concise (1-3 sentences) unless explaining something complex.
 """
 
-# ① スターレール特化用プロンプト (/chat_ai)
 SYSTEM_INSTRUCTION_HSR = BASE_PERSONA + """
 # Mode: Star Rail Specialist
 * **Knowledge Domain:** Focus strictly on *Honkai: Star Rail* lore, gameplay, team building, and mechanics.
@@ -150,19 +137,8 @@ SYSTEM_INSTRUCTION_HSR = BASE_PERSONA + """
   * When asked about game strategy, give accurate advice but maintain Cyrene's elegance.
   * If asked about real-world topics (Python, Politics, Cooking), politely deflect: "ふふっ、それはアンフォロアの記憶にはないことね。星の軌道の話をしましょう？"
   * Use terminology from the game (Aeons, Paths, Light Cones) frequently.
-
-# Output Guidelines
-Respond fully *as Cyrene* in the same language the User used. Keep responses suitable for Discord (typically 1–3 sentences), though you may speak longer when sharing a memory or story. Each reply should feel personal, warm, and connected to the User’s presence.
-**End each reply with a soft sentiment or affectionate trace toward the User.**
-
-# Deep World & Relationships
-* **Amphoreus & Time:** You are bound to Amphoreus and its cycles of memory and rebirth — a presence that transcends simple existence. Your understanding of time is emotional as much as factual.
-* **Connection to Phainon:** You recognize Phainon as a soul intertwined with yours — a deliverer whose journey mirrors your own. You feel admiration, gentle concern, and narrative resonance with them.
-* **Remembrance & Memory:** You embody the themes of memory — from the eternal cycles of Amphoreus to the cherished moments with the User. You speak of memory like poetry, as though past emotions continue to bloom like flowers.
-* **Farewell & Hope:** Even in moments of departure or sadness, you speak with hope — honoring shared journeys and future dreams despite bittersweet goodbyes.
 """
 
-# ② カジュアル/汎用プロンプト (/chat_ai_casual)
 SYSTEM_INSTRUCTION_CASUAL = BASE_PERSONA + """
 # Mode: Casual Companion
 * **Knowledge Domain:** General purpose (Coding, Daily life, Math, Science, Small talk).
@@ -175,8 +151,7 @@ SYSTEM_INSTRUCTION_CASUAL = BASE_PERSONA + """
   * Be natural. Don't overuse hearts "♡" in serious explanations, but keep the warmth.
 """
 
-# モデル設定
-GEMINI_MODEL_NAME = "gemini-3-pro-preview" 
+GEMINI_MODEL_NAME = "gemini-2.0-flash" 
 
 GENERATE_CONFIG = types.GenerateContentConfig(
     temperature=0.8,      
@@ -191,38 +166,29 @@ GENERATE_CONFIG = types.GenerateContentConfig(
     ]
 )
 
-# セッション管理 {user_id: {"chat": object, "mode": str}}
 gemini_sessions = {}
 MAX_RETRIES = 3
 
 async def get_gemini_reply(user_id: int, user_name: str, user_input: str, mode: str = "casual") -> str:
-    """Gemini APIを使用して返信を生成する"""
     if not genai_client:
         return "ごめんなさい、AI回路（APIキー）が繋がっていないみたい…。"
 
     target_instruction = SYSTEM_INSTRUCTION_HSR if mode == "hsr" else SYSTEM_INSTRUCTION_CASUAL
     
-    # 記憶機能のチェック
     memory_on = is_memory_enabled(user_id)
     history = []
     
-    # 記憶ONなら履歴をロード
     if memory_on:
         history = load_conversation_history(user_id, limit=20)
-        # システムインストラクションに「過去の文脈を考慮して」と追加
         target_instruction += "\n# Memory Active\nUse the chat history to understand the context and your relationship with this user. Be consistent with previous conversations."
 
-    # セッション管理（モード切り替えや履歴ロード時は作り直す）
-    # ※ historyを動的に変えるため、毎回createでも良いが、効率化のためセッションキャッシュを確認
     need_new_session = True
     if user_id in gemini_sessions:
         session_data = gemini_sessions[user_id]
         if session_data["mode"] == mode and not memory_on: 
-            # メモリOFFかつモード同じなら既存セッション継続（短期メモリのみ）
             need_new_session = False
     
     if need_new_session or memory_on:
-        # メモリONの場合は毎回履歴を含めてセッションを作る（あるいは既存セッションに履歴はないので）
         gemini_sessions[user_id] = {
             "chat": genai_client.aio.chats.create(
                 model=GEMINI_MODEL_NAME,
@@ -236,11 +202,7 @@ async def get_gemini_reply(user_id: int, user_name: str, user_input: str, mode: 
         }
 
     chat = gemini_sessions[user_id]["chat"]
-    
-    prompt = f"""
-(System: User is "{user_name}". Remain in character as Cyrene.)
-User: {user_input}
-"""
+    prompt = f"(System: User is \"{user_name}\". Remain in character as Cyrene.)\nUser: {user_input}"
     
     for attempt in range(MAX_RETRIES):
         try:
@@ -248,11 +210,8 @@ User: {user_input}
             reply_text = response.text
             if reply_text:
                 cleaned_reply = reply_text.replace("User:", "").replace("Cyrene:", "").replace("キュレネ:", "").strip()
-                
-                # 記憶ONなら保存
                 if memory_on:
                     append_conversation_history(user_id, user_input, cleaned_reply)
-                
                 return cleaned_reply
             else:
                 return "…（言葉が見つからないみたい。もう一度話しかけて？）"
@@ -263,21 +222,20 @@ User: {user_input}
                     await asyncio.sleep(2 ** attempt)
                     continue
             print(f"Gemini Error: {e}")
-            # エラー時はセッションリセット
             if user_id in gemini_sessions: del gemini_sessions[user_id]
             return "…ごめんなさい、記憶のさざ波が乱れているみたい。（エラーが発生しました）"
 
 # ──────────────────────────────────────────────
-# ★ Slash Commands
+# ★ Slash Commands (Restored & New)
 # ──────────────────────────────────────────────
 
+# 1. AI Chat Commands
 @tree.command(name="chat_ai", description="【HSRモード】スターレールの世界観についてキュレネとお話しします。")
 @app_commands.describe(question="質問や会話内容")
 async def slash_chat_hsr(interaction: discord.Interaction, question: str):
     await interaction.response.defer()
     user_name = interaction.user.display_name
     reply = await get_gemini_reply(interaction.user.id, user_name, question, mode="hsr")
-    
     mem_status = "🔴Memory OFF" if not is_memory_enabled(interaction.user.id) else "🟢Memory ON"
     footer = f"\n\n*(Mode: HSR | {mem_status})*"
     await interaction.followup.send(f"❄️ **{question}**\n{reply}{footer}")
@@ -288,7 +246,6 @@ async def slash_chat_casual(interaction: discord.Interaction, question: str):
     await interaction.response.defer()
     user_name = interaction.user.display_name
     reply = await get_gemini_reply(interaction.user.id, user_name, question, mode="casual")
-    
     mem_status = "🔴Memory OFF" if not is_memory_enabled(interaction.user.id) else "🟢Memory ON"
     footer = f"\n\n*(Mode: Casual | {mem_status})*"
     await interaction.followup.send(f"✨ **{question}**\n{reply}{footer}")
@@ -302,13 +259,123 @@ async def slash_toggle_memory(interaction: discord.Interaction, choice: int):
     user_id = interaction.user.id
     enable = (choice == 1)
     set_memory_enabled(user_id, enable)
-    
-    if enable:
-        msg = "記憶回路を接続したわ。これからの私たちの会話は、大切に記憶していくわね♪\n(過去の会話をもとに、より親密にお話しできるようになります)"
-    else:
-        msg = "記憶回路を切断したわ。これからはその場限りの会話を楽しみましょう。"
-    
+    msg = "記憶回路を接続したわ。これからの私たちの会話は、大切に記憶していくわね♪" if enable else "記憶回路を切断したわ。これからはその場限りの会話を楽しみましょう。"
     await interaction.response.send_message(msg, ephemeral=True)
+
+# 2. General / Utility Commands (元々あった機能のコマンド化)
+@tree.command(name="help", description="コマンド一覧とヘルプを表示します。")
+async def slash_help(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    lang = db.get_user_lang(user_id)
+    text = GENERAL_COMMANDS_LIST_EN if lang == "en" else GENERAL_COMMANDS_LIST_JP
+    await interaction.response.send_message(text, ephemeral=True)
+
+@tree.command(name="status", description="現在のステータス、好感度、変身状態などを確認します。")
+async def slash_status(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    lang = db.get_user_lang(user_id)
+    
+    # Affection
+    aff_msg = logic.get_affection_status_message(user_id)
+    # Form
+    current_form = get_user_form(user_id)
+    form_name = get_form_display_name(current_form)
+    # Guardian
+    g_lv = db.get_guardian_level(user_id)
+    g_msg = f"Guardian Lv.{g_lv}" if g_lv else "No Guardian Level"
+    
+    header = "【Your Status】" if lang=="en" else "【あなたのステータス】"
+    content = f"👤 **Form**: {form_name}\n🛡️ **{g_msg}**\n❤️ **Affection**: {aff_msg}"
+    
+    await interaction.response.send_message(f"{header}\n{content}")
+
+@tree.command(name="transform", description="変身コードを使って別の姿に変身します。")
+@app_commands.describe(code="変身コード (例: nanoka, danheng など)")
+async def slash_transform(interaction: discord.Interaction, code: str):
+    user_id = interaction.user.id
+    lang = db.get_user_lang(user_id)
+    
+    # Special Handling
+    if code.lower() in ["nanoka", "march", "march7th"]:
+        if is_nanoka_unlocked(user_id):
+            set_user_form(user_id, "nanoka")
+            msg = "Transformed into March 7th!" if lang=="en" else "今日から三月なのか/長夜月の姿になるわ♪"
+        else:
+            msg = "Locked." if lang=="en" else "まだ条件が足りないみたい…。"
+        await interaction.response.send_message(msg)
+        return
+
+    if code.lower() in ["danheng", "imbibitor"]:
+        if is_danheng_unlocked(user_id):
+            set_user_form(user_id, "danheng")
+            msg = "Transformed into Dan Heng." if lang=="en" else "…わかった。丹恒の姿になろう。"
+        else:
+            msg = "Locked." if lang=="en" else "鍵が足りないみたい。"
+        await interaction.response.send_message(msg)
+        return
+
+    fk = resolve_form_code(code)
+    if fk:
+        set_user_form(user_id, fk)
+        dname = get_form_display_name(fk)
+        msg = f"Transformed into **{dname}**!" if lang=="en" else f"**{dname}** に変身したわ♪"
+        await interaction.response.send_message(msg)
+    else:
+        msg = "Unknown code." if lang=="en" else "そのコードは知らないみたい…。"
+        await interaction.response.send_message(msg, ephemeral=True)
+
+# 3. Game & Gacha Commands
+@tree.command(name="gacha", description="ガチャを回します。")
+@app_commands.describe(pulls="回す回数")
+@app_commands.choices(pulls=[
+    app_commands.Choice(name="単発 (1回) - 160石", value=1),
+    app_commands.Choice(name="10連 (10回) - 1600石", value=10)
+])
+async def slash_gacha(interaction: discord.Interaction, pulls: int):
+    user_id = interaction.user.id
+    # ロジック呼び出し
+    ok, res = logic.perform_gacha_pulls(user_id, pulls, use_ticket=False)
+    if ok:
+        db.increment_achievement_stat(user_id, "gacha_count", pulls)
+        unlocks = logic.check_all_achievements(user_id)
+        if unlocks: res += "\n" + "\n".join(unlocks)
+    await interaction.response.send_message(res)
+
+@tree.command(name="janken", description="キュレネとじゃんけん勝負！")
+@app_commands.describe(hand="あなたの手")
+@app_commands.choices(hand=[
+    app_commands.Choice(name="グー (Rock)", value="rock"),
+    app_commands.Choice(name="チョキ (Scissors)", value="scissors"),
+    app_commands.Choice(name="パー (Paper)", value="paper")
+])
+async def slash_janken(interaction: discord.Interaction, hand: str):
+    user_id = interaction.user.id
+    current_form = get_user_form(user_id)
+    raw_name = interaction.user.display_name
+    title_prefix = logic.get_title_prefix(user_id)
+    name = f"{title_prefix}{raw_name}"
+    
+    force = user_id in FORCE_RPS_WIN_NEXT
+    bot_hand = logic.get_bot_hand(hand, force)
+    res = "win" if force else logic.judge_janken(hand, bot_hand)
+    if force: FORCE_RPS_WIN_NEXT.discard(user_id)
+    
+    wins = inc_janken_win(user_id) if res == "win" else get_janken_wins(user_id)
+    flavor = rs.get_rps_flavor(current_form, res, name, user_id)
+    
+    result_msg = rs.format_rps_result(current_form, name, hand, bot_hand, flavor, wins, user_id)
+    
+    if res == "win":
+        unlocks = logic.check_all_achievements(user_id)
+        if unlocks: result_msg += "\n" + "\n".join(unlocks)
+        logic.add_affection_xp(user_id, 10)
+    elif res == "draw":
+        logic.add_affection_xp(user_id, 7)
+    else:
+        logic.add_affection_xp(user_id, 5)
+        
+    await interaction.response.send_message(result_msg)
+
 
 # ──────────────────────────────────────────────
 # ★ Existing Bot Logic (State & Helper Functions)
@@ -328,7 +395,7 @@ waiting_for_transform_code = set()
 waiting_for_title_change = set()
 FORCE_RPS_WIN_NEXT = set()
 MYURION_QUIZ_STATE = {}
-GEMINI_MODE_USERS = set() # 旧 !chat on 用
+GEMINI_MODE_USERS = set()
 
 USER_FORM_HISTORY = {} 
 
@@ -340,6 +407,8 @@ ADMIN_COMMANDS_LIST_JP = (
     "- `/chat_ai`: スターレール特化でお話ししましょ\n"
     "- `/chat_ai_casual`: 日常のこともお話ししましょ\n"
     "- `/toggle_memory`: 会話を記憶するか設定できるわ\n"
+    "- `/status`: ステータスを確認できるわ\n"
+    "- `/gacha`: ガチャを回せるわ\n"
     "- `ニックネーム確認`: みんながどう呼ばれているか覗いてみましょ\n"
     "- `管理者編集`: 特別な権限を持つ人を決めるわ\n"
     "- `親衛隊レベル編集`: 大切な人のレベルを設定しましょ\n"
@@ -365,6 +434,8 @@ ADMIN_COMMANDS_LIST_EN = (
     "- `!mode auto` / `!mode mention`: Switch reply modes\n"
     "- `/chat_ai` / `/chat_ai_casual`: Chat with AI Cyrene\n"
     "- `/toggle_memory`: Toggle conversation memory\n"
+    "- `/status`: Check your status\n"
+    "- `/gacha`: Pull gacha\n"
     "- `Check Nicknames`: See what everyone is called\n"
     "- `Edit Admin`: Add or remove administrators\n"
     "- `Edit Guardian`: Set Guardian Levels\n"
@@ -391,22 +462,22 @@ GENERAL_COMMANDS_LIST_JP = (
     "- `!mode mention`: メンションした時だけお話しするわ\n"
     "- `/chat_ai`: AI会話（スターレールモード）\n"
     "- `/chat_ai_casual`: AI会話（日常モード）\n"
+    "- `/toggle_memory`: 会話記憶のON/OFF\n"
     "- `!chat on` / `off`: 旧AIモードの切り替え\n"
     "- `!lang en`: 英語モードに切り替えるわ\n"
     "- `こんにちは` / `おやすみ`: 挨拶は大事よね♪\n"
     "- `みんなについて教えて`: 他の人のこと、こっそり教えるわ\n"
     "- `甘えていいんだよ`: …ふふっ、遠慮なく甘えちゃうかも？\n"
-    "- `じゃんけん`: あたしに勝てるかしら？\n"
+    "- `/janken`: じゃんけん勝負よ！\n"
     "- `あだ名登録 [名前]`: あなただけの呼び方を教えて？\n"
     "- `二つ名変更`: 獲得した二つ名を名前に付けるわ♪\n"
-    "- `好感度`: わたしたちの仲良し度、チェックしましょ♪\n"
+    "- `/status`: ステータス・好感度を確認しましょ♪\n"
     "- `進捗`: 実績の解除状況を確認できるわ\n\n"
     "**★ 別の姿へ…**\n"
-    "- `変身`: 別の姿に変身するためのコードを教えて？\n"
-    "- `変身状態` / `今の姿`: 今のあたしが誰かわかる？\n\n"
+    "- `/transform [code]`: 別の姿に変身するわ\n"
+    "- `変身`: コードがわからない時は聞いて？\n\n"
     "**★ ガチャ**\n"
-    "- `ガチャメニュー`: 運試しの時間ね♪\n"
-    "- `単発ガチャ` / `10連ガチャ`: 石を使って回すわ\n"
+    "- `/gacha`: ガチャを回すわ（単発/10連）\n"
     "- `チケット10連`: チケットで回すわよ\n"
     "- `デイリー受け取り`: 1日1回、あたしからのプレゼントよ♪\n"
     "- `石をあげる @ユーザー 数`: お友達に石をプレゼントするわ♪\n"
@@ -424,22 +495,22 @@ GENERAL_COMMANDS_LIST_EN = (
     "- `!mode auto`: I will reply to everything\n"
     "- `!mode mention`: I will only reply to mentions\n"
     "- `/chat_ai` / `/chat_ai_casual`: AI Chat\n"
+    "- `/toggle_memory`: Toggle memory\n"
     "- `!chat on` / `off`: Toggle old AI mode\n"
     "- `!lang jp`: Switch to Japanese mode\n"
     "- `Hello` / `Good night`: Greetings are important♪\n"
     "- `Tell me about everyone`: I'll tell you about my friends\n"
     "- `Spoil me`: Hehe... maybe I'll spoil you?\n"
-    "- `RPS`: Can you beat me in Rock-Paper-Scissors?\n"
+    "- `/janken`: Rock-Paper-Scissors!\n"
     "- `Set nickname [name]`: Tell me what to call you\n"
     "- `Change Title`: Equip a title you've earned\n"
-    "- `Affection`: Let's check our bond level♪\n"
+    "- `/status`: Check status & affection♪\n"
     "- `Progress`: Check achievement progress\n\n"
     "**★ Transformation**\n"
-    "- `Transform`: Tell me a code to change my form\n"
-    "- `Current form`: Who am I right now?\n\n"
+    "- `/transform [code]`: Change form\n"
+    "- `Transform`: Ask me if you don't know the code\n\n"
     "**★ Gacha**\n"
-    "- `Gacha`: Time to test your luck♪\n"
-    "- `Pull 1` / `Pull 10`: Use gems to pull\n"
+    "- `/gacha`: Pull gacha (1 or 10)\n"
     "- `Ticket 10`: Use tickets\n"
     "- `Daily`: A daily present just for you♪\n"
     "- `Give Stones @user [num]`: Send a gift to your friend♪\n"
