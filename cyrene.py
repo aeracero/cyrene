@@ -283,6 +283,35 @@ async def get_gemini_reply(message, mode: str) -> str:
 # ★ Slash Commands
 # ──────────────────────────────────────────────
 
+# ★ 追加: ボイスチャンネル参加コマンド
+@tree.command(name="join", description="ボイスチャンネルに参加します。")
+async def slash_join(interaction: discord.Interaction):
+    if not interaction.user.voice:
+        msg = "You are not in a voice channel." if db.get_user_lang(interaction.user.id) == "en" else "ボイスチャンネルに入っていないみたいよ？"
+        await interaction.response.send_message(msg, ephemeral=True)
+        return
+
+    channel = interaction.user.voice.channel
+    if interaction.guild.voice_client:
+        await interaction.guild.voice_client.move_to(channel)
+        msg = f"Moved to {channel.name}." if db.get_user_lang(interaction.user.id) == "en" else f"**{channel.name}** に移動したわ。"
+    else:
+        await channel.connect()
+        msg = f"Connected to {channel.name}." if db.get_user_lang(interaction.user.id) == "en" else f"**{channel.name}** に接続したわ。"
+    
+    await interaction.response.send_message(msg)
+
+# ★ 追加: ボイスチャンネル退出コマンド
+@tree.command(name="leave", description="ボイスチャンネルから切断します。")
+async def slash_leave(interaction: discord.Interaction):
+    if interaction.guild.voice_client:
+        await interaction.guild.voice_client.disconnect()
+        msg = "Disconnected." if db.get_user_lang(interaction.user.id) == "en" else "切断したわ。"
+        await interaction.response.send_message(msg)
+    else:
+        msg = "I'm not connected." if db.get_user_lang(interaction.user.id) == "en" else "接続してないわよ？"
+        await interaction.response.send_message(msg, ephemeral=True)
+
 @tree.command(name="chat_mode", description="AI（キュレネ）との会話モードを切り替えます。OFFにするまで続きます。")
 @app_commands.describe(mode="モード選択")
 @app_commands.choices(mode=[
@@ -482,6 +511,8 @@ GENERAL_COMMANDS_LIST_JP = (
     "- `/transform`: 変身コードを入力してね\n"
     "- `じゃんけん`: 勝負よ！\n"
     "- `あだ名登録`: 好きな呼び方を教えて？\n"
+    "- `/join`: ボイスチャンネルに参加するわ\n"
+    "- `/leave`: ボイスチャンネルから退出するわ\n"
 )
 
 GENERAL_COMMANDS_LIST_EN = (
@@ -499,6 +530,8 @@ GENERAL_COMMANDS_LIST_EN = (
     "- `/transform`: Change form\n"
     "- `RPS`: Rock-Paper-Scissors!\n"
     "- `Set nickname`: Tell me what to call you\n"
+    "- `/join`: Join the voice channel\n"
+    "- `/leave`: Leave the voice channel\n"
 )
 
 async def send_myu(message, user_id, text):
@@ -568,7 +601,7 @@ async def on_message(message):
     # ★ Legacy Commands & Logic (When AI mode is OFF or Command)
     # ──────────────────────────────────────────────
     content_body = re.sub(rf"<@!?{client.user.id}>", "", content).strip()
-    content_lower = content_body.lower()
+    content_body_lower = content_body.lower()
 
     is_main_admin = (user_id == PRIMARY_ADMIN_ID)
     nickname = db.get_nickname(user_id)
@@ -686,21 +719,21 @@ async def on_message(message):
         await message.channel.send(res)
         return
 
-    if content_lower == "!mode auto":
+    if content_body_lower == "!mode auto":
         db.set_reply_mode(user_id, "auto")
         msg = f"Got it! I'll reply even without mentions now, {name}!" if lang=="en" else f"了解です♪ これからはメンションなしでもお話しますね、{name}さん！"
         await message.channel.send(msg)
         return
-    if content_lower == "!mode mention":
+    if content_body_lower == "!mode mention":
         db.set_reply_mode(user_id, "mention")
         msg = f"Okay. I'll only reply when you mention me." if lang=="en" else f"わかりました。これからは呼んでくれた時（メンション）だけお返事しますね。"
         await message.channel.send(msg)
         return
-    if content_lower == "!lang en":
+    if content_body_lower == "!lang en":
         db.set_user_lang(user_id, "en")
         await message.channel.send(f"Okay, {name}! I'll speak in English from now on♪")
         return
-    if content_lower == "!lang jp":
+    if content_body_lower == "!lang jp":
         db.set_user_lang(user_id, "jp")
         await message.channel.send(f"わかりました、{name}さん！これからは日本語でお話ししますね♪")
         return
