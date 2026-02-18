@@ -1,11 +1,13 @@
 [phases.setup]
-nixPkgs = ["python310", "ffmpeg", "espeak-ng", "git", "gcc"]
+# Python 3.10 と音声処理・ビルドに必要なツールを指定
+nixPkgs = ["python310", "ffmpeg", "espeak-ng", "git", "gcc", "g++"]
 
 [phases.install]
 cmds = [
-    "pip install --upgrade pip",
-    "pip install -r requirements.txt"
+    "python3.10 -m pip install --upgrade pip setuptools wheel",
+    "python3.10 -m pip install -r requirements.txt"
 ]
 
 [start]
-cmd = "python cyrene.py"
+# 起動時も Python 3.10 を使うように指定
+cmd = "python3.10 cyrene.py"
