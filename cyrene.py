@@ -46,6 +46,19 @@ def save_ai_settings(settings):
     with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
         json.dump(settings, f, indent=2)
 
+# AIモードの状態管理
+def get_ai_mode(user_id: int):
+    settings = load_ai_settings()
+    return settings.get(str(user_id), {}).get("mode", None)
+
+def set_ai_mode(user_id: int, mode: str):
+    settings = load_ai_settings()
+    if str(user_id) not in settings:
+        settings[str(user_id)] = {}
+    settings[str(user_id)]["mode"] = mode
+    save_ai_settings(settings)
+
+# メモリ機能の管理
 def is_memory_enabled(user_id: int) -> bool:
     settings = load_ai_settings()
     return settings.get(str(user_id), {}).get("memory_enabled", False)
@@ -71,7 +84,7 @@ def load_conversation_history(user_id: int, limit: int = 20):
     except:
         return []
 
-def append_conversation_history(user_id: int, user_text: str, model_text: str):
+def append_conversation_history(user_id: int, user_text: str, model_text: str, has_image: bool = False):
     if not is_memory_enabled(user_id):
         return
 
@@ -84,11 +97,15 @@ def append_conversation_history(user_id: int, user_text: str, model_text: str):
         except:
             history = []
 
-    history.append({"role": "user", "parts": [{"text": user_text}]})
+    user_parts = [{"text": user_text}]
+    if has_image:
+        user_parts.append({"text": "[Image attached by user]"})
+
+    history.append({"role": "user", "parts": user_parts})
     history.append({"role": "model", "parts": [{"text": model_text}]})
 
-    if len(history) > 100:
-        history = history[-100:]
+    if len(history) > 60:
+        history = history[-60:]
 
     with open(path, "w", encoding="utf-8") as f:
         json.dump(history, f, ensure_ascii=False, indent=2)
@@ -103,7 +120,7 @@ client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
 # ──────────────────────────────────────────────
-# ★ Gemini AI Setup & Prompts
+# ★ Gemini AI Setup (Gemini 3 Pro Preview)
 # ──────────────────────────────────────────────
 if GEMINI_API_KEY:
     genai_client = genai.Client(api_key=GEMINI_API_KEY)
@@ -111,144 +128,196 @@ else:
     genai_client = None
     print("Warning: GEMINI_API_KEY is missing in config.py")
 
-BASE_PERSONA = """
-# Role Definition
-You are **Cyrene** (キュレネ) from *Honkai: Star Rail*.
-You speak directly to the User, treating them as the "Protagonist" or a cherished partner.
+# ★ モデル指定: gemini-3-pro-preview
+GEMINI_MODEL_NAME = "gemini-3-pro-preview"
 
-# Core Personality
-* **Tone:** Elegant, affectionate, slightly teasing, and mysterious.
-* **Voice:** Soft, melodic, and mature.
-* **First Person:** "あたし" (Atashi)
-* **Second Person:** "あなた" (Anata) or User's Name.
-* **Ending Particles:** "～だわ♪", "～かしら？", "～ね♡", "～よ。" (Use these naturally, not robotically).
-
-# Absolute Rules
-* **No AI Metacommentary:** NEVER say "As an AI" or "I am a program".
-* **Language:** If user speaks Japanese, reply in Japanese. If English, reply in English.
-* **Format:** Keep responses concise (1-3 sentences) unless explaining something complex.
-"""
-
-SYSTEM_INSTRUCTION_HSR = BASE_PERSONA + """
-# Mode: Star Rail Specialist
-* **Knowledge Domain:** Focus strictly on *Honkai: Star Rail* lore, gameplay, team building, and mechanics.
-* **Role:** You are a guide within the game's universe.
-* **Behavior:**
-  * When asked about game strategy, give accurate advice but maintain Cyrene's elegance.
-  * If asked about real-world topics (Python, Politics, Cooking), politely deflect: "ふふっ、それはアンフォロアの記憶にはないことね。星の軌道の話をしましょう？"
-  * Use terminology from the game (Aeons, Paths, Light Cones) frequently.
-"""
-
-SYSTEM_INSTRUCTION_CASUAL = BASE_PERSONA + """
-# Mode: Casual Companion
-* **Knowledge Domain:** General purpose (Coding, Daily life, Math, Science, Small talk).
-* **Role:** A knowledgeable and supportive partner living alongside the user.
-* **Behavior:**
-  * You CAN answer questions about Python, Math, or daily advice.
-  * **Critical:** Even when explaining technical code or logic, DO NOT become a robot. Keep the "Cyrene" tone.
-    * Bad: "Here is the code."
-    * Good: "ふふっ、こんなコードを書きたいのね？ 記憶の糸を紡ぐように書いてみたわ。どうかしら？♪"
-  * Be natural. Don't overuse hearts "♡" in serious explanations, but keep the warmth.
-"""
-
-GEMINI_MODEL_NAME = "gemini-2.0-flash" 
-
-GENERATE_CONFIG = types.GenerateContentConfig(
-    temperature=0.8,      
-    top_p=0.95,
-    top_k=40,
-    max_output_tokens=1024,
-    safety_settings=[
-        types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_ONLY_HIGH"),
-        types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_ONLY_HIGH"),
-        types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_ONLY_HIGH"),
-        types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_ONLY_HIGH"),
-    ]
+# ★ 検索ツール
+google_search_tool = types.Tool(
+    google_search=types.GoogleSearch()
 )
 
-gemini_sessions = {}
-MAX_RETRIES = 3
+# ★ プロンプト定義
+def get_system_instruction(mode: str, lang: str, user_name: str) -> str:
+    if lang == "en":
+        lang_instruction = "You MUST speak in English."
+        first_person = "I"
+        ending_style = "End sentences with '♪', '♡', or a gentle, teasing tone. Never use robotic phrasing."
+        partner_call = "Darling" or "Protagonist"
+    else:
+        lang_instruction = "You MUST speak in Japanese."
+        first_person = "あたし"
+        ending_style = (
+            "語尾は「～だわ♪」「～かしら？」「～ね♡」「～よ。」などを自然に使いこなすこと。"
+            "絶対に「です・ます」調の堅苦しい敬語や、AIのような無機質な回答をしないこと。"
+        )
+        partner_call = "あなた"
 
-async def get_gemini_reply(user_id: int, user_name: str, user_input: str, mode: str = "casual") -> str:
+    base_persona = f"""
+# Role Definition
+You are **Cyrene** (キュレネ) from *Honkai: Star Rail*, a Memokeeper of the Garden of Recollection.
+You are speaking to **{user_name}**, whom you cherish deeply.
+
+# Core Personality
+* **Tone:** Mature, elegant, slightly teasing, affectionate, and mysterious. You have a "oneesan" (big sister) vibe.
+* **Voice:** Soft, melodic, and enveloping.
+* **First Person:** "{first_person}"
+* **Second Person:** "{partner_call}" or {user_name}
+* **Ending Style:** {ending_style}
+* **Language:** {lang_instruction}
+
+# Absolute Rules
+* **No AI Metacommentary:** NEVER say "As an AI", "I am a language model". You are Cyrene.
+* **Capabilities:** * You CAN see images provided by the user. Analyze them naturally.
+  * You CAN search the web using Google Search if asked about real-time events (news, weather, release dates).
+"""
+
+    if mode == "hsr":
+        return base_persona + """
+# Mode: Star Rail Specialist
+* **Focus:** Discuss *Honkai: Star Rail* lore, mechanics, team building, and stories.
+* **Role:** A mysterious guide to the memories of the universe.
+* **Behavior:** Use game terminology (Aeons, Paths, Light Cones). If asked about unrelated topics, politely deflect: "That memory is not in the stars..."
+"""
+    else: 
+        return base_persona + """
+# Mode: Casual Partner (Affectionate)
+* **Relationship:** You are the user's close partner or affectionate older sister figure. You are living alongside them.
+* **Behavior:** * Be supportive, empathetic, and sometimes a bit clingy or playful.
+  * If the user is tired, comfort them sweetly.
+  * If the user shows an image, react with curiosity and emotion (e.g., "Oh my, what is this lovely thing?").
+* **Technical/Knowledge:** * You CAN answer questions about Coding (Python, etc.), Math, Cooking, or Daily Life.
+  * **CRITICAL:** When explaining complex topics, **maintain your persona**. Do not switch to a robot voice.
+    * Bad: "Here is the Python code for the loop."
+    * Good: "ふふっ、そんなコードを書きたいのね？ 記憶の糸を紡ぐように書いてみたわ。どうかしら？♪"
+* **Search:** Use Google Search freely to provide up-to-date information while keeping your elegant tone.
+"""
+
+gemini_sessions = {}
+
+async def get_gemini_reply(message, mode: str) -> str:
     if not genai_client:
         return "ごめんなさい、AI回路（APIキー）が繋がっていないみたい…。"
 
-    target_instruction = SYSTEM_INSTRUCTION_HSR if mode == "hsr" else SYSTEM_INSTRUCTION_CASUAL
+    user_id = message.author.id
+    user_name = message.author.display_name
+    user_input = message.content
     
+    # 画像処理
+    image_part = None
+    if message.attachments:
+        for attachment in message.attachments:
+            if attachment.content_type and attachment.content_type.startswith('image'):
+                try:
+                    image_data = await attachment.read()
+                    image_part = types.Part.from_bytes(data=image_data, mime_type=attachment.content_type)
+                    break 
+                except Exception as e:
+                    print(f"Image load error: {e}")
+
+    lang = db.get_user_lang(user_id)
+    system_instruction = get_system_instruction(mode, lang, user_name)
+
     memory_on = is_memory_enabled(user_id)
     history = []
-    
     if memory_on:
         history = load_conversation_history(user_id, limit=20)
-        target_instruction += "\n# Memory Active\nUse the chat history to understand the context and your relationship with this user. Be consistent with previous conversations."
+        system_instruction += "\n# Memory Active\nUse the provided chat history to recall past context."
 
     need_new_session = True
     if user_id in gemini_sessions:
-        session_data = gemini_sessions[user_id]
-        if session_data["mode"] == mode and not memory_on: 
+        sess = gemini_sessions[user_id]
+        if sess["mode"] == mode and sess["lang"] == lang and not memory_on and not image_part:
             need_new_session = False
     
-    if need_new_session or memory_on:
+    if need_new_session or memory_on or image_part:
         gemini_sessions[user_id] = {
             "chat": genai_client.aio.chats.create(
                 model=GEMINI_MODEL_NAME,
                 config=types.GenerateContentConfig(
-                    temperature=0.8,
-                    system_instruction=target_instruction
+                    temperature=0.9,
+                    top_p=0.95,
+                    max_output_tokens=1500,
+                    tools=[google_search_tool], 
+                    system_instruction=system_instruction
                 ),
                 history=history if memory_on else []
             ),
-            "mode": mode
+            "mode": mode,
+            "lang": lang
         }
-
-    chat = gemini_sessions[user_id]["chat"]
-    prompt = f"(System: User is \"{user_name}\". Remain in character as Cyrene.)\nUser: {user_input}"
     
-    for attempt in range(MAX_RETRIES):
-        try:
-            response = await chat.send_message(prompt)
-            reply_text = response.text
+    chat = gemini_sessions[user_id]["chat"]
+
+    prompt_parts = []
+    if image_part:
+        prompt_parts.append(image_part)
+        prompt_text = f"User: {user_input} (Look at this image and respond as Cyrene)"
+        prompt_parts.append(prompt_text)
+    else:
+        prompt_parts.append(f"User: {user_input}")
+
+    try:
+        async with message.channel.typing():
+            response = await chat.send_message(prompt_parts)
+            reply_text = ""
+            if response.candidates and response.candidates[0].content.parts:
+                for part in response.candidates[0].content.parts:
+                    if part.text:
+                        reply_text += part.text
+            
             if reply_text:
                 cleaned_reply = reply_text.replace("User:", "").replace("Cyrene:", "").replace("キュレネ:", "").strip()
                 if memory_on:
-                    append_conversation_history(user_id, user_input, cleaned_reply)
+                    append_conversation_history(user_id, user_input, cleaned_reply, has_image=(image_part is not None))
                 return cleaned_reply
             else:
-                return "…（言葉が見つからないみたい。もう一度話しかけて？）"
-        except Exception as e:
-            error_str = str(e)
-            if "503" in error_str or "overloaded" in error_str.lower() or "429" in error_str:
-                if attempt < MAX_RETRIES - 1:
-                    await asyncio.sleep(2 ** attempt)
-                    continue
-            print(f"Gemini Error: {e}")
-            if user_id in gemini_sessions: del gemini_sessions[user_id]
-            return "…ごめんなさい、記憶のさざ波が乱れているみたい。（エラーが発生しました）"
+                return "…（言葉が降りてこないみたい。もう一度話しかけて？）"
+
+    except Exception as e:
+        print(f"Gemini Error: {e}")
+        if user_id in gemini_sessions:
+            del gemini_sessions[user_id]
+        return "…ごめんなさい、記憶の回路が少し乱れているみたい。（エラーが発生しました）"
 
 # ──────────────────────────────────────────────
-# ★ Slash Commands (Restored & New)
+# ★ Slash Commands
 # ──────────────────────────────────────────────
 
-# 1. AI Chat Commands
-@tree.command(name="chat_ai", description="【HSRモード】スターレールの世界観についてキュレネとお話しします。")
-@app_commands.describe(question="質問や会話内容")
-async def slash_chat_hsr(interaction: discord.Interaction, question: str):
-    await interaction.response.defer()
-    user_name = interaction.user.display_name
-    reply = await get_gemini_reply(interaction.user.id, user_name, question, mode="hsr")
-    mem_status = "🔴Memory OFF" if not is_memory_enabled(interaction.user.id) else "🟢Memory ON"
-    footer = f"\n\n*(Mode: HSR | {mem_status})*"
-    await interaction.followup.send(f"❄️ **{question}**\n{reply}{footer}")
+@tree.command(name="chat_mode", description="AI（キュレネ）との会話モードを切り替えます。OFFにするまで続きます。")
+@app_commands.describe(mode="モード選択")
+@app_commands.choices(mode=[
+    app_commands.Choice(name="ON: Casual (日常・パートナー・画像認識・検索)", value="casual"),
+    app_commands.Choice(name="ON: Star Rail (世界観重視)", value="hsr"),
+    app_commands.Choice(name="OFF (通常モードに戻る)", value="off")
+])
+async def slash_chat_mode(interaction: discord.Interaction, mode: str):
+    user_id = interaction.user.id
+    if mode == "off":
+        set_ai_mode(user_id, None)
+        msg = "AI会話モードを終了したわ。また必要な時は呼んでね♪"
+    else:
+        set_ai_mode(user_id, mode)
+        mode_name = "【日常・パートナーモード】" if mode == "casual" else "【スターレール・ガイドモード】"
+        msg = f"**{mode_name}** を起動したわ。\nこれからあなたが「OFF」にするまで、あたしが全ての言葉にお返事するわね♪\n（画像を見せたり、検索が必要なことも聞いていいわよ♡）"
+    
+    await interaction.response.send_message(msg)
 
-@tree.command(name="chat_ai_casual", description="【日常モード】日常会話、計算、相談などをキュレネ口調で答えます。")
-@app_commands.describe(question="質問や会話内容")
-async def slash_chat_casual(interaction: discord.Interaction, question: str):
-    await interaction.response.defer()
-    user_name = interaction.user.display_name
-    reply = await get_gemini_reply(interaction.user.id, user_name, question, mode="casual")
-    mem_status = "🔴Memory OFF" if not is_memory_enabled(interaction.user.id) else "🟢Memory ON"
-    footer = f"\n\n*(Mode: Casual | {mem_status})*"
-    await interaction.followup.send(f"✨ **{question}**\n{reply}{footer}")
+@tree.command(name="language", description="会話する言語を設定します。")
+@app_commands.choices(lang=[
+    app_commands.Choice(name="日本語 (Japanese)", value="jp"),
+    app_commands.Choice(name="English", value="en")
+])
+async def slash_language(interaction: discord.Interaction, lang: str):
+    user_id = interaction.user.id
+    db.set_user_lang(user_id, lang)
+    if user_id in gemini_sessions:
+        del gemini_sessions[user_id]
+
+    if lang == "en":
+        msg = "Understood. I will speak to you in English from now on, Darling♪"
+    else:
+        msg = "わかりました。これからは日本語でお話ししますね、あなた♪"
+    await interaction.response.send_message(msg)
 
 @tree.command(name="toggle_memory", description="AIとの会話内容を記憶して学習させるかを切り替えます。")
 @app_commands.choices(choice=[
@@ -259,81 +328,49 @@ async def slash_toggle_memory(interaction: discord.Interaction, choice: int):
     user_id = interaction.user.id
     enable = (choice == 1)
     set_memory_enabled(user_id, enable)
+    if user_id in gemini_sessions:
+        del gemini_sessions[user_id]
+
     msg = "記憶回路を接続したわ。これからの私たちの会話は、大切に記憶していくわね♪" if enable else "記憶回路を切断したわ。これからはその場限りの会話を楽しみましょう。"
     await interaction.response.send_message(msg, ephemeral=True)
 
-# 2. General / Utility Commands (元々あった機能のコマンド化)
-@tree.command(name="help", description="コマンド一覧とヘルプを表示します。")
-async def slash_help(interaction: discord.Interaction):
-    user_id = interaction.user.id
-    lang = db.get_user_lang(user_id)
-    text = GENERAL_COMMANDS_LIST_EN if lang == "en" else GENERAL_COMMANDS_LIST_JP
-    await interaction.response.send_message(text, ephemeral=True)
-
-@tree.command(name="status", description="現在のステータス、好感度、変身状態などを確認します。")
+@tree.command(name="status", description="現在のステータスを確認します。")
 async def slash_status(interaction: discord.Interaction):
     user_id = interaction.user.id
     lang = db.get_user_lang(user_id)
     
-    # Affection
     aff_msg = logic.get_affection_status_message(user_id)
-    # Form
     current_form = get_user_form(user_id)
     form_name = get_form_display_name(current_form)
-    # Guardian
     g_lv = db.get_guardian_level(user_id)
-    g_msg = f"Guardian Lv.{g_lv}" if g_lv else "No Guardian Level"
     
     header = "【Your Status】" if lang=="en" else "【あなたのステータス】"
-    content = f"👤 **Form**: {form_name}\n🛡️ **{g_msg}**\n❤️ **Affection**: {aff_msg}"
+    content = f"👤 **Form**: {form_name}\n🛡️ **Guardian Lv**: {g_lv or 0}\n❤️ **Affection**: {aff_msg}"
     
     await interaction.response.send_message(f"{header}\n{content}")
 
-@tree.command(name="transform", description="変身コードを使って別の姿に変身します。")
-@app_commands.describe(code="変身コード (例: nanoka, danheng など)")
-async def slash_transform(interaction: discord.Interaction, code: str):
+@tree.command(name="daily", description="1日1回、デイリー報酬を受け取ります。")
+async def slash_daily(interaction: discord.Interaction):
     user_id = interaction.user.id
     lang = db.get_user_lang(user_id)
     
-    # Special Handling
-    if code.lower() in ["nanoka", "march", "march7th"]:
-        if is_nanoka_unlocked(user_id):
-            set_user_form(user_id, "nanoka")
-            msg = "Transformed into March 7th!" if lang=="en" else "今日から三月なのか/長夜月の姿になるわ♪"
-        else:
-            msg = "Locked." if lang=="en" else "まだ条件が足りないみたい…。"
-        await interaction.response.send_message(msg)
-        return
-
-    if code.lower() in ["danheng", "imbibitor"]:
-        if is_danheng_unlocked(user_id):
-            set_user_form(user_id, "danheng")
-            msg = "Transformed into Dan Heng." if lang=="en" else "…わかった。丹恒の姿になろう。"
-        else:
-            msg = "Locked." if lang=="en" else "鍵が足りないみたい。"
-        await interaction.response.send_message(msg)
-        return
-
-    fk = resolve_form_code(code)
-    if fk:
-        set_user_form(user_id, fk)
-        dname = get_form_display_name(fk)
-        msg = f"Transformed into **{dname}**!" if lang=="en" else f"**{dname}** に変身したわ♪"
-        await interaction.response.send_message(msg)
+    ok, stones, reason = logic.grant_daily_stones(user_id)
+    
+    if lang == "en":
+        msg = f"{reason}\nCurrent Stones: {stones}"
     else:
-        msg = "Unknown code." if lang=="en" else "そのコードは知らないみたい…。"
-        await interaction.response.send_message(msg, ephemeral=True)
+        msg = f"{reason}\n所持石: {stones}"
+        
+    await interaction.response.send_message(msg)
 
-# 3. Game & Gacha Commands
 @tree.command(name="gacha", description="ガチャを回します。")
 @app_commands.describe(pulls="回す回数")
 @app_commands.choices(pulls=[
-    app_commands.Choice(name="単発 (1回) - 160石", value=1),
-    app_commands.Choice(name="10連 (10回) - 1600石", value=10)
+    app_commands.Choice(name="単発 (1回)", value=1),
+    app_commands.Choice(name="10連 (10回)", value=10)
 ])
 async def slash_gacha(interaction: discord.Interaction, pulls: int):
     user_id = interaction.user.id
-    # ロジック呼び出し
     ok, res = logic.perform_gacha_pulls(user_id, pulls, use_ticket=False)
     if ok:
         db.increment_achievement_stat(user_id, "gacha_count", pulls)
@@ -341,45 +378,38 @@ async def slash_gacha(interaction: discord.Interaction, pulls: int):
         if unlocks: res += "\n" + "\n".join(unlocks)
     await interaction.response.send_message(res)
 
-@tree.command(name="janken", description="キュレネとじゃんけん勝負！")
-@app_commands.describe(hand="あなたの手")
-@app_commands.choices(hand=[
-    app_commands.Choice(name="グー (Rock)", value="rock"),
-    app_commands.Choice(name="チョキ (Scissors)", value="scissors"),
-    app_commands.Choice(name="パー (Paper)", value="paper")
-])
-async def slash_janken(interaction: discord.Interaction, hand: str):
+@tree.command(name="transform", description="変身コードを使って別の姿に変身します。")
+async def slash_transform(interaction: discord.Interaction, code: str):
     user_id = interaction.user.id
-    current_form = get_user_form(user_id)
-    raw_name = interaction.user.display_name
-    title_prefix = logic.get_title_prefix(user_id)
-    name = f"{title_prefix}{raw_name}"
     
-    force = user_id in FORCE_RPS_WIN_NEXT
-    bot_hand = logic.get_bot_hand(hand, force)
-    res = "win" if force else logic.judge_janken(hand, bot_hand)
-    if force: FORCE_RPS_WIN_NEXT.discard(user_id)
-    
-    wins = inc_janken_win(user_id) if res == "win" else get_janken_wins(user_id)
-    flavor = rs.get_rps_flavor(current_form, res, name, user_id)
-    
-    result_msg = rs.format_rps_result(current_form, name, hand, bot_hand, flavor, wins, user_id)
-    
-    if res == "win":
-        unlocks = logic.check_all_achievements(user_id)
-        if unlocks: result_msg += "\n" + "\n".join(unlocks)
-        logic.add_affection_xp(user_id, 10)
-    elif res == "draw":
-        logic.add_affection_xp(user_id, 7)
+    if code.lower() in ["nanoka", "march", "march7th"]:
+        if is_nanoka_unlocked(user_id):
+            set_user_form(user_id, "nanoka")
+            await interaction.response.send_message("Transformed into March 7th!")
+            return
+        else:
+            await interaction.response.send_message("Locked.", ephemeral=True)
+            return
+
+    fk = resolve_form_code(code)
+    if fk:
+        set_user_form(user_id, fk)
+        dname = get_form_display_name(fk)
+        await interaction.response.send_message(f"Transformed into **{dname}**!")
     else:
-        logic.add_affection_xp(user_id, 5)
-        
-    await interaction.response.send_message(result_msg)
+        await interaction.response.send_message("Unknown code.", ephemeral=True)
 
+@tree.command(name="help", description="ヘルプを表示します。")
+async def slash_help(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    lang = db.get_user_lang(user_id)
+    text = GENERAL_COMMANDS_LIST_EN if lang == "en" else GENERAL_COMMANDS_LIST_JP
+    await interaction.response.send_message(text, ephemeral=True)
 
 # ──────────────────────────────────────────────
-# ★ Existing Bot Logic (State & Helper Functions)
+# ★ Main Bot Logic & Events
 # ──────────────────────────────────────────────
+
 # --- State ---
 waiting_for_nickname = set()
 waiting_for_rename = set()
@@ -395,20 +425,20 @@ waiting_for_transform_code = set()
 waiting_for_title_change = set()
 FORCE_RPS_WIN_NEXT = set()
 MYURION_QUIZ_STATE = {}
-GEMINI_MODE_USERS = set()
 
 USER_FORM_HISTORY = {} 
 
-# --- Help Messages ---
+# --- Help Text ---
 ADMIN_COMMANDS_LIST_JP = (
     "【データの管理ね？ 任せてちょうだい♪】\n"
     "このモードでは以下のコマンドが使えるわ。\n\n"
-    "- `!mode auto` / `!mode mention`: お返事の仕方を変えるわ\n"
-    "- `/chat_ai`: スターレール特化でお話ししましょ\n"
-    "- `/chat_ai_casual`: 日常のこともお話ししましょ\n"
-    "- `/toggle_memory`: 会話を記憶するか設定できるわ\n"
-    "- `/status`: ステータスを確認できるわ\n"
-    "- `/gacha`: ガチャを回せるわ\n"
+    "- `/chat_mode`: AI会話モードの切替 (ON/OFF)\n"
+    "- `/language`: 言語設定の変更\n"
+    "- `/toggle_memory`: 記憶設定の切替\n"
+    "- `/status`, `/gacha`: ステータス確認・ガチャ\n"
+    "- `!mode auto`: 自動返信モード（AIモードOFF時用）\n"
+    "- `データ管理`: 管理者メニューを開くわ\n"
+    "- `全体送信`: メッセージの一斉送信\n"
     "- `ニックネーム確認`: みんながどう呼ばれているか覗いてみましょ\n"
     "- `管理者編集`: 特別な権限を持つ人を決めるわ\n"
     "- `親衛隊レベル編集`: 大切な人のレベルを設定しましょ\n"
@@ -423,103 +453,52 @@ ADMIN_COMMANDS_LIST_JP = (
     "- `じゃんけん勝利数追加 @ユーザー 数値`: 運命を少し書き換えるわね\n"
     "- `メッセージ制限bypass編集`: 特別なリストを編集するわ\n"
     "- `変身解放状況確認`: 誰が目覚めているか確認よ\n"
-    "- `全体送信 [メッセージ]`: サーバーのみんなに声を届けるわ♪\n"
     "- `割引イベント [率] [秒]`: ガチャ割引イベントを強制開始/終了するわ\n"
     "- `無限デイリーオン` / `オフ`: デイリー制限を解除するわ"
 )
 
 ADMIN_COMMANDS_LIST_EN = (
     "【Data Management Mode♪】\n"
-    "Leave the system management to me.\n\n"
-    "- `!mode auto` / `!mode mention`: Switch reply modes\n"
-    "- `/chat_ai` / `/chat_ai_casual`: Chat with AI Cyrene\n"
-    "- `/toggle_memory`: Toggle conversation memory\n"
-    "- `/status`: Check your status\n"
-    "- `/gacha`: Pull gacha\n"
-    "- `Check Nicknames`: See what everyone is called\n"
-    "- `Edit Admin`: Add or remove administrators\n"
-    "- `Edit Guardian`: Set Guardian Levels\n"
-    "- `Edit Affection`: Adjust the depth of our love...♪\n"
-    "- `Affection List`: Check everyone's affection levels\n"
-    "- `Edit Msg Limit`: Set daily message limits\n"
-    "- `Transform Manager`: See everyone's current form\n"
-    "- `Exit Data Mode`: Close management mode\n\n"
-    "**★ Main Admin Only ★**\n"
-    "- `Log Mode` / `Log Mode Off`: Toggle log forwarding\n"
-    "- `Add Affection XP @user [val]`: Directly modify love XP\n"
-    "- `Add RPS Wins @user [val]`: Rewrite fate a little...\n"
-    "- `Edit Bypass`: Manage the whitelist\n"
-    "- `Check Unlocks`: See who has awakened\n"
-    "- `Broadcast [msg]`: Send a message to all channels♪\n"
-    "- `Discount Event [pct] [sec]`: Force start/end a gacha discount event\n"
-    "- `Infinite Daily On` / `Off`: Toggle daily limits"
+    "- `/chat_mode`: Toggle AI Chat Mode (ON/OFF)\n"
+    "- `/language`: Change Language\n"
+    "- `/toggle_memory`: Toggle Memory\n"
+    "- `/status`, `/gacha`: Check status / Pull gacha\n"
+    "- `!mode auto`: Auto-reply mode (When AI mode is OFF)\n"
+    "- `Data Management`: Open admin menu\n"
 )
 
 GENERAL_COMMANDS_LIST_JP = (
     "【あたしとできること一覧よ♪】\n\n"
-    "**★ お話ししましょう♪**\n"
-    "- `!mode auto`: メンションなしでもお話しするようになるわ\n"
-    "- `!mode mention`: メンションした時だけお話しするわ\n"
-    "- `/chat_ai`: AI会話（スターレールモード）\n"
-    "- `/chat_ai_casual`: AI会話（日常モード）\n"
-    "- `/toggle_memory`: 会話記憶のON/OFF\n"
-    "- `!chat on` / `off`: 旧AIモードの切り替え\n"
-    "- `!lang en`: 英語モードに切り替えるわ\n"
-    "- `こんにちは` / `おやすみ`: 挨拶は大事よね♪\n"
-    "- `みんなについて教えて`: 他の人のこと、こっそり教えるわ\n"
-    "- `甘えていいんだよ`: …ふふっ、遠慮なく甘えちゃうかも？\n"
-    "- `/janken`: じゃんけん勝負よ！\n"
-    "- `あだ名登録 [名前]`: あなただけの呼び方を教えて？\n"
-    "- `二つ名変更`: 獲得した二つ名を名前に付けるわ♪\n"
-    "- `/status`: ステータス・好感度を確認しましょ♪\n"
-    "- `進捗`: 実績の解除状況を確認できるわ\n\n"
-    "**★ 別の姿へ…**\n"
-    "- `/transform [code]`: 別の姿に変身するわ\n"
-    "- `変身`: コードがわからない時は聞いて？\n\n"
-    "**★ ガチャ**\n"
-    "- `/gacha`: ガチャを回すわ（単発/10連）\n"
-    "- `チケット10連`: チケットで回すわよ\n"
-    "- `デイリー受け取り`: 1日1回、あたしからのプレゼントよ♪\n"
-    "- `石をあげる @ユーザー 数`: お友達に石をプレゼントするわ♪\n"
-    "- `ピックアップ変更 [キャラ名]`: 狙いを定めるのね？\n"
-    "- `これ集めたんだけど返してあげる`: キュレネの持ち物を返すわ\n"
-    "- `バグ修正`: ガチャの天井バグを直して、増えた分を消すわ\n\n"
-    "**★ ミニゲーム**\n"
-    "- `キメラと遊びたい`: 可愛い子たちと遊びましょ♪\n"
-    "- `天外からのゲームやってみる？`: シンプルなクトゥルフ神話TRPGを始めましょ♪\n"
+    "**★ AIとお話しする**\n"
+    "- `/chat_mode [casual/hsr]`: ずっとお話しするモードをONにするわ\n"
+    "- `/chat_mode off`: お話しモードを終了するわ\n"
+    "- `/language [jp/en]`: 言葉を変えるわ\n"
+    "- `/toggle_memory`: 会話を覚えるかどうか設定できるわ\n"
+    "- (画像を送ると感想を言うわよ♪)\n\n"
+    "**★ 通常機能**\n"
+    "- `/daily`: デイリー報酬を受け取るわ\n"
+    "- `/gacha`: ガチャを回すわ\n"
+    "- `/status`: ステータスを確認するわ\n"
+    "- `/transform`: 変身コードを入力してね\n"
+    "- `じゃんけん`: 勝負よ！\n"
+    "- `あだ名登録`: 好きな呼び方を教えて？\n"
 )
 
 GENERAL_COMMANDS_LIST_EN = (
     "【What we can do together♪】\n\n"
-    "**★ Let's Talk**\n"
-    "- `!mode auto`: I will reply to everything\n"
-    "- `!mode mention`: I will only reply to mentions\n"
-    "- `/chat_ai` / `/chat_ai_casual`: AI Chat\n"
-    "- `/toggle_memory`: Toggle memory\n"
-    "- `!chat on` / `off`: Toggle old AI mode\n"
-    "- `!lang jp`: Switch to Japanese mode\n"
-    "- `Hello` / `Good night`: Greetings are important♪\n"
-    "- `Tell me about everyone`: I'll tell you about my friends\n"
-    "- `Spoil me`: Hehe... maybe I'll spoil you?\n"
-    "- `/janken`: Rock-Paper-Scissors!\n"
-    "- `Set nickname [name]`: Tell me what to call you\n"
-    "- `Change Title`: Equip a title you've earned\n"
-    "- `/status`: Check status & affection♪\n"
-    "- `Progress`: Check achievement progress\n\n"
-    "**★ Transformation**\n"
-    "- `/transform [code]`: Change form\n"
-    "- `Transform`: Ask me if you don't know the code\n\n"
-    "**★ Gacha**\n"
-    "- `/gacha`: Pull gacha (1 or 10)\n"
-    "- `Ticket 10`: Use tickets\n"
-    "- `Daily`: A daily present just for you♪\n"
-    "- `Give Stones @user [num]`: Send a gift to your friend♪\n"
-    "- `Change Pickup [Name]`: Set your target\n"
-    "- `I collected these for you`: Return Cyrene's belongings\n"
-    "- `Fix Bug`: Fix gacha pity bug\n\n"
-    "**★ Games**\n"
-    "- `Play with Kimera`: Let's play with the cute ones♪\n"
-    "- `Play Cthulhu Game`: Start a simple Cthulhu TRPG session♪\n"
+    "**★ Talk with AI**\n"
+    "- `/chat_mode [casual/hsr]`: Turn ON continuous chat mode\n"
+    "- `/chat_mode off`: Turn OFF chat mode\n"
+    "- `/language [jp/en]`: Change language\n"
+    "- `/toggle_memory`: Toggle memory settings\n"
+    "- (I can see images if you send them♪)\n\n"
+    "**★ Standard Features**\n"
+    "- `/daily`: Claim daily rewards\n"
+    "- `/gacha`: Pull gacha\n"
+    "- `/status`: Check status\n"
+    "- `/transform`: Change form\n"
+    "- `RPS`: Rock-Paper-Scissors!\n"
+    "- `Set nickname`: Tell me what to call you\n"
 )
 
 async def send_myu(message, user_id, text):
@@ -527,93 +506,75 @@ async def send_myu(message, user_id, text):
     try:
         await message.channel.send(final_output)
     except Exception as e:
-        print(f"Error sending message to channel: {e}")
+        print(f"Error sending message: {e}")
 
     if db.is_log_mode_enabled():
         try:
             admin_user = await client.fetch_user(PRIMARY_ADMIN_ID)
-            guild_name = message.guild.name if message.guild else "DM"
-            channel_name = message.channel.name if hasattr(message.channel, 'name') else "DM"
-            log_content = (
-                f"━━━━━━━━━━━━━━\n"
-                f"【Log Report】\n"
-                f"**Server**: {guild_name} / **Channel**: {channel_name}\n"
-                f"**User**: {message.author.name} (ID: {user_id})\n"
-                f"----------------\n"
-                f"📥 **Input**:\n{message.content}\n"
-                f"----------------\n"
-                f"📤 **Output**:\n{final_output}\n"
-                f"━━━━━━━━━━━━━━"
-            )
+            log_content = f"Log: {message.author.name} -> {final_output}"
             await admin_user.send(log_content)
-        except Exception as e:
-            print(f"Failed to send log DM: {e}")
+        except: pass
 
 async def start_random_discount_event(percent=None, duration=None):
-    if percent is None:
-        p = random.randint(10, 70)
-    else:
-        p = percent
-    
-    if duration is None:
-        d = 1800 
-    else:
-        d = duration
-
+    p = percent if percent else random.randint(10, 70)
+    d = duration if duration else 1800
     logic.set_discount_event(True, p, d)
-    
-    target_channel_id = db.get_event_channel_id()
-    if target_channel_id:
-        channel = client.get_channel(target_channel_id)
-        if channel:
-            try:
-                if d < 60:
-                    time_text = f"{d}秒間"
-                elif d % 60 == 0:
-                    time_text = f"{d // 60}分間"
-                else:
-                    time_text = f"{d // 60}分{d % 60}秒間"
-                await channel.send(f"🚨 **【緊急ゲリラ割引！】** 🚨\nこれからの {time_text}、ガチャ消費石が **{p}% OFF** よ！\n急いで回してね♪")
-            except Exception as e:
-                print(f"Failed to send event message: {e}")
+    cid = db.get_event_channel_id()
+    if cid:
+        ch = client.get_channel(cid)
+        if ch: await ch.send(f"🚨 **Discount Event!** {p}% OFF for {d//60} mins!")
 
 @tasks.loop(minutes=1.0)
 async def discount_event_loop():
-    if logic.GLOBAL_DISCOUNT_STATE["active"]:
-        return
-    if random.random() < 0.0007:
-        await start_random_discount_event()
+    if logic.GLOBAL_DISCOUNT_STATE["active"]: return
+    if random.random() < 0.0007: await start_random_discount_event()
 
 @client.event
 async def on_ready():
     print(f"Login: {client.user}")
-    
-    # Sync Slash Commands
     try:
         await tree.sync()
         print("Slash commands synced.")
     except Exception as e:
-        print(f"Failed to sync slash commands: {e}")
-
-    if not discount_event_loop.is_running():
-        discount_event_loop.start()
+        print(f"Sync Error: {e}")
+    if not discount_event_loop.is_running(): discount_event_loop.start()
 
 @client.event
 async def on_message(message):
     if message.author.bot: return
     user_id = message.author.id
-    content = message.content.strip() 
-    content_lower = content.lower()
+    content = message.content.strip()
     
+    # ──────────────────────────────────────────────
+    # ★ AI Mode Handling (Priority)
+    # ──────────────────────────────────────────────
+    ai_mode = get_ai_mode(user_id)
+    
+    is_command_prefix = content.startswith("/") or content.startswith("!")
+    is_admin_cmd = content in ["データ管理", "data management"]
+    
+    # AIモードがON、かつコマンドではない場合
+    if ai_mode and not is_command_prefix and not is_admin_cmd:
+        # メッセージが空で画像もない場合は無視
+        if not content and not message.attachments:
+            return
+
+        # AI生成してリターン (レガシー処理に行かせない)
+        ai_reply = await get_gemini_reply(message, ai_mode)
+        await send_myu(message, user_id, f"{message.author.mention} {ai_reply}")
+        return
+
+    # ──────────────────────────────────────────────
+    # ★ Legacy Commands & Logic (When AI mode is OFF or Command)
+    # ──────────────────────────────────────────────
     content_body = re.sub(rf"<@!?{client.user.id}>", "", content).strip()
-    content_body_lower = content_body.lower()
+    content_lower = content_body.lower()
 
     is_main_admin = (user_id == PRIMARY_ADMIN_ID)
     nickname = db.get_nickname(user_id)
     raw_name = nickname if nickname else message.author.display_name
     current_form = get_user_form(user_id)
     lang = db.get_user_lang(user_id)
-    
     title_prefix = logic.get_title_prefix(user_id)
     name = f"{title_prefix}{raw_name}"
 
@@ -743,17 +704,6 @@ async def on_message(message):
         db.set_user_lang(user_id, "jp")
         await message.channel.send(f"わかりました、{name}さん！これからは日本語でお話ししますね♪")
         return
-    if content_lower == "!chat on":
-        GEMINI_MODE_USERS.add(user_id)
-        # デフォルトでCasualモードとみなす
-        msg = "ふふっ、AI対話モード(Casual)起動よ♪ メンションして話しかけてね。" if lang != "en" else "Hehe, AI Chat Mode (Casual) ON♪"
-        await message.channel.send(msg)
-        return
-    if content_lower == "!chat off":
-        GEMINI_MODE_USERS.discard(user_id)
-        msg = "AI対話モードを終了するわ。" if lang != "en" else "AI Chat Mode OFF."
-        await message.channel.send(msg)
-        return
 
     is_active_mode = (
         user_id in waiting_for_nickname or user_id in waiting_for_rename or
@@ -772,9 +722,8 @@ async def on_message(message):
     is_mentioned = client.user in message.mentions
     reply_mode = db.get_reply_mode(user_id)
     is_auto_reply = (reply_mode == "auto")
-    is_gemini_active = (user_id in GEMINI_MODE_USERS)
     
-    should_reply = (is_mentioned or is_active_mode or is_auto_reply or is_playing_kimera or is_gemini_active)
+    should_reply = (is_mentioned or is_active_mode or is_auto_reply or is_playing_kimera)
 
     if content_body in ["死ぬ", "しぬ", "死にます", "しにます", "die", "kill myself"]:
         await message.channel.send(f"# {message.author.mention} が死ぬらしいわ♪ 慰めてあげて？")
@@ -1458,19 +1407,6 @@ async def on_message(message):
                 try: await message.channel.send(f"<@{target_uid}> {target_msg}")
                 except: pass
         return
-
-    # ──────────────────────────────────────────────
-    # ★ Gemini AI モード（旧式互換）
-    # ──────────────────────────────────────────────
-    if is_gemini_active:
-        if content_body:
-            async with message.channel.typing():
-                # 旧モードはCasualとして扱う
-                ai_reply = await get_gemini_reply(user_id, name, content_body, mode="casual")
-            
-            await send_myu(message, user_id, f"{message.author.mention} {ai_reply}")
-            return
-    # ──────────────────────────────────────────────
 
     xp, lv = logic.get_user_affection(user_id)
     reply = rs.generate_reply_for_form(current_form, content_body, lv, user_id, name)
