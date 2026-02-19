@@ -54,7 +54,7 @@ def load_tts_model():
     if not HAS_TTS: return
     print("Loading TTS model (XTTS v2)... This may take a while.")
     try:
-        # GPUがない場合はgpu=False。Railwayは基本CPU動作。
+        # GPUがない場合はgpu=False
         tts_model = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=False)
         print("TTS model loaded successfully.")
     except Exception as e:
@@ -155,6 +155,8 @@ class VoiceState:
         self.bot = bot
         self.queue = []
         self.is_playing = False
+        self.mode = "bot_only"  # "bot_only", "everyone", "specific"
+        self.target_user_id = None # "specific" モード時の対象ユーザーID
 
     def play_next(self, error=None):
         if error:
@@ -184,11 +186,11 @@ class VoiceState:
         else:
             self.is_playing = False
 
-    async def add_text_to_queue(self, text: str, voice_client):
+    async def add_text_to_queue(self, text: str, voice_client, lang: str = "ja"):
         if not tts_model:
             return
 
-        # ★ 複数ファイル対応: voicesフォルダ内の全ての.wavファイルを取得
+        # voicesフォルダ内の全ての.wavファイルを取得
         ref_wavs = list(VOICE_DIR.glob("*.wav"))
         
         if not ref_wavs:
@@ -209,14 +211,19 @@ class VoiceState:
         if not clean_text.strip(): return
         if len(clean_text) > 150: clean_text = clean_text[:150] + "..."
 
+        # XTTSは多言語対応。"ja" または "en" を渡す
+        target_lang = "ja"
+        if lang == "en":
+            target_lang = "en"
+
         try:
             # 重い処理なのでExecutorで実行
             func = functools.partial(
                 tts_model.tts_to_file,
                 text=clean_text,
                 file_path=str(output_path),
-                speaker_wav=speaker_wav_paths, # ★リストを渡すことで複数音声を合成
-                language="ja"
+                speaker_wav=speaker_wav_paths, # リストを渡すことで複数音声を合成
+                language=target_lang
             )
             await client.loop.run_in_executor(None, func)
             
@@ -393,35 +400,85 @@ async def get_gemini_reply(message, mode: str) -> str:
 # ★ Slash Commands
 # ──────────────────────────────────────────────
 
-@tree.command(name="join", description="ボイスチャンネルに参加し、読み上げを開始するわ。")
-async def slash_join(interaction: discord.Interaction):
+@tree.command(name="join", description="ボイスチャンネルに参加し、読み上げを開始します。")
+@app_commands.describe(mode="読み上げモード", target="特定ユーザーのみ読む場合")
+@app_commands.choices(mode=[
+    app_commands.Choice(name="Bot Only (自分の発言のみ)", value="bot_only"),
+    app_commands.Choice(name="Everyone (全員読み上げ)", value="everyone"),
+    app_commands.Choice(name="Specific User (特定ユーザーのみ)", value="specific")
+])
+async def slash_join(interaction: discord.Interaction, mode: str = "bot_only", target: discord.Member = None):
+    lang = db.get_user_lang(interaction.user.id)
     if not interaction.user.voice:
-        msg = "You are not in a voice channel." if db.get_user_lang(interaction.user.id) == "en" else "ボイスチャンネルに入っていないみたいよ？"
+        msg = "あら、あなたボイスチャンネルにいないみたいね？ ちゃんと準備してから呼んでちょうだい♪" if lang != "en" else "You aren't in a voice channel? Prepare yourself before calling me, darling♪"
         await interaction.response.send_message(msg, ephemeral=True)
         return
 
     channel = interaction.user.voice.channel
     if interaction.guild.voice_client:
         await interaction.guild.voice_client.move_to(channel)
-        msg = f"Moved to {channel.name}."
+        action_msg = f"**{channel.name}** に移動したわ。" if lang != "en" else f"Moved to **{channel.name}**."
     else:
         await channel.connect()
-        msg = f"Connected to {channel.name}. I'll read my messages for you♪"
+        action_msg = f"**{channel.name}** に接続したわ。" if lang != "en" else f"Connected to **{channel.name}**."
     
-    # モデルのロード状態を確認
+    # モード設定
+    state = get_voice_state(interaction.guild.id)
+    state.mode = mode
+    state.target_user_id = target.id if target else None
+
+    # メッセージ作成
+    mode_text = "Bot Only"
+    if mode == "everyone": mode_text = "Everyone"
+    elif mode == "specific": mode_text = f"Specific User ({target.display_name if target else 'Unknown'})"
+
+    if lang == "en":
+        msg = f"{action_msg} Let me hear your voice closer, darling♪\n(Mode: **{mode_text}**)"
+    else:
+        msg = f"{action_msg}\nふふ、あなたの声、もっと近くで聞かせて？\n（現在のモード: **{mode_text}**）"
+    
     if not tts_model:
-        msg += "\n(Note: TTS model is loading or failed. Voice may delay.)"
+        msg += "\n(Note: Voice generation is still preparing...)"
     
     await interaction.response.send_message(msg)
 
-@tree.command(name="leave", description="ボイスチャンネルから切断するわ。")
+@tree.command(name="voice_settings", description="読み上げ設定を変更します（VC接続中のみ）。")
+@app_commands.describe(mode="読み上げモード", target="特定ユーザーのみ読む場合")
+@app_commands.choices(mode=[
+    app_commands.Choice(name="Bot Only (自分の発言のみ)", value="bot_only"),
+    app_commands.Choice(name="Everyone (全員読み上げ)", value="everyone"),
+    app_commands.Choice(name="Specific User (特定ユーザーのみ)", value="specific")
+])
+async def slash_voice_settings(interaction: discord.Interaction, mode: str, target: discord.Member = None):
+    lang = db.get_user_lang(interaction.user.id)
+    if not interaction.guild.voice_client or not interaction.guild.voice_client.is_connected():
+        msg = "あたし、まだどこにも接続してないわよ？" if lang != "en" else "I'm not connected to any voice channel yet, darling."
+        await interaction.response.send_message(msg, ephemeral=True)
+        return
+
+    state = get_voice_state(interaction.guild.id)
+    state.mode = mode
+    state.target_user_id = target.id if target else None
+
+    mode_text = mode
+    if target: mode_text += f" (Target: {target.display_name})"
+
+    if lang == "en":
+        msg = f"Voice settings updated to **{mode_text}**. Understood, darling."
+    else:
+        msg = f"読み上げ設定を変えたわ。**{mode_text}** ね。了解よ♪"
+    
+    await interaction.response.send_message(msg)
+
+@tree.command(name="leave", description="ボイスチャンネルから切断します。")
 async def slash_leave(interaction: discord.Interaction):
+    lang = db.get_user_lang(interaction.user.id)
     if interaction.guild.voice_client:
         await interaction.guild.voice_client.disconnect()
-        msg = "Disconnected." if db.get_user_lang(interaction.user.id) == "en" else "切断したわ。"
+        msg = "わかったわ、切断するわね。……寂しくなったら、またすぐに呼んでいいのよ？" if lang != "en" else "Disconnected. If you get lonely... call me again right away, okay?"
         await interaction.response.send_message(msg)
     else:
-        msg = "I'm not connected." if db.get_user_lang(interaction.user.id) == "en" else "接続してないわよ？"
+        msg = "あら？ あたしはまだ接続してないわ。" if lang != "en" else "Oh? I'm not connected yet."
         await interaction.response.send_message(msg, ephemeral=True)
 
 @tree.command(name="chat_mode", description="AI（キュレネ）との会話モードを切り替えます。OFFにするまで続きます。")
@@ -433,13 +490,18 @@ async def slash_leave(interaction: discord.Interaction):
 ])
 async def slash_chat_mode(interaction: discord.Interaction, mode: str):
     user_id = interaction.user.id
+    lang = db.get_user_lang(user_id)
+    
     if mode == "off":
         set_ai_mode(user_id, None)
-        msg = "AI会話モードを終了したわ。また必要な時は呼んでね♪"
+        msg = "AI会話モードを終了したわ。……いつでも声をかけてね♪" if lang != "en" else "AI Chat Mode OFF. Call me anytime you need me, darling♪"
     else:
         set_ai_mode(user_id, mode)
         mode_name = "【日常・パートナーモード】" if mode == "casual" else "【スターレール・ガイドモード】"
-        msg = f"**{mode_name}** を起動したわ。\nこれからあなたが「OFF」にするまで、あたしが全ての言葉にお返事するわね♪"
+        if lang == "en":
+            msg = f"**{mode} mode** activated. I'm all yours now. Let's talk about everything♪"
+        else:
+            msg = f"**{mode_name}** を起動したわ。\nこれからはずっと、あなたのそばでお話しするわね。何でも話して？♪"
     
     await interaction.response.send_message(msg)
 
@@ -449,7 +511,11 @@ async def slash_language(interaction: discord.Interaction, lang: str):
     user_id = interaction.user.id
     db.set_user_lang(user_id, lang)
     if user_id in gemini_sessions: del gemini_sessions[user_id]
-    msg = "Understood. I will speak to you in English from now on, Darling♪" if lang == "en" else "わかったわ。これからは日本語でお話ししましょう♪"
+    
+    if lang == "en":
+        msg = "Understood. I will speak to you in English from now on, my Darling♪"
+    else:
+        msg = "わかったわ。これからは日本語でお話ししましょ、あなた♪"
     await interaction.response.send_message(msg)
 
 @tree.command(name="toggle_memory", description="AIとの会話内容を記憶して学習させるかを切り替えます。")
@@ -459,7 +525,13 @@ async def slash_toggle_memory(interaction: discord.Interaction, choice: int):
     enable = (choice == 1)
     set_memory_enabled(user_id, enable)
     if user_id in gemini_sessions: del gemini_sessions[user_id]
-    msg = "記憶回路を接続したわ。" if enable else "記憶回路を切断したわ。"
+    
+    lang = db.get_user_lang(user_id)
+    if enable:
+        msg = "記憶回路を接続したわ。あなたとの思い出、ひとつも忘れないわね♪" if lang != "en" else "Memory circuits connected. I won't forget a single moment with you, darling♪"
+    else:
+        msg = "記憶回路を切断したわ。この場限りの秘密の会話…それもまた素敵ね。" if lang != "en" else "Memory circuits disconnected. Secret conversations just for now... that's lovely too."
+    
     await interaction.response.send_message(msg, ephemeral=True)
 
 @tree.command(name="status", description="現在のステータスを確認します。")
@@ -470,16 +542,26 @@ async def slash_status(interaction: discord.Interaction):
     current_form = get_user_form(user_id)
     form_name = get_form_display_name(current_form)
     g_lv = db.get_guardian_level(user_id)
+    
     header = "【Your Status】" if lang=="en" else "【あなたのステータス】"
     content = f"👤 **Form**: {form_name}\n🛡️ **Guardian Lv**: {g_lv or 0}\n❤️ **Affection**: {aff_msg}"
-    await interaction.response.send_message(f"{header}\n{content}")
+    
+    msg = f"{header}\n{content}\n"
+    msg += "ふふ、これが今のあなたよ♪" if lang != "en" else "Hehe, this is you right now♪"
+    
+    await interaction.response.send_message(msg)
 
 @tree.command(name="daily", description="1日1回、デイリー報酬を受け取ります。")
 async def slash_daily(interaction: discord.Interaction):
     user_id = interaction.user.id
     lang = db.get_user_lang(user_id)
     ok, stones, reason = logic.grant_daily_stones(user_id)
-    msg = f"{reason}\nCurrent Stones: {stones}" if lang == "en" else f"{reason}\n所持石: {stones}"
+    
+    if lang == "en":
+        msg = f"{reason}\nCurrent Stones: {stones}"
+    else:
+        msg = f"{reason}\n現在の所持石: {stones}"
+        
     await interaction.response.send_message(msg)
 
 @tree.command(name="gacha", description="ガチャを回します。")
@@ -497,20 +579,27 @@ async def slash_gacha(interaction: discord.Interaction, pulls: int):
 @tree.command(name="transform", description="変身コードを使って別の姿に変身します。")
 async def slash_transform(interaction: discord.Interaction, code: str):
     user_id = interaction.user.id
+    lang = db.get_user_lang(user_id)
+    
     if code.lower() in ["nanoka", "march", "march7th"]:
         if is_nanoka_unlocked(user_id):
             set_user_form(user_id, "nanoka")
-            await interaction.response.send_message("Transformed into March 7th!")
+            msg = "Transformed into March 7th! Cute, isn't it?" if lang == "en" else "三月なのかの姿に変身したわ！ 可愛いでしょ？♪"
+            await interaction.response.send_message(msg)
         else:
-            await interaction.response.send_message("Locked.", ephemeral=True)
+            msg = "Locked... You aren't ready yet." if lang == "en" else "まだその姿にはなれないみたい。準備不足かしら？"
+            await interaction.response.send_message(msg, ephemeral=True)
         return
+        
     fk = resolve_form_code(code)
     if fk:
         set_user_form(user_id, fk)
         dname = get_form_display_name(fk)
-        await interaction.response.send_message(f"Transformed into **{dname}**!")
+        msg = f"Transformed into **{dname}**!" if lang == "en" else f"**{dname}** に変身したわ♪ 似合ってる？"
+        await interaction.response.send_message(msg)
     else:
-        await interaction.response.send_message("Unknown code.", ephemeral=True)
+        msg = "Unknown code. Try again, darling." if lang == "en" else "そのコードは知らないわね。もう一度確認してくれる？"
+        await interaction.response.send_message(msg, ephemeral=True)
 
 @tree.command(name="help", description="ヘルプを表示します。")
 async def slash_help(interaction: discord.Interaction):
@@ -596,6 +685,7 @@ GENERAL_COMMANDS_LIST_JP = (
     "- `あだ名登録`: 好きな呼び方を教えて？\n"
     "- `/join`: ボイスチャンネルに参加するわ\n"
     "- `/leave`: ボイスチャンネルから退出するわ\n"
+    "- `/voice_settings`: 読み上げ設定を変えるわ\n"
 )
 
 GENERAL_COMMANDS_LIST_EN = (
@@ -615,6 +705,7 @@ GENERAL_COMMANDS_LIST_EN = (
     "- `Set nickname`: Tell me what to call you\n"
     "- `/join`: Join the voice channel\n"
     "- `/leave`: Leave the voice channel\n"
+    "- `/voice_settings`: Change voice settings\n"
 )
 
 # ★ 修正: Botが喋った内容を読み上げるためのラッパー関数
@@ -624,11 +715,12 @@ async def send_myu(message, user_id, text):
     try:
         sent_msg = await message.channel.send(final_output)
         
-        # ★ TTS Trigger: Botがメッセージを送った後、VCにいれば読み上げる
+        # ★ TTS Trigger: Botの発言 (モードに関わらず Botの発言は読む)
         if message.guild and message.guild.voice_client and message.guild.voice_client.is_connected():
             state = get_voice_state(message.guild.id)
-            # キューに追加
-            await state.add_text_to_queue(final_output, message.guild.voice_client)
+            # Botの発言を読む言語設定は、話しかけてきたユーザーの設定に合わせる
+            lang = db.get_user_lang(user_id)
+            await state.add_text_to_queue(final_output, message.guild.voice_client, lang=lang)
 
     except Exception as e:
         print(f"Error sending message: {e}")
@@ -674,6 +766,33 @@ async def on_message(message):
     user_id = message.author.id
     content = message.content.strip()
     
+    # ──────────────────────────────────────────────
+    # ★ VC 読み上げロジック (User Messages)
+    # ──────────────────────────────────────────────
+    # BotがVCに参加していて、コマンド以外のメッセージで、モードが合致する場合のみ読み上げ
+    if message.guild and message.guild.voice_client and message.guild.voice_client.is_connected():
+        is_cmd = content.startswith("/") or content.startswith("!")
+        if not is_cmd:
+            state = get_voice_state(message.guild.id)
+            should_read = False
+            
+            # モード判定
+            if state.mode == "everyone":
+                # 全員モードなら、発言者がVCにいるか確認して読む
+                if message.author.voice and message.author.voice.channel == message.guild.voice_client.channel:
+                    should_read = True
+            elif state.mode == "specific" and state.target_user_id == user_id:
+                # 特定ユーザーモードならID一致確認
+                should_read = True
+
+            if should_read:
+                # ユーザーの言語設定に合わせて読み上げ
+                u_lang = db.get_user_lang(user_id)
+                await state.add_text_to_queue(content, message.guild.voice_client, lang=u_lang)
+
+    # ──────────────────────────────────────────────
+    # ★ AI Logic & Commands
+    # ──────────────────────────────────────────────
     ai_mode = get_ai_mode(user_id)
     is_command_prefix = content.startswith("/") or content.startswith("!")
     is_admin_cmd = content in ["データ管理", "data management"]
@@ -689,6 +808,10 @@ async def on_message(message):
     content_body_lower = content_body.lower()
     content_lower = content_body_lower
 
+    # ... (既存のコマンド処理ロジック - 省略なし) ...
+    # ※ コードが長いため、前の回答と同じロジックを維持してください。
+    
+    # 既存ロジックここから
     is_main_admin = (user_id == PRIMARY_ADMIN_ID)
     nickname = db.get_nickname(user_id)
     raw_name = nickname if nickname else message.author.display_name
