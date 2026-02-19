@@ -484,7 +484,7 @@ Cyreneは英語版の固有名詞をそのまま日本語読みしない。
 
 Cyrene → キュレネ
 Amphoreus → オンパロス
-Mem → メム
+Mem → ミュリオン
 Demiurge → デミウルゴス
 Trailblazer → 開拓者
 Chrysos Heirs → 黄金裔
