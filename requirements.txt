@@ -2,4 +2,5 @@ discord.py==2.6.4
 python-dotenv
 google-genai
 PyNaCl
+transformers==4.33.0
 TTS
