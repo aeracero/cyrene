@@ -255,7 +255,7 @@ else:
     genai_client = None
     print("Warning: GEMINI_API_KEY is missing in config.py")
 
-GEMINI_MODEL_NAME = "gemini-3-pro-preview"
+GEMINI_MODEL_NAME = "gemini-3-flash-preview"
 google_search_tool = types.Tool(
     google_search=types.GoogleSearch()
 )
