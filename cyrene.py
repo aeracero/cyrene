@@ -5,8 +5,8 @@ import asyncio
 import datetime
 import json
 import functools
-import gc  # メモリ解放用
-import sys # プロセス終了用
+import gc
+import sys
 from pathlib import Path
 import discord
 from discord import app_commands
@@ -53,8 +53,9 @@ VOICE_DIR = Path("./voices") # 音声ファイル置き場
 MEMORY_DIR.mkdir(parents=True, exist_ok=True)
 VOICE_DIR.mkdir(parents=True, exist_ok=True)
 
-# TTS Global Model
+# TTS Global Model & Lock
 tts_model = None
+TTS_LOCK = asyncio.Lock() # ★追加: 音声生成の競合を防ぐロック
 
 def load_tts_model():
     global tts_model
@@ -234,14 +235,17 @@ class VoiceState:
             target_lang = "en"
 
         try:
-            func = functools.partial(
-                tts_model.tts_to_file,
-                text=clean_text,
-                file_path=str(output_path),
-                speaker_wav=speaker_wav_paths, 
-                language=target_lang
-            )
-            await client.loop.run_in_executor(None, func)
+            # ★変更: ロックを使用して同時に複数の生成が走らないようにする
+            async with TTS_LOCK:
+                func = functools.partial(
+                    tts_model.tts_to_file,
+                    text=clean_text,
+                    file_path=str(output_path),
+                    speaker_wav=speaker_wav_paths, 
+                    language=target_lang
+                )
+                # ブロッキング回避のためExecutorで実行
+                await client.loop.run_in_executor(None, func)
             
             if output_path.exists():
                 self.queue.append((str(output_path), voice_client))
@@ -266,7 +270,10 @@ else:
     genai_client = None
     print("Warning: GEMINI_API_KEY is missing in config.py")
 
-GEMINI_MODEL_NAME = "gemini-3-pro-preview"
+# ★変更: 速度優先のため Flash モデルを指定 (旧: gemini-3-pro-preview)
+# ※ Flash 3 という名前のモデルは現状APIにないため、最新のFlashモデルを指定
+GEMINI_MODEL_NAME = "gemini-3-flash-preview" 
+
 google_search_tool = types.Tool(
     google_search=types.GoogleSearch()
 )
@@ -429,17 +436,14 @@ async def slash_restart(interaction: discord.Interaction):
     msg = "システムを再起動するわね。すぐに戻ってくるから、少しだけ待っていてちょうだい♪" if lang != "en" else "Restarting the system. I'll be right back, so wait for me, okay? ♪"
     await interaction.response.send_message(msg)
 
-    # クリーンアップ
     if len(client.voice_clients) > 0:
         for vc in client.voice_clients:
             try: await vc.disconnect()
             except: pass
     
-    unload_tts_model() # メモリ解放
+    unload_tts_model()
     
     print("Restarting bot via /restart command...")
-    
-    # Bot終了 -> Railwayが自動再起動
     await client.close()
 
 @tree.command(name="join", description="ボイスチャンネルに参加し、読み上げを開始します。")
