@@ -5,7 +5,8 @@ import asyncio
 import datetime
 import json
 import functools
-import gc  # ★追加: メモリ解放用
+import gc  # メモリ解放用
+import sys # プロセス終了用
 from pathlib import Path
 import discord
 from discord import app_commands
@@ -58,7 +59,7 @@ tts_model = None
 def load_tts_model():
     global tts_model
     if not HAS_TTS: return
-    if tts_model is not None: return # 既に読み込まれていればスキップ
+    if tts_model is not None: return
 
     print("Loading TTS model (XTTS v2)... This may take a while.")
     try:
@@ -68,14 +69,13 @@ def load_tts_model():
     except Exception as e:
         print(f"Failed to load TTS model: {e}")
 
-# ★追加: モデルをアンロードしてメモリを解放する関数
 def unload_tts_model():
     global tts_model
     if tts_model is not None:
         print("Unloading TTS model to free RAM...")
         del tts_model
         tts_model = None
-        gc.collect() # ガベージコレクションを強制実行
+        gc.collect()
         print("TTS model unloaded.")
 
 def load_ai_settings():
@@ -229,18 +229,16 @@ class VoiceState:
         if not clean_text.strip(): return
         if len(clean_text) > 150: clean_text = clean_text[:150] + "..."
 
-        # XTTSは多言語対応。"ja" または "en" を渡す
         target_lang = "ja"
         if lang == "en":
             target_lang = "en"
 
         try:
-            # 重い処理なのでExecutorで実行
             func = functools.partial(
                 tts_model.tts_to_file,
                 text=clean_text,
                 file_path=str(output_path),
-                speaker_wav=speaker_wav_paths, # リストを渡すことで複数音声を合成
+                speaker_wav=speaker_wav_paths, 
                 language=target_lang
             )
             await client.loop.run_in_executor(None, func)
@@ -418,6 +416,32 @@ async def get_gemini_reply(message, mode: str) -> str:
 # ★ Slash Commands
 # ──────────────────────────────────────────────
 
+@tree.command(name="restart", description="システムを再起動し、状態をリセットします。")
+async def slash_restart(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    lang = db.get_user_lang(user_id)
+    
+    if not db.is_admin(user_id):
+        msg = "あら、そのコマンドは管理者専用よ。" if lang != "en" else "Access denied. Only admins can do that, darling."
+        await interaction.response.send_message(msg, ephemeral=True)
+        return
+
+    msg = "システムを再起動するわね。すぐに戻ってくるから、少しだけ待っていてちょうだい♪" if lang != "en" else "Restarting the system. I'll be right back, so wait for me, okay? ♪"
+    await interaction.response.send_message(msg)
+
+    # クリーンアップ
+    if len(client.voice_clients) > 0:
+        for vc in client.voice_clients:
+            try: await vc.disconnect()
+            except: pass
+    
+    unload_tts_model() # メモリ解放
+    
+    print("Restarting bot via /restart command...")
+    
+    # Bot終了 -> Railwayが自動再起動
+    await client.close()
+
 @tree.command(name="join", description="ボイスチャンネルに参加し、読み上げを開始します。")
 @app_commands.describe(mode="読み上げモード", target="特定ユーザーのみ読む場合")
 @app_commands.choices(mode=[
@@ -426,7 +450,6 @@ async def get_gemini_reply(message, mode: str) -> str:
     app_commands.Choice(name="Specific User (特定ユーザーのみ)", value="specific")
 ])
 async def slash_join(interaction: discord.Interaction, mode: str = "bot_only", target: discord.Member = None):
-    # ★変更: 読み込み時間がかかるため、先に応答を保留(defer)する
     await interaction.response.defer()
 
     lang = db.get_user_lang(interaction.user.id)
@@ -443,24 +466,19 @@ async def slash_join(interaction: discord.Interaction, mode: str = "bot_only", t
         await channel.connect()
         action_msg = f"**{channel.name}** に接続したわ。" if lang != "en" else f"Connected to **{channel.name}**."
     
-    # モード設定
     state = get_voice_state(interaction.guild.id)
     state.mode = mode
     state.target_user_id = target.id if target else None
 
-    # メッセージ作成
     mode_text = "Bot Only"
     if mode == "everyone": mode_text = "Everyone"
     elif mode == "specific": mode_text = f"Specific User ({target.display_name if target else 'Unknown'})"
 
-    # ★変更: モデルが未ロードならここでロードを開始する
-    loading_msg = ""
     global tts_model
     if tts_model is None:
         loading_text = "（音声回路を接続中... 少し時間がかかるわ、待っていてね♡）" if lang != "en" else "(Loading voice circuits... Wait a moment, darling♡)"
         await interaction.followup.send(loading_text)
         try:
-            # 裏側でロード実行
             await client.loop.run_in_executor(None, load_tts_model)
         except Exception as e:
             await interaction.followup.send(f"Error loading voice: {e}")
@@ -509,7 +527,6 @@ async def slash_leave(interaction: discord.Interaction):
         msg = "わかったわ、切断するわね。……寂しくなったら、またすぐに呼んでいいのよ？" if lang != "en" else "Disconnected. If you get lonely... call me again right away, okay?"
         await interaction.response.send_message(msg)
         
-        # ★追加: 切断後、他に接続しているVCがなければモデルを解放してRAMを節約
         if len(client.voice_clients) == 0:
             await client.loop.run_in_executor(None, unload_tts_model)
 
@@ -691,7 +708,8 @@ ADMIN_COMMANDS_LIST_JP = (
     "- `メッセージ制限bypass編集`: 特別なリストを編集するわ\n"
     "- `変身解放状況確認`: 誰が目覚めているか確認よ\n"
     "- `割引イベント [率] [秒]`: ガチャ割引イベントを強制開始/終了するわ\n"
-    "- `無限デイリーオン` / `オフ`: デイリー制限を解除するわ"
+    "- `無限デイリーオン` / `オフ`: デイリー制限を解除するわ\n"
+    "- `/restart`: ボットを再起動するわ"
 )
 
 ADMIN_COMMANDS_LIST_EN = (
@@ -702,6 +720,7 @@ ADMIN_COMMANDS_LIST_EN = (
     "- `/status`, `/gacha`: Check status / Pull gacha\n"
     "- `!mode auto`: Auto-reply mode (When AI mode is OFF)\n"
     "- `Data Management`: Open admin menu\n"
+    "- `/restart`: Restart system"
 )
 
 GENERAL_COMMANDS_LIST_JP = (
