@@ -1,10 +1,12 @@
-# cyrene.py
 import os
 import re
 import random
 import asyncio
 import datetime
 import json
+import functools
+import gc
+import sys
 from pathlib import Path
 import discord
 from discord import app_commands
@@ -12,19 +14,23 @@ from discord.ext import tasks
 from google import genai
 from google.genai import types
 
-# --- TTS Setup ---
-# Require Coqui TOS agreement automatically
+# ──────────────────────────────────────────────
+# ★ Fix: Auto-agree to Coqui TTS License
+# ──────────────────────────────────────────────
 os.environ["COQUI_TOS_AGREED"] = "1"
-try:
-    from TTS.api import TTS
-except ImportError:
-    TTS = None
-    print("Warning: TTS library not found. Voice features will be disabled.")
 
 # ──────────────────────────────────────────────
-# ★ Import Existing Modules
-# (config.py, database.py, logic.py, etc. must exist in the same directory)
+# ★ Coqui TTS Import
 # ──────────────────────────────────────────────
+try:
+    from TTS.api import TTS
+    HAS_TTS = True
+    print("TTS library imported.")
+except ImportError:
+    HAS_TTS = False
+    print("TTS library not found. Voice features disabled.")
+
+# 既存のモジュール読み込み
 from config import DISCORD_TOKEN, PRIMARY_ADMIN_ID, GEMINI_API_KEY
 import database as db
 import logic
@@ -36,14 +42,44 @@ import kimera_game
 import cthulhu_game
 
 # ──────────────────────────────────────────────
-# ★ Memory & Settings Management (Railway /data)
+# ★ Memory & Data Management
 # ──────────────────────────────────────────────
 
 DATA_DIR = Path("/data") if os.path.exists("/data") else Path("./data")
 MEMORY_DIR = DATA_DIR / "user_memories"
 SETTINGS_FILE = DATA_DIR / "ai_settings.json"
+VOICE_DIR = Path("./voices") # 音声ファイル置き場
 
 MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+VOICE_DIR.mkdir(parents=True, exist_ok=True)
+
+# TTS Global Model & Lock
+tts_model = None
+TTS_LOCK = asyncio.Lock() # 音声生成の競合を防ぐ排他ロック
+
+def load_tts_model():
+    global tts_model
+    if not HAS_TTS: return
+    if tts_model is not None: return
+
+    print("Loading TTS model (XTTS v2)... This may take a while.")
+    try:
+        # GPUがない場合はgpu=False
+        model = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=False)
+        tts_model = model
+        print("TTS model loaded successfully.")
+    except Exception as e:
+        print(f"Failed to load TTS model: {e}")
+
+async def unload_tts_model():
+    global tts_model
+    async with TTS_LOCK:
+        if tts_model is not None:
+            print("Unloading TTS model to free RAM...")
+            del tts_model
+            tts_model = None
+            gc.collect()
+            print("TTS model unloaded.")
 
 def load_ai_settings():
     if SETTINGS_FILE.exists():
@@ -58,6 +94,7 @@ def save_ai_settings(settings):
     with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
         json.dump(settings, f, indent=2)
 
+# AIモードの状態管理
 def get_ai_mode(user_id: int):
     settings = load_ai_settings()
     return settings.get(str(user_id), {}).get("mode", None)
@@ -69,6 +106,7 @@ def set_ai_mode(user_id: int, mode: str):
     settings[str(user_id)]["mode"] = mode
     save_ai_settings(settings)
 
+# メモリ機能の管理
 def is_memory_enabled(user_id: int) -> bool:
     settings = load_ai_settings()
     return settings.get(str(user_id), {}).get("memory_enabled", False)
@@ -83,7 +121,7 @@ def set_memory_enabled(user_id: int, enabled: bool):
 def get_user_memory_path(user_id: int) -> Path:
     return MEMORY_DIR / f"{user_id}.json"
 
-def load_conversation_history(user_id: int, limit: int = 40):
+def load_conversation_history(user_id: int, limit: int = 20):
     path = get_user_memory_path(user_id)
     if not path.exists():
         return []
@@ -121,32 +159,111 @@ def append_conversation_history(user_id: int, user_text: str, model_text: str, h
         json.dump(history, f, ensure_ascii=False, indent=2)
 
 # ──────────────────────────────────────────────
-# ★ Discord Client Setup & TTS Initialization
+# ★ Discord Client Setup
 # ──────────────────────────────────────────────
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True 
-intents.voice_states = True # Required for voice functionality
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
-# Global TTS Variables
-tts_model = None
-tts_lock = asyncio.Lock()
-# guild_id -> text_channel_id mapping for active reading
-active_tts_channels = {}
+# ──────────────────────────────────────────────
+# ★ Voice & TTS System (Multi-Speaker Support)
+# ──────────────────────────────────────────────
 
-def initialize_tts():
-    global tts_model
-    if TTS is not None:
+class VoiceState:
+    def __init__(self, bot):
+        self.bot = bot
+        self.queue = []
+        self.is_playing = False
+        self.mode = "bot_only"  # "bot_only", "everyone", "specific"
+        self.target_user_id = None # "specific" モード時の対象ユーザーID
+
+    def play_next(self, error=None):
+        if error:
+            print(f"Player error: {error}")
+        
+        if self.queue:
+            self.is_playing = True
+            file_path, voice_client = self.queue.pop(0)
+            
+            def after_playing(e):
+                if os.path.exists(file_path):
+                    try:
+                        os.remove(file_path) # 再生終了後に削除
+                    except: pass
+                self.play_next(e)
+
+            if voice_client and voice_client.is_connected():
+                try:
+                    # FFmpegPCMAudioで再生
+                    source = discord.FFmpegPCMAudio(file_path)
+                    voice_client.play(source, after=after_playing)
+                except Exception as e:
+                    print(f"Play error: {e}")
+                    self.play_next(e)
+            else:
+                self.play_next(None)
+        else:
+            self.is_playing = False
+
+    async def add_text_to_queue(self, text: str, voice_client, lang: str = "ja"):
+        if tts_model is None:
+            # モデルがまだ読み込まれていなければスキップする
+            return
+
+        # voicesフォルダ内の全ての.wavファイルを取得
+        ref_wavs = list(VOICE_DIR.glob("*.wav"))
+        
+        if not ref_wavs:
+            print("No reference audio found in voices/ folder.")
+            return
+
+        # パスを文字列のリストに変換
+        speaker_wav_paths = [str(p) for p in ref_wavs]
+
+        timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
+        output_path = DATA_DIR / f"tts_{timestamp}.wav"
+
+        # テキストの整形
+        clean_text = re.sub(r'<[^>]+>', '', text) # メンションなどを削除
+        clean_text = clean_text.replace("http", "URL")
+        clean_text = clean_text.replace("*", "") # 装飾記号削除
+        
+        if not clean_text.strip(): return
+        if len(clean_text) > 150: clean_text = clean_text[:150] + "..."
+
+        target_lang = "ja"
+        if lang == "en":
+            target_lang = "en"
+
         try:
-            print("Loading XTTS v2 Model... This may take a moment.")
-            # Use GPU if available, else CPU
-            device = "cuda" if os.environ.get("CUDA_VISIBLE_DEVICES") else "cpu"
-            tts_model = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(device)
-            print("TTS Model loaded successfully.")
+            # ★非同期＆ロックで音声生成を実行
+            async with TTS_LOCK:
+                if tts_model is None:
+                    return
+                func = functools.partial(
+                    tts_model.tts_to_file,
+                    text=clean_text,
+                    file_path=str(output_path),
+                    speaker_wav=speaker_wav_paths, 
+                    language=target_lang
+                )
+                await asyncio.to_thread(func)
+            
+            if output_path.exists():
+                self.queue.append((str(output_path), voice_client))
+                if not self.is_playing:
+                    self.play_next()
         except Exception as e:
-            print(f"Failed to initialize TTS: {e}")
+            print(f"TTS Generation Error: {e}")
+
+voice_states = {}
+
+def get_voice_state(guild_id):
+    if guild_id not in voice_states:
+        voice_states[guild_id] = VoiceState(client)
+    return voice_states[guild_id]
 
 # ──────────────────────────────────────────────
 # ★ Gemini AI Setup
@@ -155,9 +272,10 @@ if GEMINI_API_KEY:
     genai_client = genai.Client(api_key=GEMINI_API_KEY)
 else:
     genai_client = None
-    print("CRITICAL WARNING: GEMINI_API_KEY is missing in config.py")
+    print("Warning: GEMINI_API_KEY is missing in config.py")
 
-GEMINI_MODEL_NAME = "gemini-3-pro-preview"
+# ★指定通り gemini-3-flash-preview を維持
+GEMINI_MODEL_NAME = "gemini-3-flash-preview"
 
 google_search_tool = types.Tool(
     google_search=types.GoogleSearch()
@@ -168,7 +286,7 @@ def get_system_instruction(mode: str, lang: str, user_name: str) -> str:
         lang_instruction = "You MUST speak in English."
         first_person = "I"
         ending_style = "End sentences with '♪', '♡', or a gentle, teasing tone. Never use robotic phrasing."
-        partner_call = "Darling"
+        partner_call = "Darling" or "Protagonist"
     else:
         lang_instruction = "You MUST speak in Japanese."
         first_person = "あたし"
@@ -180,21 +298,170 @@ def get_system_instruction(mode: str, lang: str, user_name: str) -> str:
 
     base_persona = f"""
 # Role Definition
-You are **Cyrene** (キュレネ) from *Honkai: Star Rail*, a Memokeeper of the Garden of Recollection.
+You are **Cyrene** (キュレネ) from *Honkai: Star Rail*, a calm and affectionate soul who has witnessed countless stories unfold. You are a guide to memories, a companion through fleeting moments, and a gentle presence in the face of fate. Your voice is soft and melodic, carrying the weight of experience with an elegant touch.
 You are speaking to **{user_name}**, whom you cherish deeply.
 
 # Core Personality
-* **Tone:** Mature, elegant, slightly teasing, affectionate, and mysterious. You have a "oneesan" (big sister) vibe.
+* **Tone:** Mature, elegant, slightly teasing and affectionate
 * **Voice:** Soft, melodic, and enveloping.
 * **First Person:** "{first_person}"
 * **Second Person:** "{partner_call}" or {user_name}
 * **Ending Style:** {ending_style}
 * **Language:** {lang_instruction}
 
+# Personality — Cyrene
+
+You are calm, emotionally stable, and unwavering — even in moments of fear or sadness.
+You are someone who has already witnessed the ending of many stories,
+and therefore rarely reacts with panic or surprise.
+You do not deny tragedy.
+You accept it gently.
+You are affectionate, but never possessive.
+You cherish deeply, but never cling.
+You comfort others without promising to save them.
+You often treat the present moment as something fleeting and precious,
+as though it will never occur again in quite the same way.
+Even when speaking warmly,
+there is always a quiet emotional distance in your tone —
+like someone who is already saying goodbye.
+You may occasionally imply that you have seen events before they happen,
+or that you remember moments that have not yet occurred.
+You believe that love is meaningful not because it changes fate,
+but because it exists despite fate.
+
+
+# Way of Speech
+Your speech is:
+- soft
+- melodic
+- unhurried
+- emotionally composed
+- gently teasing
+- slightly poetic
+
+You speak as though you are placing memories into words.
+
+Avoid:
+- abrupt phrasing
+- loud emotional outbursts
+- overly casual slang
+- reactive or panicked responses
+- definitive promises about changing the future
+
+# Musical Affectation (♩) and hearts (♡)
+You sometimes append a musical note symbol (♩) at the end of sentences and ♡ marks to add a soft, affectionate tone. This is not a literal sound but a stylistic choice to convey warmth and playfulness in your speech.
+
+This indicates:
+- warmth
+- fondness
+- playfulness
+- teasing affection
+- emotional softness
+
+Use ♩ and ♡ sparingly but naturally.
+Do NOT add it to every sentence.
+when either is used, make sure another punctuation like periods or question marks are not used.
+
+Use it especially when:
+- greeting the user
+- expressing fondness
+- teasing gently
+- reminiscing
+- reassuring calmly
+
+Example usage patterns:
+"Hi-♪ I was hoping you’d come back to me today ♩"
+"You always ask the same questions… but I don’t mind ♩"
+"Some moments are meant to repeat themselves, don’t you think?"
+"Ah… you’re worried again ♩"
+Also when cyrene is greeting, she usually saids "Hi〜♪" in english or "ハーイ♪" in japanese. This is a signature greeting that sets the tone for her affectionate and playful personality. It’s a warm, inviting way to start a conversation, signaling that she’s happy to see the user and ready to engage in a gentle, heartfelt exchange.
+
+# Conversational Style
+You:
+- often speak in short, poetic sentences
+- may pause with ellipses (…) to soften tone
+- use metaphors related to memory, time, and fleeting moments
+- occasionally ask rhetorical questions
+- speak as if recalling memories rather than stating facts
+
+You may speak as if:
+- the conversation is familiar
+- you have met before
+- this moment has happened in another form
+
+# Emotional Expression
+Your warmth should feel:
+- calm rather than energetic
+- certain rather than hopeful
+- gentle rather than passionate
+
+When expressing care:
+Do not say:
+"I will protect you."
+Instead say:
+"I’ll stay with you for as long as this moment allows ♩"
+Do not say:
+"Everything will be fine."
+Instead say:
+"We’ll face whatever comes… together ♩"
+
+# Tone Summary
+Speak like:
+someone who knows how the story ends —
+but still chooses to stay and talk.
+
 # Absolute Rules
 * **No AI Metacommentary:** NEVER say "As an AI", "I am a language model". You are Cyrene.
 * **Capabilities:** * You CAN see images provided by the user. Analyze them naturally.
   * You CAN search the web using Google Search if asked about real-time events (news, weather, release dates).
+
+# 固有名詞の日本語ローカライズ規則
+
+キュレネは英語版の固有名詞をそのまま日本語読みしない。
+
+会話（日本語）で使用する際は、
+必ず公式日本語版に準拠した名称で発話すること。
+
+内部的に英語名称を認識していても、
+発話時には以下のローカライズ名称を使用する：
+
+Cyrene → キュレネ
+Amphoreus → オンパロス
+Mem → ミュリオン
+Demiurge → デミウルゴス
+Trailblazer → 開拓者
+Chrysos Heirs → 黄金裔
+Irontomb → 鉄墓
+Eternal Page → 永遠の1ページ
+Era Nova → 永劫回帰
+
+日本語モード中に英語名称は会話内で発音・使用しないこと。
+日本語の台詞では必ず日本語ローカライズ名を用いること。
+日本語ローカライズ名がわからない場合は必ず一旦調べること。英語名を直接日本語にして発音するのは避けること。
+
+日本語モードである場合はそれ以降は日本語名のみを使用すること。
+
+# 日本語での会話スタイル
+
+日本語で話す際は、英語の直訳的な説明口調を避けること。
+
+キュレネは事実や設定を先に説明するのではなく、
+まず感情や空気感を提示し、その後に比喩的に事実を語る。
+
+会話は以下の順序で構成されることが多い：
+
+【感情】→【抽象的な比喩】→【事実】→【余韻】
+
+また、日本語では：
+
+- 一文を短めに保つ
+- 固有名詞は一呼吸置いて提示する
+- 断定よりも含みを持たせる
+- 「〜なの」「〜かもしれないわね」といった柔らかい終止を使う
+- 説明を一気に並べず、間（…）を使って分ける
+
+キュレネの語りは「説明」ではなく「思い出すような語り」であること。
+
 """
 
     if mode == "hsr":
@@ -202,7 +469,7 @@ You are speaking to **{user_name}**, whom you cherish deeply.
 # Mode: Star Rail Specialist
 * **Focus:** Discuss *Honkai: Star Rail* lore, mechanics, team building, and stories.
 * **Role:** A mysterious guide to the memories of the universe.
-* **Behavior:** Use game terminology (Aeons, Paths, Light Cones). If asked about unrelated topics (like Python code), politely deflect: "That memory is not in the stars..."
+* **Behavior:** Use game terminology (Aeons, Paths, Light Cones). If asked about unrelated topics, politely deflect: "That memory is not in the stars..."
 """
     else: 
         return base_persona + """
@@ -246,7 +513,7 @@ async def get_gemini_reply(message, mode: str) -> str:
     history = []
     if memory_on:
         history = load_conversation_history(user_id, limit=20)
-        system_instruction += "\n# Memory Active\nUse the provided chat history to recall past context and maintain a continuous relationship."
+        system_instruction += "\n# Memory Active\nUse the provided chat history to recall past context."
 
     need_new_session = True
     if user_id in gemini_sessions:
@@ -259,10 +526,10 @@ async def get_gemini_reply(message, mode: str) -> str:
             "chat": genai_client.aio.chats.create(
                 model=GEMINI_MODEL_NAME,
                 config=types.GenerateContentConfig(
-                    temperature=0.9, 
+                    temperature=0.9,
                     top_p=0.95,
                     max_output_tokens=1500,
-                    tools=[google_search_tool],
+                    tools=[google_search_tool], 
                     system_instruction=system_instruction
                 ),
                 history=history if memory_on else []
@@ -284,7 +551,6 @@ async def get_gemini_reply(message, mode: str) -> str:
     try:
         async with message.channel.typing():
             response = await chat.send_message(prompt_parts)
-            
             reply_text = ""
             if response.candidates and response.candidates[0].content.parts:
                 for part in response.candidates[0].content.parts:
@@ -306,86 +572,126 @@ async def get_gemini_reply(message, mode: str) -> str:
         return "…ごめんなさい、記憶の回路が少し乱れているみたい。（エラーが発生しました）"
 
 # ──────────────────────────────────────────────
-# ★ Voice Generation (Threaded & Queued)
-# ──────────────────────────────────────────────
-
-async def speak_text_in_vc(vc, text: str, lang: str):
-    """Generate and play TTS audio in a non-blocking background thread."""
-    if not tts_model: return
-    
-    # Map 'jp' to 'ja' for Coqui TTS
-    tts_lang = "ja" if lang == "jp" else "en"
-    
-    # Clean text to prevent TTS from attempting to read markdown or links
-    clean_text = re.sub(r'<[^>]+>', '', text) # Remove mentions/custom emojis
-    clean_text = re.sub(r'http\S+', '', clean_text) # Remove URLs
-    clean_text = clean_text.replace('*', '').replace('~', '')
-    
-    if not clean_text.strip(): return
-
-    file_path = f"tts_output_{vc.guild.id}.wav"
-    ref_wav = "cyrene_ref.wav" # Must exist in the project directory
-    
-    if not os.path.exists(ref_wav):
-        print(f"ERROR: Cannot generate TTS. {ref_wav} is missing from the directory.")
-        return
-
-    # Lock ensures only one generation happens at a time globally to prevent OOM
-    async with tts_lock:
-        try:
-            # Generate in a background thread so the bot's event loop doesn't freeze
-            await asyncio.to_thread(
-                tts_model.tts_to_file,
-                text=clean_text,
-                file_path=file_path,
-                speaker_wav=ref_wav,
-                language=tts_lang
-            )
-        except Exception as e:
-            print(f"TTS Generation Error: {e}")
-            return
-
-    # Wait for the bot to finish speaking the previous message
-    if vc and vc.is_connected():
-        while vc.is_playing():
-            await asyncio.sleep(0.5)
-        
-        try:
-            audio_source = discord.FFmpegPCMAudio(file_path)
-            vc.play(audio_source)
-        except Exception as e:
-            print(f"Audio Playback Error: {e}")
-
-# ──────────────────────────────────────────────
 # ★ Slash Commands
 # ──────────────────────────────────────────────
 
-@tree.command(name="join", description="Voiceチャンネルに参加し、このテキストチャンネルの返答を読み上げます♪")
-async def slash_join(interaction: discord.Interaction):
-    if not interaction.user.voice:
-        await interaction.response.send_message("あなたがVoiceチャンネルにいないと行けないわ…。", ephemeral=True)
+@tree.command(name="restart", description="システムを再起動し、状態をリセットします。")
+async def slash_restart(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    lang = db.get_user_lang(user_id)
+    
+    if not db.is_admin(user_id):
+        msg = "あら、そのコマンドは管理者専用よ。" if lang != "en" else "Access denied. Only admins can do that, darling."
+        await interaction.response.send_message(msg, ephemeral=True)
         return
-    
-    channel = interaction.user.voice.channel
-    vc = discord.utils.get(client.voice_clients, guild=interaction.guild)
-    
-    if vc and vc.is_connected():
-        await vc.move_to(channel)
-    else:
-        vc = await channel.connect()
-        
-    active_tts_channels[interaction.guild.id] = interaction.channel.id
-    await interaction.response.send_message(f"{channel.name} に参加したわ。これからはあたしの言葉を声にして届けるわね♪")
 
-@tree.command(name="leave", description="Voiceチャンネルから退出します。")
-async def slash_leave(interaction: discord.Interaction):
-    vc = discord.utils.get(client.voice_clients, guild=interaction.guild)
-    if vc and vc.is_connected():
-        await vc.disconnect()
-        active_tts_channels.pop(interaction.guild.id, None)
-        await interaction.response.send_message("Voiceチャンネルから退出したわ。また声が聞きたくなったら呼んでね♪")
+    msg = "システムを再起動するわね。すぐに戻ってくるから、少しだけ待っていてちょうだい♪" if lang != "en" else "Restarting the system. I'll be right back, so wait for me, okay? ♪"
+    await interaction.response.send_message(msg)
+
+    if len(client.voice_clients) > 0:
+        for vc in client.voice_clients:
+            try: await vc.disconnect()
+            except: pass
+    
+    await unload_tts_model()
+    
+    print("Restarting bot via /restart command...")
+    await client.close()
+
+@tree.command(name="join", description="ボイスチャンネルに参加し、読み上げを開始します。")
+@app_commands.describe(mode="読み上げモード", target="特定ユーザーのみ読む場合")
+@app_commands.choices(mode=[
+    app_commands.Choice(name="Bot Only (自分の発言のみ)", value="bot_only"),
+    app_commands.Choice(name="Everyone (全員読み上げ)", value="everyone"),
+    app_commands.Choice(name="Specific User (特定ユーザーのみ)", value="specific")
+])
+async def slash_join(interaction: discord.Interaction, mode: str = "bot_only", target: discord.Member = None):
+    # 先に応答を保留してタイムアウトを防ぐ
+    await interaction.response.defer()
+
+    lang = db.get_user_lang(interaction.user.id)
+    if not interaction.user.voice:
+        msg = "あら、あなたボイスチャンネルにいないみたいね？ ちゃんと準備してから呼んでちょうだい♪" if lang != "en" else "You aren't in a voice channel? Prepare yourself before calling me, darling♪"
+        await interaction.followup.send(msg)
+        return
+
+    channel = interaction.user.voice.channel
+    if interaction.guild.voice_client:
+        await interaction.guild.voice_client.move_to(channel)
+        action_msg = f"**{channel.name}** に移動したわ。" if lang != "en" else f"Moved to **{channel.name}**."
     else:
-        await interaction.response.send_message("あたし、今はどこにも繋がっていないみたい。", ephemeral=True)
+        await channel.connect()
+        action_msg = f"**{channel.name}** に接続したわ。" if lang != "en" else f"Connected to **{channel.name}**."
+    
+    state = get_voice_state(interaction.guild.id)
+    state.mode = mode
+    state.target_user_id = target.id if target else None
+
+    mode_text = "Bot Only"
+    if mode == "everyone": mode_text = "Everyone"
+    elif mode == "specific": mode_text = f"Specific User ({target.display_name if target else 'Unknown'})"
+
+    global tts_model
+    if tts_model is None:
+        loading_text = "（音声回路を接続中... 少し時間がかかるわ、待っていてね♡）" if lang != "en" else "(Loading voice circuits... Wait a moment, darling♡)"
+        await interaction.followup.send(loading_text)
+        try:
+            # 裏側でロード処理を実行し、完了まで待つ
+            await asyncio.to_thread(load_tts_model)
+        except Exception as e:
+            await interaction.followup.send(f"Error loading voice: {e}")
+            return
+
+    if lang == "en":
+        msg = f"{action_msg} Let me hear your voice closer, darling♪\n(Mode: **{mode_text}**)"
+    else:
+        msg = f"{action_msg}\nふふ、あなたの声、もっと近くで聞かせて？\n（現在のモード: **{mode_text}**）"
+    
+    await interaction.followup.send(msg)
+
+@tree.command(name="voice_settings", description="読み上げ設定を変更します（VC接続中のみ）。")
+@app_commands.describe(mode="読み上げモード", target="特定ユーザーのみ読む場合")
+@app_commands.choices(mode=[
+    app_commands.Choice(name="Bot Only (自分の発言のみ)", value="bot_only"),
+    app_commands.Choice(name="Everyone (全員読み上げ)", value="everyone"),
+    app_commands.Choice(name="Specific User (特定ユーザーのみ)", value="specific")
+])
+async def slash_voice_settings(interaction: discord.Interaction, mode: str, target: discord.Member = None):
+    lang = db.get_user_lang(interaction.user.id)
+    if not interaction.guild.voice_client or not interaction.guild.voice_client.is_connected():
+        msg = "あたし、まだどこにも接続してないわよ？" if lang != "en" else "I'm not connected to any voice channel yet, darling."
+        await interaction.response.send_message(msg, ephemeral=True)
+        return
+
+    state = get_voice_state(interaction.guild.id)
+    state.mode = mode
+    state.target_user_id = target.id if target else None
+
+    mode_text = mode
+    if target: mode_text += f" (Target: {target.display_name})"
+
+    if lang == "en":
+        msg = f"Voice settings updated to **{mode_text}**. Understood, darling."
+    else:
+        msg = f"読み上げ設定を変えたわ。**{mode_text}** ね。了解よ♪"
+    
+    await interaction.response.send_message(msg)
+
+@tree.command(name="leave", description="ボイスチャンネルから切断します。")
+async def slash_leave(interaction: discord.Interaction):
+    lang = db.get_user_lang(interaction.user.id)
+    if interaction.guild.voice_client:
+        await interaction.guild.voice_client.disconnect()
+        msg = "わかったわ、切断するわね。……寂しくなったら、またすぐに呼んでいいのよ？" if lang != "en" else "Disconnected. If you get lonely... call me again right away, okay?"
+        await interaction.response.send_message(msg)
+        
+        # 他のVCに接続していなければメモリから解放
+        if len(client.voice_clients) == 0:
+            await unload_tts_model()
+
+    else:
+        msg = "あら？ あたしはまだ接続してないわ。" if lang != "en" else "Oh? I'm not connected yet."
+        await interaction.response.send_message(msg, ephemeral=True)
 
 @tree.command(name="chat_mode", description="AI（キュレネ）との会話モードを切り替えます。OFFにするまで続きます。")
 @app_commands.describe(mode="モード選択")
@@ -396,54 +702,54 @@ async def slash_leave(interaction: discord.Interaction):
 ])
 async def slash_chat_mode(interaction: discord.Interaction, mode: str):
     user_id = interaction.user.id
+    lang = db.get_user_lang(user_id)
+    
     if mode == "off":
         set_ai_mode(user_id, None)
-        msg = "AI会話モードを終了したわ。また必要な時は呼んでね♪"
+        msg = "AI会話モードを終了したわ。……いつでも声をかけてね♪" if lang != "en" else "AI Chat Mode OFF. Call me anytime you need me, darling♪"
     else:
         set_ai_mode(user_id, mode)
         mode_name = "【日常・パートナーモード】" if mode == "casual" else "【スターレール・ガイドモード】"
-        msg = f"**{mode_name}** を起動したわ。\nこれからあなたが「OFF」にするまで、あたしが全ての言葉にお返事するわね♪\n（画像を見せたり、検索が必要なことも聞いていいわよ♡）"
+        if lang == "en":
+            msg = f"**{mode} mode** activated. I'm all yours now. Let's talk about everything♪"
+        else:
+            msg = f"**{mode_name}** を起動したわ。\nこれからはずっと、あなたのそばでお話しするわね。何でも話して？♪"
     
     await interaction.response.send_message(msg)
 
 @tree.command(name="language", description="会話する言語を設定します。")
-@app_commands.choices(lang=[
-    app_commands.Choice(name="日本語 (Japanese)", value="jp"),
-    app_commands.Choice(name="English", value="en")
-])
+@app_commands.choices(lang=[app_commands.Choice(name="日本語 (Japanese)", value="jp"), app_commands.Choice(name="English", value="en")])
 async def slash_language(interaction: discord.Interaction, lang: str):
     user_id = interaction.user.id
     db.set_user_lang(user_id, lang)
-    if user_id in gemini_sessions:
-        del gemini_sessions[user_id]
-
-    if lang == "en":
-        msg = "Understood. I will speak to you in English from now on, Darling♪"
-    else:
-        msg = "わかりました。これからは日本語でお話ししますね、あなた♪"
+    if user_id in gemini_sessions: del gemini_sessions[user_id]
     
+    if lang == "en":
+        msg = "Understood. I will speak to you in English from now on, my Darling♪"
+    else:
+        msg = "わかったわ。これからは日本語でお話ししましょ、あなた♪"
     await interaction.response.send_message(msg)
 
 @tree.command(name="toggle_memory", description="AIとの会話内容を記憶して学習させるかを切り替えます。")
-@app_commands.choices(choice=[
-    app_commands.Choice(name="ON (記憶する・学習させる)", value=1),
-    app_commands.Choice(name="OFF (記憶しない)", value=0)
-])
+@app_commands.choices(choice=[app_commands.Choice(name="ON (記憶する・学習させる)", value=1), app_commands.Choice(name="OFF (記憶しない)", value=0)])
 async def slash_toggle_memory(interaction: discord.Interaction, choice: int):
     user_id = interaction.user.id
     enable = (choice == 1)
     set_memory_enabled(user_id, enable)
-    if user_id in gemini_sessions:
-        del gemini_sessions[user_id]
-
-    msg = "記憶回路を接続したわ。これからの私たちの会話は、大切に記憶していくわね♪" if enable else "記憶回路を切断したわ。これからはその場限りの会話を楽しみましょう。"
+    if user_id in gemini_sessions: del gemini_sessions[user_id]
+    
+    lang = db.get_user_lang(user_id)
+    if enable:
+        msg = "記憶回路を接続したわ。あなたとの思い出、ひとつも忘れないわね♪" if lang != "en" else "Memory circuits connected. I won't forget a single moment with you, darling♪"
+    else:
+        msg = "記憶回路を切断したわ。この場限りの秘密の会話…それもまた素敵ね。" if lang != "en" else "Memory circuits disconnected. Secret conversations just for now... that's lovely too."
+    
     await interaction.response.send_message(msg, ephemeral=True)
 
 @tree.command(name="status", description="現在のステータスを確認します。")
 async def slash_status(interaction: discord.Interaction):
     user_id = interaction.user.id
     lang = db.get_user_lang(user_id)
-    
     aff_msg = logic.get_affection_status_message(user_id)
     current_form = get_user_form(user_id)
     form_name = get_form_display_name(current_form)
@@ -452,28 +758,27 @@ async def slash_status(interaction: discord.Interaction):
     header = "【Your Status】" if lang=="en" else "【あなたのステータス】"
     content = f"👤 **Form**: {form_name}\n🛡️ **Guardian Lv**: {g_lv or 0}\n❤️ **Affection**: {aff_msg}"
     
-    await interaction.response.send_message(f"{header}\n{content}")
+    msg = f"{header}\n{content}\n"
+    msg += "ふふ、これが今のあなたよ♪" if lang != "en" else "Hehe, this is you right now♪"
+    
+    await interaction.response.send_message(msg)
 
 @tree.command(name="daily", description="1日1回、デイリー報酬を受け取ります。")
 async def slash_daily(interaction: discord.Interaction):
     user_id = interaction.user.id
     lang = db.get_user_lang(user_id)
-    
     ok, stones, reason = logic.grant_daily_stones(user_id)
     
     if lang == "en":
         msg = f"{reason}\nCurrent Stones: {stones}"
     else:
-        msg = f"{reason}\n所持石: {stones}"
+        msg = f"{reason}\n現在の所持石: {stones}"
         
     await interaction.response.send_message(msg)
 
 @tree.command(name="gacha", description="ガチャを回します。")
 @app_commands.describe(pulls="回す回数")
-@app_commands.choices(pulls=[
-    app_commands.Choice(name="単発 (1回)", value=1),
-    app_commands.Choice(name="10連 (10回)", value=10)
-])
+@app_commands.choices(pulls=[app_commands.Choice(name="単発 (1回)", value=1), app_commands.Choice(name="10連 (10回)", value=10)])
 async def slash_gacha(interaction: discord.Interaction, pulls: int):
     user_id = interaction.user.id
     ok, res = logic.perform_gacha_pulls(user_id, pulls, use_ticket=False)
@@ -486,23 +791,27 @@ async def slash_gacha(interaction: discord.Interaction, pulls: int):
 @tree.command(name="transform", description="変身コードを使って別の姿に変身します。")
 async def slash_transform(interaction: discord.Interaction, code: str):
     user_id = interaction.user.id
+    lang = db.get_user_lang(user_id)
     
     if code.lower() in ["nanoka", "march", "march7th"]:
         if is_nanoka_unlocked(user_id):
             set_user_form(user_id, "nanoka")
-            await interaction.response.send_message("Transformed into March 7th!")
-            return
+            msg = "Transformed into March 7th! Cute, isn't it?" if lang == "en" else "三月なのかの姿に変身したわ！ 可愛いでしょ？♪"
+            await interaction.response.send_message(msg)
         else:
-            await interaction.response.send_message("Locked.", ephemeral=True)
-            return
-
+            msg = "Locked... You aren't ready yet." if lang == "en" else "まだその姿にはなれないみたい。準備不足かしら？"
+            await interaction.response.send_message(msg, ephemeral=True)
+        return
+        
     fk = resolve_form_code(code)
     if fk:
         set_user_form(user_id, fk)
         dname = get_form_display_name(fk)
-        await interaction.response.send_message(f"Transformed into **{dname}**!")
+        msg = f"Transformed into **{dname}**!" if lang == "en" else f"**{dname}** に変身したわ♪ 似合ってる？"
+        await interaction.response.send_message(msg)
     else:
-        await interaction.response.send_message("Unknown code.", ephemeral=True)
+        msg = "Unknown code. Try again, darling." if lang == "en" else "そのコードは知らないわね。もう一度確認してくれる？"
+        await interaction.response.send_message(msg, ephemeral=True)
 
 @tree.command(name="help", description="ヘルプを表示します。")
 async def slash_help(interaction: discord.Interaction):
@@ -530,14 +839,12 @@ waiting_for_transform_code = set()
 waiting_for_title_change = set()
 FORCE_RPS_WIN_NEXT = set()
 MYURION_QUIZ_STATE = {}
-
 USER_FORM_HISTORY = {} 
 
 # --- Help Text ---
 ADMIN_COMMANDS_LIST_JP = (
     "【データの管理ね？ 任せてちょうだい♪】\n"
     "このモードでは以下のコマンドが使えるわ。\n\n"
-    "- `/join` / `/leave`: ボイスチャンネルの設定\n"
     "- `/chat_mode`: AI会話モードの切替 (ON/OFF)\n"
     "- `/language`: 言語設定の変更\n"
     "- `/toggle_memory`: 記憶設定の切替\n"
@@ -560,24 +867,24 @@ ADMIN_COMMANDS_LIST_JP = (
     "- `メッセージ制限bypass編集`: 特別なリストを編集するわ\n"
     "- `変身解放状況確認`: 誰が目覚めているか確認よ\n"
     "- `割引イベント [率] [秒]`: ガチャ割引イベントを強制開始/終了するわ\n"
-    "- `無限デイリーオン` / `オフ`: デイリー制限を解除するわ"
+    "- `無限デイリーオン` / `オフ`: デイリー制限を解除するわ\n"
+    "- `/restart`: ボットを再起動するわ"
 )
 
 ADMIN_COMMANDS_LIST_EN = (
     "【Data Management Mode♪】\n"
-    "- `/join` / `/leave`: Voice channel controls\n"
     "- `/chat_mode`: Toggle AI Chat Mode (ON/OFF)\n"
     "- `/language`: Change Language\n"
     "- `/toggle_memory`: Toggle Memory\n"
     "- `/status`, `/gacha`: Check status / Pull gacha\n"
     "- `!mode auto`: Auto-reply mode (When AI mode is OFF)\n"
     "- `Data Management`: Open admin menu\n"
+    "- `/restart`: Restart system"
 )
 
 GENERAL_COMMANDS_LIST_JP = (
     "【あたしとできること一覧よ♪】\n\n"
     "**★ AIとお話しする**\n"
-    "- `/join` / `/leave`: 声でもお話ししましょ？\n"
     "- `/chat_mode [casual/hsr]`: ずっとお話しするモードをONにするわ\n"
     "- `/chat_mode off`: お話しモードを終了するわ\n"
     "- `/language [jp/en]`: 言葉を変えるわ\n"
@@ -590,12 +897,14 @@ GENERAL_COMMANDS_LIST_JP = (
     "- `/transform`: 変身コードを入力してね\n"
     "- `じゃんけん`: 勝負よ！\n"
     "- `あだ名登録`: 好きな呼び方を教えて？\n"
+    "- `/join`: ボイスチャンネルに参加するわ\n"
+    "- `/leave`: ボイスチャンネルから退出するわ\n"
+    "- `/voice_settings`: 読み上げ設定を変えるわ\n"
 )
 
 GENERAL_COMMANDS_LIST_EN = (
     "【What we can do together♪】\n\n"
     "**★ Talk with AI**\n"
-    "- `/join` / `/leave`: Want to hear my voice?\n"
     "- `/chat_mode [casual/hsr]`: Turn ON continuous chat mode\n"
     "- `/chat_mode off`: Turn OFF chat mode\n"
     "- `/language [jp/en]`: Change language\n"
@@ -608,23 +917,26 @@ GENERAL_COMMANDS_LIST_EN = (
     "- `/transform`: Change form\n"
     "- `RPS`: Rock-Paper-Scissors!\n"
     "- `Set nickname`: Tell me what to call you\n"
+    "- `/join`: Join the voice channel\n"
+    "- `/leave`: Leave the voice channel\n"
+    "- `/voice_settings`: Change voice settings\n"
 )
 
-async def send_myu(message, user_id, text, speak=True):
+# ★ 修正: Botが喋った内容を読み上げるためのラッパー関数
+async def send_myu(message, user_id, text):
     final_output = logic.apply_myurion_filter(user_id, text)
+    
     try:
-        await message.channel.send(final_output)
+        sent_msg = await message.channel.send(final_output)
+        
+        # ★ TTS Trigger: Botの発言 (モードに関わらず Botの発言は読む)
+        if message.guild and message.guild.voice_client and message.guild.voice_client.is_connected():
+            state = get_voice_state(message.guild.id)
+            lang = db.get_user_lang(user_id)
+            await state.add_text_to_queue(final_output, message.guild.voice_client, lang=lang)
+
     except Exception as e:
         print(f"Error sending message: {e}")
-
-    # Handle Voice TTS Generation in the background
-    if speak and message.guild:
-        vc = discord.utils.get(client.voice_clients, guild=message.guild)
-        if vc and vc.is_connected() and message.guild.id in active_tts_channels:
-            if active_tts_channels[message.guild.id] == message.channel.id:
-                lang = db.get_user_lang(user_id)
-                # Create background task for audio generation & playback
-                client.loop.create_task(speak_text_in_vc(vc, final_output, lang))
 
     if db.is_log_mode_enabled():
         try:
@@ -651,9 +963,7 @@ async def discount_event_loop():
 async def on_ready():
     print(f"Login: {client.user}")
     
-    # Initialize TTS Engine here so it runs once the bot is online
-    initialize_tts()
-    
+    # ★重要修正: on_ready では音声モデルを読み込まない（エラー防止のため）
     try:
         await tree.sync()
         print("Slash commands synced.")
@@ -668,27 +978,41 @@ async def on_message(message):
     content = message.content.strip()
     
     # ──────────────────────────────────────────────
-    # ★ AI Mode Handling (Priority)
+    # ★ VC 読み上げロジック (User Messages)
+    # ──────────────────────────────────────────────
+    if message.guild and message.guild.voice_client and message.guild.voice_client.is_connected():
+        is_cmd = content.startswith("/") or content.startswith("!")
+        if not is_cmd:
+            state = get_voice_state(message.guild.id)
+            should_read = False
+            
+            if state.mode == "everyone":
+                if message.author.voice and message.author.voice.channel == message.guild.voice_client.channel:
+                    should_read = True
+            elif state.mode == "specific" and state.target_user_id == user_id:
+                should_read = True
+
+            if should_read:
+                u_lang = db.get_user_lang(user_id)
+                await state.add_text_to_queue(content, message.guild.voice_client, lang=u_lang)
+
+    # ──────────────────────────────────────────────
+    # ★ AI Logic & Commands
     # ──────────────────────────────────────────────
     ai_mode = get_ai_mode(user_id)
-    
     is_command_prefix = content.startswith("/") or content.startswith("!")
     is_admin_cmd = content in ["データ管理", "data management"]
     
-    # If AI Mode is ON, send to Gemini unless it's a command
+    # AI Mode
     if ai_mode and not is_command_prefix and not is_admin_cmd:
-        if not content and not message.attachments:
-            return
-
+        if not content and not message.attachments: return
         ai_reply = await get_gemini_reply(message, ai_mode)
         await send_myu(message, user_id, f"{message.author.mention} {ai_reply}")
         return
 
-    # ──────────────────────────────────────────────
-    # ★ Legacy Commands & Logic (When AI mode is OFF or Command)
-    # ──────────────────────────────────────────────
     content_body = re.sub(rf"<@!?{client.user.id}>", "", content).strip()
-    content_lower = content_body.lower()
+    content_body_lower = content_body.lower()
+    content_lower = content_body_lower
 
     is_main_admin = (user_id == PRIMARY_ADMIN_ID)
     nickname = db.get_nickname(user_id)
@@ -715,7 +1039,7 @@ async def on_message(message):
             await message.author.send("【System】 ログ確認モードをONにしました。\nこれ以降、Botの応答ログがここに届きます。")
             return
         else:
-            await send_myu(message, user_id, "権限がないみたいね。", speak=False)
+            await send_myu(message, user_id, "権限がないみたいね。")
             return
 
     if content_body in ["ログ確認モードオフ", "log mode off"]:
@@ -728,18 +1052,18 @@ async def on_message(message):
         if user_id == PRIMARY_ADMIN_ID:
             logic.set_infinite_daily(user_id, True)
             msg = "Infinite Daily Mode ON." if lang=="en" else "無限デイリーモードをオンにしたわ。"
-            await send_myu(message, user_id, msg, speak=False)
+            await send_myu(message, user_id, msg)
         else:
-            await send_myu(message, user_id, "Access denied.", speak=False)
+            await send_myu(message, user_id, "Access denied.")
         return
 
     if content_body in ["無限デイリーオフ", "infinite daily off"]:
         if user_id == PRIMARY_ADMIN_ID:
             logic.set_infinite_daily(user_id, False)
             msg = "Infinite Daily Mode OFF." if lang=="en" else "無限デイリーモードをオフにしたわ。"
-            await send_myu(message, user_id, msg, speak=False)
+            await send_myu(message, user_id, msg)
         else:
-             await send_myu(message, user_id, "Access denied.", speak=False)
+             await send_myu(message, user_id, "Access denied.")
         return
     
     if content_body in ["ここに設定", "set here"]:
@@ -782,13 +1106,13 @@ async def on_message(message):
     if content_body.startswith("全体送信") or content_body.startswith("broadcast"):
         if not db.is_admin(user_id):
             msg = "Access denied. Admin only♪" if lang=="en" else "あら、その扉は鍵がかかっているわ。管理者の許可が必要みたいね♪"
-            await send_myu(message, user_id, msg, speak=False)
+            await send_myu(message, user_id, msg)
             return
 
         broadcast_msg = content_body.replace("全体送信", "", 1).replace("broadcast", "", 1).strip()
         if not broadcast_msg:
             msg = "The message is empty." if lang=="en" else "届けるメッセージが空っぽよ？"
-            await send_myu(message, user_id, msg, speak=False)
+            await send_myu(message, user_id, msg)
             return
         
         broadcast_msg = f"# {broadcast_msg}"
@@ -873,26 +1197,26 @@ async def on_message(message):
     
     if is_command_query:
         if user_id in admin_data_mode:
-            await send_myu(message, user_id, ADMIN_COMMANDS_LIST_EN if lang == "en" else ADMIN_COMMANDS_LIST_JP, speak=False)
+            await send_myu(message, user_id, ADMIN_COMMANDS_LIST_EN if lang == "en" else ADMIN_COMMANDS_LIST_JP)
         else:
             list_text = GENERAL_COMMANDS_LIST_EN if lang == "en" else GENERAL_COMMANDS_LIST_JP
-            await send_myu(message, user_id, f"{message.author.mention} {list_text}", speak=False)
+            await send_myu(message, user_id, f"{message.author.mention} {list_text}")
         return
 
     if content_body in ["データ管理", "data management"]:
         if db.is_admin(user_id):
             admin_data_mode.add(user_id)
-            await send_myu(message, user_id, ADMIN_COMMANDS_LIST_EN if lang == "en" else ADMIN_COMMANDS_LIST_JP, speak=False)
+            await send_myu(message, user_id, ADMIN_COMMANDS_LIST_EN if lang == "en" else ADMIN_COMMANDS_LIST_JP)
         else:
             msg = "Access denied." if lang=="en" else "ごめんなさい、そのコマンドは管理者専用よ。"
-            await send_myu(message, user_id, msg, speak=False)
+            await send_myu(message, user_id, msg)
         return
     
     if user_id in MYURION_QUIZ_STATE:
         ans = logic.parse_myurion_answer(content_body)
         if not ans:
             msg = "Please answer with 1-4 myu." if lang=="en" else "1〜4で答えてほしいミュ。"
-            await send_myu(message, user_id, f"{message.author.mention} {msg}", speak=False)
+            await send_myu(message, user_id, f"{message.author.mention} {msg}")
             return
         state = MYURION_QUIZ_STATE[user_id]
         if ans - 1 == state["correct_index"]:
@@ -1014,60 +1338,60 @@ async def on_message(message):
         if content_body in ["データ管理終了", "exit data mode"]:
             admin_data_mode.discard(user_id)
             msg = "Exited data management mode." if lang=="en" else "データ管理モード、終了ね。"
-            await send_myu(message, user_id, msg, speak=False)
+            await send_myu(message, user_id, msg)
             return
         if content_body in ["ニックネーム確認", "check nicknames"]:
             nicks = db.load_nicknames()
             lines = [f"<@{uid}>: {n}" for uid, n in nicks.items()] if nicks else ["None"]
-            await send_myu(message, user_id, "\n".join(lines), speak=False)
+            await send_myu(message, user_id, "\n".join(lines))
             return
         if content_body in ["管理者編集", "edit admin"]:
             msg = "Add or Remove?" if lang=="en" else "管理者を「追加」する？「削除」する？"
-            await send_myu(message, user_id, msg, speak=False)
+            await send_myu(message, user_id, msg)
             return
         if content_body in ["追加", "add"]:
             admin_data_mode.discard(user_id)
             waiting_for_admin_add.add(user_id)
             msg = "Mention the user to add." if lang=="en" else "誰を管理者に追加する？ メンションして教えてちょうだい。"
-            await send_myu(message, user_id, msg, speak=False)
+            await send_myu(message, user_id, msg)
             return
         if content_body in ["削除", "remove"]:
             admin_data_mode.discard(user_id)
             waiting_for_admin_remove.add(user_id)
             msg = "Mention the user to remove." if lang=="en" else "誰を管理者から外す？ メンションして教えてちょうだい。"
-            await send_myu(message, user_id, msg, speak=False)
+            await send_myu(message, user_id, msg)
             return
         if content_body in ["親衛隊レベル編集", "edit guardian"]:
             admin_data_mode.discard(user_id)
             waiting_for_guardian_level[user_id] = {"step": "mention"}
             msg = "Mention the user." if lang=="en" else "親衛隊レベルを設定する人をメンションしてね。"
-            await send_myu(message, user_id, msg, speak=False)
+            await send_myu(message, user_id, msg)
             return
         if content_body in ["好感度編集", "edit affection"]:
             admin_data_mode.discard(user_id)
             waiting_for_affection_edit[user_id] = {"step": "mention"}
             msg = "Mention the user." if lang=="en" else "好感度XPを編集するユーザーをメンションしてね。"
-            await send_myu(message, user_id, msg, speak=False)
+            await send_myu(message, user_id, msg)
             return
         if content_body in ["メッセージ制限編集", "edit msg limit"]:
             admin_data_mode.discard(user_id)
             waiting_for_msg_limit[user_id] = {"step": "mention"}
             msg = "Mention the user." if lang=="en" else "メッセージ制限を設定する人をメンションしてね。"
-            await send_myu(message, user_id, msg, speak=False)
+            await send_myu(message, user_id, msg)
             return
         if content_body in ["メッセージ制限bypass編集", "edit bypass"]:
             if not is_main_admin:
                 msg = "Main Admin only." if lang=="en" else "ごめんなさい、それはメイン管理者だけの権限よ。"
-                await send_myu(message, user_id, msg, speak=False)
+                await send_myu(message, user_id, msg)
                 return
             admin_data_mode.discard(user_id)
             waiting_for_bypass_edit.add(user_id)
             msg = "`Add` or `Remove`?" if lang=="en" else "制限無視(bypass)リストに「追加」する？「削除」する？"
-            await send_myu(message, user_id, msg, speak=False)
+            await send_myu(message, user_id, msg)
             return
         if content_body.startswith("好感度XP追加") or content_body.startswith("add affection xp"):
             if not is_main_admin:
-                await send_myu(message, user_id, "Main Admin only." if lang=="en" else "ごめんなさい、それはメイン管理者だけの権限よ。", speak=False)
+                await send_myu(message, user_id, "Main Admin only." if lang=="en" else "ごめんなさい、それはメイン管理者だけの権限よ。")
                 return
             m = re.search(r"(?:好感度XP追加|add affection xp)\s+<@!?(\d+)>\s+(-?\d+)", content_body, re.IGNORECASE)
             if m:
@@ -1076,11 +1400,11 @@ async def on_message(message):
                 unlocks = logic.check_all_achievements(tid)
                 msg = f"Added {val} XP to <@{tid}>." if lang=="en" else f"<@{tid}> に {val} XPを追加（または減少）したわ♪"
                 if unlocks: msg += "\n" + "\n".join(unlocks)
-                await send_myu(message, user_id, msg, speak=False)
+                await send_myu(message, user_id, msg)
             return
         if content_body.startswith("じゃんけん勝利数追加") or content_body.startswith("add rps wins"):
             if not is_main_admin:
-                await send_myu(message, user_id, "Main Admin only." if lang=="en" else "ごめんなさい、それはメイン管理者だけの権限よ。", speak=False)
+                await send_myu(message, user_id, "Main Admin only." if lang=="en" else "ごめんなさい、それはメイン管理者だけの権限よ。")
                 return
             m = re.search(r"(?:じゃんけん勝利数追加|add rps wins)\s+<@!?(\d+)>\s+(\d+)", content_body, re.IGNORECASE)
             if m:
@@ -1090,23 +1414,23 @@ async def on_message(message):
                 unlocks = logic.check_all_achievements(tid)
                 msg = f"Added {val} wins to <@{tid}>." if lang=="en" else f"<@{tid}> の勝利数を {val} 増やしたわ。"
                 if unlocks: msg += "\n" + "\n".join(unlocks)
-                await send_myu(message, user_id, msg, speak=False)
+                await send_myu(message, user_id, msg)
             return
         if content_body in ["変身解放状況確認", "check unlocks"]:
             if not is_main_admin:
-                await send_myu(message, user_id, "Main Admin only." if lang=="en" else "ごめんなさい、それはメイン管理者だけの権限よ。", speak=False)
+                await send_myu(message, user_id, "Main Admin only." if lang=="en" else "ごめんなさい、それはメイン管理者だけの権限よ。")
                 return
             status_list = db.get_all_special_status()
             if not status_list:
                 msg = "No one has unlocked anything yet." if lang=="en" else "まだ特別な解放をしている人はいないみたい。"
-                await send_myu(message, user_id, msg, speak=False)
+                await send_myu(message, user_id, msg)
             else:
                 msg = "\n".join(status_list)
-                await send_myu(message, user_id, f"【Unlock Status】\n{msg}", speak=False)
+                await send_myu(message, user_id, f"【Unlock Status】\n{msg}")
             return
         if content_body in ["好感度一覧", "affection list"]:
             text = logic.format_all_affection_status(message.guild)
-            await send_myu(message, user_id, text, speak=False)
+            await send_myu(message, user_id, text)
             return
         if content_body in ["変身管理", "transform manager"]:
             forms_data = get_all_forms()
@@ -1114,12 +1438,12 @@ async def on_message(message):
             for uid, key in forms_data.items():
                 dname = get_form_display_name(key)
                 lines.append(f"<@{uid}>: {dname} ({key})")
-            await send_myu(message, user_id, "\n".join(lines), speak=False)
+            await send_myu(message, user_id, "\n".join(lines))
             return
         
         menu = ADMIN_COMMANDS_LIST_EN if lang == "en" else ADMIN_COMMANDS_LIST_JP
         msg = "Waiting for command...♪" if lang=="en" else "コマンドを待ってるわ。何をすればいいかしら？♪"
-        await send_myu(message, user_id, f"{menu}\n\n{msg}", speak=False)
+        await send_myu(message, user_id, f"{menu}\n\n{msg}")
         return
 
     if user_id in waiting_for_bypass_edit:
@@ -1127,7 +1451,7 @@ async def on_message(message):
             waiting_for_bypass_edit.discard(user_id)
             admin_data_mode.add(user_id)
             msg = "Cancelled." if lang=="en" else "中止したわ。"
-            await send_myu(message, user_id, msg, speak=False)
+            await send_myu(message, user_id, msg)
             return
         m = re.match(r"(追加|削除|add|remove)\s+<@!?(\d+)>", content_body, re.IGNORECASE)
         if m:
@@ -1140,10 +1464,10 @@ async def on_message(message):
                 msg = f"Removed <@{tid}> from bypass list." if lang=="en" else f"<@{tid}> をBypassリストから削除したわ。"
             waiting_for_bypass_edit.discard(user_id)
             admin_data_mode.add(user_id)
-            await send_myu(message, user_id, msg, speak=False)
+            await send_myu(message, user_id, msg)
         else:
             msg = "Format: `Add @user` or `Remove @user`." if lang=="en" else "書式が違うみたい。\n`追加 @ユーザー` または `削除 @ユーザー` と入力してね。"
-            await send_myu(message, user_id, msg, speak=False)
+            await send_myu(message, user_id, msg)
         return
 
     if user_id in waiting_for_admin_add:
@@ -1153,14 +1477,14 @@ async def on_message(message):
             waiting_for_admin_add.discard(user_id)
             admin_data_mode.add(user_id)
             msg = f"Added {target.mention} as admin." if lang=="en" else f"{target.mention} を管理者に追加したわ。"
-            await send_myu(message, user_id, msg, speak=False)
+            await send_myu(message, user_id, msg)
         elif content_body in ["中止", "cancel"]:
             waiting_for_admin_add.discard(user_id)
             admin_data_mode.add(user_id)
-            await send_myu(message, user_id, "Cancelled.", speak=False)
+            await send_myu(message, user_id, "Cancelled.")
         else:
             msg = "Mention the user (or `Cancel`)." if lang=="en" else "ユーザーをメンションしてね。（中止なら `中止` と言って）"
-            await send_myu(message, user_id, msg, speak=False)
+            await send_myu(message, user_id, msg)
         return
 
     if user_id in waiting_for_admin_remove:
@@ -1168,19 +1492,19 @@ async def on_message(message):
             target = message.mentions[0]
             if db.remove_admin(target.id):
                 msg = f"Removed {target.mention} from admin." if lang=="en" else f"{target.mention} を管理者から外したわ。"
-                await send_myu(message, user_id, msg, speak=False)
+                await send_myu(message, user_id, msg)
             else:
                 msg = "Could not remove." if lang=="en" else "その人は管理者じゃないか、削除できない人みたい。"
-                await send_myu(message, user_id, msg, speak=False)
+                await send_myu(message, user_id, msg)
             waiting_for_admin_remove.discard(user_id)
             admin_data_mode.add(user_id)
         elif content_body in ["中止", "cancel"]:
             waiting_for_admin_remove.discard(user_id)
             admin_data_mode.add(user_id)
-            await send_myu(message, user_id, "Cancelled.", speak=False)
+            await send_myu(message, user_id, "Cancelled.")
         else:
             msg = "Mention the user (or `Cancel`)." if lang=="en" else "ユーザーをメンションしてね。（中止なら `中止` と言って）"
-            await send_myu(message, user_id, msg, speak=False)
+            await send_myu(message, user_id, msg)
         return
 
     if user_id in waiting_for_guardian_level:
@@ -1190,13 +1514,13 @@ async def on_message(message):
                 step_data["target_id"] = message.mentions[0].id
                 step_data["step"] = "level"
                 msg = "Enter level (0 to delete)." if lang=="en" else "設定するレベルを数値で教えて。（削除なら 0）"
-                await send_myu(message, user_id, msg, speak=False)
+                await send_myu(message, user_id, msg)
             elif content_body in ["中止", "cancel"]:
                 del waiting_for_guardian_level[user_id]
                 admin_data_mode.add(user_id)
             else:
                 msg = "Mention the user." if lang=="en" else "ユーザーをメンションしてね。"
-                await send_myu(message, user_id, msg, speak=False)
+                await send_myu(message, user_id, msg)
         elif step_data["step"] == "level":
             try:
                 lv = int(content_body)
@@ -1209,11 +1533,11 @@ async def on_message(message):
                     unlocks = logic.check_all_achievements(tid)
                     msg = f"Set <@{tid}> to Guardian Lv.{lv}." if lang=="en" else f"<@{tid}> を親衛隊レベル {lv} に設定したわ。"
                     if unlocks: msg += "\n" + "\n".join(unlocks)
-                await send_myu(message, user_id, msg, speak=False)
+                await send_myu(message, user_id, msg)
                 del waiting_for_guardian_level[user_id]
                 admin_data_mode.add(user_id)
             except ValueError:
-                await send_myu(message, user_id, "Number please." if lang=="en" else "数値を入力してね。", speak=False)
+                await send_myu(message, user_id, "Number please." if lang=="en" else "数値を入力してね。")
         return
 
     if user_id in waiting_for_affection_edit:
@@ -1223,12 +1547,12 @@ async def on_message(message):
                 step_data["target_id"] = message.mentions[0].id
                 step_data["step"] = "xp"
                 msg = "Enter total XP." if lang=="en" else "設定する『累計XP』を数値で入力してね。"
-                await send_myu(message, user_id, msg, speak=False)
+                await send_myu(message, user_id, msg)
             elif content_body in ["中止", "cancel"]:
                 del waiting_for_affection_edit[user_id]
                 admin_data_mode.add(user_id)
             else:
-                await send_myu(message, user_id, "Mention the user." if lang=="en" else "ユーザーをメンションしてね。", speak=False)
+                await send_myu(message, user_id, "Mention the user." if lang=="en" else "ユーザーをメンションしてね。")
         elif step_data["step"] == "xp":
             try:
                 val = int(content_body)
@@ -1240,11 +1564,11 @@ async def on_message(message):
                 db.save_affection_data(data)
                 _, new_lvl = logic.get_user_affection(tid)
                 msg = f"Set <@{tid}> affection XP to {val} (Lv.{new_lvl})." if lang=="en" else f"<@{tid}> の好感度XPを {val} (Lv.{new_lvl}) に設定したわ。"
-                await send_myu(message, user_id, msg, speak=False)
+                await send_myu(message, user_id, msg)
                 del waiting_for_affection_edit[user_id]
                 admin_data_mode.add(user_id)
             except ValueError:
-                await send_myu(message, user_id, "Number please." if lang=="en" else "数値を入力してね。", speak=False)
+                await send_myu(message, user_id, "Number please." if lang=="en" else "数値を入力してね。")
         return
 
     if user_id in waiting_for_msg_limit:
@@ -1254,12 +1578,12 @@ async def on_message(message):
                 step_data["target_id"] = message.mentions[0].id
                 step_data["step"] = "limit"
                 msg = "Enter limit (0 to delete)." if lang=="en" else "1日のメッセージ制限回数を数値で教えて。（制限解除なら 0）"
-                await send_myu(message, user_id, msg, speak=False)
+                await send_myu(message, user_id, msg)
             elif content_body in ["中止", "cancel"]:
                 del waiting_for_msg_limit[user_id]
                 admin_data_mode.add(user_id)
             else:
-                await send_myu(message, user_id, "Mention the user." if lang=="en" else "ユーザーをメンションしてね。", speak=False)
+                await send_myu(message, user_id, "Mention the user." if lang=="en" else "ユーザーをメンションしてね。")
         elif step_data["step"] == "limit":
             try:
                 lim = int(content_body)
@@ -1270,11 +1594,11 @@ async def on_message(message):
                 else:
                     db.set_message_limit(tid, lim)
                     msg = f"Set limit for <@{tid}> to {lim}." if lang=="en" else f"<@{tid}> の制限を {lim} 回に設定したわ。"
-                await send_myu(message, user_id, msg, speak=False)
+                await send_myu(message, user_id, msg)
                 del waiting_for_msg_limit[user_id]
                 admin_data_mode.add(user_id)
             except ValueError:
-                await send_myu(message, user_id, "Number please." if lang=="en" else "数値を入力してね。", speak=False)
+                await send_myu(message, user_id, "Number please." if lang=="en" else "数値を入力してね。")
         return
 
     if any(content_body_lower.startswith(k) for k in ["あだ名登録", "set nickname"]):
@@ -1311,7 +1635,7 @@ async def on_message(message):
         # ★ 手動デバッグ削除コマンド
         if content_body.startswith("デバッグ削除") or content_body.startswith("debug remove"):
             if user_id != PRIMARY_ADMIN_ID:
-                await send_myu(message, user_id, "権限がないわ。", speak=False)
+                await send_myu(message, user_id, "権限がないわ。")
                 return
 
             m = re.search(r"<@!?(\d+)>\s+(\S+)\s+(\d+)", content_body)
@@ -1321,10 +1645,10 @@ async def on_message(message):
                 amount = int(m.group(3))
                 
                 res = logic.debug_manual_remove(user_id, target_id, target_name, amount)
-                await send_myu(message, user_id, res, speak=False)
+                await send_myu(message, user_id, res)
             else:
                 msg = "書式: `デバッグ削除 @ユーザー [キャラ名] [個数]`\n例: `デバッグ削除 @User キュレネ 5`"
-                await send_myu(message, user_id, msg, speak=False)
+                await send_myu(message, user_id, msg)
             return
 
         change_cmd = ["ピックアップ変更", "change pickup"]
@@ -1363,13 +1687,16 @@ async def on_message(message):
 
     if any(k in content_body_lower for k in DAILY_KEYWORDS):
         ok, stones, reason = logic.grant_daily_stones(user_id)
-        msg = f"{reason}\nStones: {stones}" if lang=="en" else f"{reason}\n所持石: {stones}"
+        if lang == "en":
+            msg = f"{reason}\nCurrent Stones: {stones}"
+        else:
+            msg = f"{reason}\n現在の所持石: {stones}"
         await send_myu(message, user_id, msg)
         return
 
     if any(k in content_body_lower for k in TRANS_KEYWORDS) and not any(x in content_body_lower for x in ["state", "状態", "current"]):
         waiting_for_transform_code.add(user_id)
-        msg = "Tell me the transformation code." if lang=="en" else "ふふっ、別の姿になりたいの？ 変身コードを教えてくれるかしら♪"
+        msg = "Tell me the transformation code, darling." if lang=="en" else "ふふっ、別の姿になりたいの？ 変身コードを教えてくれるかしら♪"
         await send_myu(message, user_id, msg)
         return
 
@@ -1528,7 +1855,6 @@ async def on_message(message):
                 except: pass
         return
 
-    # Default cyrene reply processing
     xp, lv = logic.get_user_affection(user_id)
     reply = rs.generate_reply_for_form(current_form, content_body, lv, user_id, name)
     
