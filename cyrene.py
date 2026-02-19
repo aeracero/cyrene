@@ -65,19 +65,23 @@ def load_tts_model():
     print("Loading TTS model (XTTS v2)... This may take a while.")
     try:
         # GPUがない場合はgpu=False
-        tts_model = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=False)
+        # モデルをローカル変数にロードしてからグローバルに代入（原子性を高める）
+        model = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=False)
+        tts_model = model
         print("TTS model loaded successfully.")
     except Exception as e:
         print(f"Failed to load TTS model: {e}")
 
-def unload_tts_model():
+async def unload_tts_model():
     global tts_model
-    if tts_model is not None:
-        print("Unloading TTS model to free RAM...")
-        del tts_model
-        tts_model = None
-        gc.collect()
-        print("TTS model unloaded.")
+    # 生成中なら待ってからアンロード
+    async with TTS_LOCK:
+        if tts_model is not None:
+            print("Unloading TTS model to free RAM...")
+            del tts_model
+            tts_model = None
+            gc.collect()
+            print("TTS model unloaded.")
 
 def load_ai_settings():
     if SETTINGS_FILE.exists():
@@ -206,7 +210,10 @@ class VoiceState:
             self.is_playing = False
 
     async def add_text_to_queue(self, text: str, voice_client, lang: str = "ja"):
-        if not tts_model:
+        # ★修正: グローバル変数をローカルに確保してNoneチェック
+        current_model = tts_model
+        if current_model is None:
+            # ロード中か未ロードの場合はスキップ（エラーを出さない）
             return
 
         # voicesフォルダ内の全ての.wavファイルを取得
@@ -237,8 +244,12 @@ class VoiceState:
         try:
             # ★変更: ロックを使用して同時に複数の生成が走らないようにする
             async with TTS_LOCK:
+                # ロック待ち中にモデルがアンロードされた場合の対策
+                if tts_model is None:
+                    return
+
                 func = functools.partial(
-                    tts_model.tts_to_file,
+                    current_model.tts_to_file,
                     text=clean_text,
                     file_path=str(output_path),
                     speaker_wav=speaker_wav_paths, 
@@ -270,9 +281,8 @@ else:
     genai_client = None
     print("Warning: GEMINI_API_KEY is missing in config.py")
 
-# ★変更: 速度優先のため Flash モデルを指定 (旧: gemini-3-pro-preview)
-# ※ Flash 3 という名前のモデルは現状APIにないため、最新のFlashモデルを指定
-GEMINI_MODEL_NAME = "gemini-3-flash-preview" 
+# ★変更: ユーザー指定の Flash モデル
+GEMINI_MODEL_NAME = "gemini-3-flash-preview"
 
 google_search_tool = types.Tool(
     google_search=types.GoogleSearch()
@@ -441,7 +451,7 @@ async def slash_restart(interaction: discord.Interaction):
             try: await vc.disconnect()
             except: pass
     
-    unload_tts_model()
+    await unload_tts_model()
     
     print("Restarting bot via /restart command...")
     await client.close()
@@ -532,7 +542,7 @@ async def slash_leave(interaction: discord.Interaction):
         await interaction.response.send_message(msg)
         
         if len(client.voice_clients) == 0:
-            await client.loop.run_in_executor(None, unload_tts_model)
+            await unload_tts_model()
 
     else:
         msg = "あら？ あたしはまだ接続してないわ。" if lang != "en" else "Oh? I'm not connected yet."
