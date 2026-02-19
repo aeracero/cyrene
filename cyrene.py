@@ -393,7 +393,7 @@ async def get_gemini_reply(message, mode: str) -> str:
 # ★ Slash Commands
 # ──────────────────────────────────────────────
 
-@tree.command(name="join", description="ボイスチャンネルに参加し、読み上げを開始します。")
+@tree.command(name="join", description="ボイスチャンネルに参加し、読み上げを開始するわ。")
 async def slash_join(interaction: discord.Interaction):
     if not interaction.user.voice:
         msg = "You are not in a voice channel." if db.get_user_lang(interaction.user.id) == "en" else "ボイスチャンネルに入っていないみたいよ？"
@@ -414,7 +414,7 @@ async def slash_join(interaction: discord.Interaction):
     
     await interaction.response.send_message(msg)
 
-@tree.command(name="leave", description="ボイスチャンネルから切断します。")
+@tree.command(name="leave", description="ボイスチャンネルから切断するわ。")
 async def slash_leave(interaction: discord.Interaction):
     if interaction.guild.voice_client:
         await interaction.guild.voice_client.disconnect()
@@ -449,7 +449,7 @@ async def slash_language(interaction: discord.Interaction, lang: str):
     user_id = interaction.user.id
     db.set_user_lang(user_id, lang)
     if user_id in gemini_sessions: del gemini_sessions[user_id]
-    msg = "Understood. I will speak to you in English from now on, Darling♪" if lang == "en" else "わかりました。これからは日本語でお話ししますね、あなた♪"
+    msg = "Understood. I will speak to you in English from now on, Darling♪" if lang == "en" else "わかったわ。これからは日本語でお話ししましょう♪"
     await interaction.response.send_message(msg)
 
 @tree.command(name="toggle_memory", description="AIとの会話内容を記憶して学習させるかを切り替えます。")
