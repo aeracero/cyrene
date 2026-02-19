@@ -13,6 +13,11 @@ from google import genai
 from google.genai import types
 
 # ──────────────────────────────────────────────
+# ★ Fix: Auto-agree to Coqui TTS License
+# ──────────────────────────────────────────────
+os.environ["COQUI_TOS_AGREED"] = "1"
+
+# ──────────────────────────────────────────────
 # ★ Coqui TTS Import
 # ──────────────────────────────────────────────
 try:
@@ -930,12 +935,12 @@ async def on_message(message):
 
     if content_lower == "!mode auto":
         db.set_reply_mode(user_id, "auto")
-        msg = f"Got it! I'll reply even without mentions now, {name}!" if lang=="en" else f"了解です♪ これからはメンションなしでもお話しますね、{name}さん！"
+        msg = f"Got it! I'll reply even without mentions now, {name}!" if lang=="en" else f"了解です♪ これからはメンションなしでもお話しするわ、{name}！"
         await message.channel.send(msg)
         return
     if content_lower == "!mode mention":
         db.set_reply_mode(user_id, "mention")
-        msg = f"Okay. I'll only reply when you mention me." if lang=="en" else f"わかりました。これからは呼んでくれた時（メンション）だけお返事しますね。"
+        msg = f"Okay. I'll only reply when you mention me." if lang=="en" else f"わかったわ。これからは呼んでくれた時（メンション）だけお返事するわ。"
         await message.channel.send(msg)
         return
     if content_lower == "!lang en":
@@ -944,7 +949,7 @@ async def on_message(message):
         return
     if content_lower == "!lang jp":
         db.set_user_lang(user_id, "jp")
-        await message.channel.send(f"わかりました、{name}さん！これからは日本語でお話ししますね♪")
+        await message.channel.send(f"わかったわ、{name}！これからは日本語でお話しするわ♪")
         return
 
     is_active_mode = (
@@ -1430,6 +1435,7 @@ async def on_message(message):
             await send_myu(message, user_id, msg)
             return
 
+        # ★ 手動デバッグ削除コマンド
         if content_body.startswith("デバッグ削除") or content_body.startswith("debug remove"):
             if user_id != PRIMARY_ADMIN_ID:
                 await send_myu(message, user_id, "権限がないわ。")
@@ -1484,13 +1490,16 @@ async def on_message(message):
 
     if any(k in content_body_lower for k in DAILY_KEYWORDS):
         ok, stones, reason = logic.grant_daily_stones(user_id)
-        msg = f"{reason}\nStones: {stones}" if lang=="en" else f"{reason}\n所持石: {stones}"
+        if lang == "en":
+            msg = f"{reason}\nCurrent Stones: {stones}"
+        else:
+            msg = f"{reason}\n現在の所持石: {stones}"
         await send_myu(message, user_id, msg)
         return
 
     if any(k in content_body_lower for k in TRANS_KEYWORDS) and not any(x in content_body_lower for x in ["state", "状態", "current"]):
         waiting_for_transform_code.add(user_id)
-        msg = "Tell me the transformation code." if lang=="en" else "ふふっ、別の姿になりたいの？ 変身コードを教えてくれるかしら♪"
+        msg = "Tell me the transformation code, darling." if lang=="en" else "ふふっ、別の姿になりたいの？ 変身コードを教えてくれるかしら♪"
         await send_myu(message, user_id, msg)
         return
 
