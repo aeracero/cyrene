@@ -5,6 +5,7 @@ import asyncio
 import datetime
 import json
 import functools
+import gc  # ★追加: メモリ解放用
 from pathlib import Path
 import discord
 from discord import app_commands
@@ -57,6 +58,8 @@ tts_model = None
 def load_tts_model():
     global tts_model
     if not HAS_TTS: return
+    if tts_model is not None: return # 既に読み込まれていればスキップ
+
     print("Loading TTS model (XTTS v2)... This may take a while.")
     try:
         # GPUがない場合はgpu=False
@@ -64,6 +67,16 @@ def load_tts_model():
         print("TTS model loaded successfully.")
     except Exception as e:
         print(f"Failed to load TTS model: {e}")
+
+# ★追加: モデルをアンロードしてメモリを解放する関数
+def unload_tts_model():
+    global tts_model
+    if tts_model is not None:
+        print("Unloading TTS model to free RAM...")
+        del tts_model
+        tts_model = None
+        gc.collect() # ガベージコレクションを強制実行
+        print("TTS model unloaded.")
 
 def load_ai_settings():
     if SETTINGS_FILE.exists():
@@ -255,7 +268,7 @@ else:
     genai_client = None
     print("Warning: GEMINI_API_KEY is missing in config.py")
 
-GEMINI_MODEL_NAME = "gemini-3-flash-preview"
+GEMINI_MODEL_NAME = "gemini-3-pro-preview"
 google_search_tool = types.Tool(
     google_search=types.GoogleSearch()
 )
@@ -413,10 +426,13 @@ async def get_gemini_reply(message, mode: str) -> str:
     app_commands.Choice(name="Specific User (特定ユーザーのみ)", value="specific")
 ])
 async def slash_join(interaction: discord.Interaction, mode: str = "bot_only", target: discord.Member = None):
+    # ★変更: 読み込み時間がかかるため、先に応答を保留(defer)する
+    await interaction.response.defer()
+
     lang = db.get_user_lang(interaction.user.id)
     if not interaction.user.voice:
         msg = "あら、あなたボイスチャンネルにいないみたいね？ ちゃんと準備してから呼んでちょうだい♪" if lang != "en" else "You aren't in a voice channel? Prepare yourself before calling me, darling♪"
-        await interaction.response.send_message(msg, ephemeral=True)
+        await interaction.followup.send(msg)
         return
 
     channel = interaction.user.voice.channel
@@ -437,15 +453,25 @@ async def slash_join(interaction: discord.Interaction, mode: str = "bot_only", t
     if mode == "everyone": mode_text = "Everyone"
     elif mode == "specific": mode_text = f"Specific User ({target.display_name if target else 'Unknown'})"
 
+    # ★変更: モデルが未ロードならここでロードを開始する
+    loading_msg = ""
+    global tts_model
+    if tts_model is None:
+        loading_text = "（音声回路を接続中... 少し時間がかかるわ、待っていてね♡）" if lang != "en" else "(Loading voice circuits... Wait a moment, darling♡)"
+        await interaction.followup.send(loading_text)
+        try:
+            # 裏側でロード実行
+            await client.loop.run_in_executor(None, load_tts_model)
+        except Exception as e:
+            await interaction.followup.send(f"Error loading voice: {e}")
+            return
+
     if lang == "en":
         msg = f"{action_msg} Let me hear your voice closer, darling♪\n(Mode: **{mode_text}**)"
     else:
         msg = f"{action_msg}\nふふ、あなたの声、もっと近くで聞かせて？\n（現在のモード: **{mode_text}**）"
     
-    if not tts_model:
-        msg += "\n(Note: Voice generation is still preparing...)"
-    
-    await interaction.response.send_message(msg)
+    await interaction.followup.send(msg)
 
 @tree.command(name="voice_settings", description="読み上げ設定を変更します（VC接続中のみ）。")
 @app_commands.describe(mode="読み上げモード", target="特定ユーザーのみ読む場合")
@@ -482,6 +508,11 @@ async def slash_leave(interaction: discord.Interaction):
         await interaction.guild.voice_client.disconnect()
         msg = "わかったわ、切断するわね。……寂しくなったら、またすぐに呼んでいいのよ？" if lang != "en" else "Disconnected. If you get lonely... call me again right away, okay?"
         await interaction.response.send_message(msg)
+        
+        # ★追加: 切断後、他に接続しているVCがなければモデルを解放してRAMを節約
+        if len(client.voice_clients) == 0:
+            await client.loop.run_in_executor(None, unload_tts_model)
+
     else:
         msg = "あら？ あたしはまだ接続してないわ。" if lang != "en" else "Oh? I'm not connected yet."
         await interaction.response.send_message(msg, ephemeral=True)
@@ -755,12 +786,8 @@ async def discount_event_loop():
 async def on_ready():
     print(f"Login: {client.user}")
     
-    # ★修正: モデル読み込みを裏側で行い、Botの接続を止めないようにする
-    # Load TTS on startup (in background)
-    if HAS_TTS and tts_model is None:
-        print("Starting TTS model loading in background...")
-        await client.loop.run_in_executor(None, load_tts_model)
-
+    # ★重要変更: 起動時のモデル読み込みを廃止（メモリ節約のため、/join 時に読み込む）
+    
     try:
         await tree.sync()
         print("Slash commands synced.")
@@ -777,24 +804,19 @@ async def on_message(message):
     # ──────────────────────────────────────────────
     # ★ VC 読み上げロジック (User Messages)
     # ──────────────────────────────────────────────
-    # BotがVCに参加していて、コマンド以外のメッセージで、モードが合致する場合のみ読み上げ
     if message.guild and message.guild.voice_client and message.guild.voice_client.is_connected():
         is_cmd = content.startswith("/") or content.startswith("!")
         if not is_cmd:
             state = get_voice_state(message.guild.id)
             should_read = False
             
-            # モード判定
             if state.mode == "everyone":
-                # 全員モードなら、発言者がVCにいるか確認して読む
                 if message.author.voice and message.author.voice.channel == message.guild.voice_client.channel:
                     should_read = True
             elif state.mode == "specific" and state.target_user_id == user_id:
-                # 特定ユーザーモードならID一致確認
                 should_read = True
 
             if should_read:
-                # ユーザーの言語設定に合わせて読み上げ
                 u_lang = db.get_user_lang(user_id)
                 await state.add_text_to_queue(content, message.guild.voice_client, lang=u_lang)
 
@@ -938,12 +960,12 @@ async def on_message(message):
 
     if content_lower == "!mode auto":
         db.set_reply_mode(user_id, "auto")
-        msg = f"Got it! I'll reply even without mentions now, {name}!" if lang=="en" else f"了解です♪ これからはメンションなしでもお話しするわ、{name}！"
+        msg = f"Got it! I'll reply even without mentions now, {name}!" if lang=="en" else f"了解です♪ これからはメンションなしでもお話しますね、{name}さん！"
         await message.channel.send(msg)
         return
     if content_lower == "!mode mention":
         db.set_reply_mode(user_id, "mention")
-        msg = f"Okay. I'll only reply when you mention me." if lang=="en" else f"わかったわ。これからは呼んでくれた時（メンション）だけお返事するわ。"
+        msg = f"Okay. I'll only reply when you mention me." if lang=="en" else f"わかりました。これからは呼んでくれた時（メンション）だけお返事しますね。"
         await message.channel.send(msg)
         return
     if content_lower == "!lang en":
@@ -952,7 +974,7 @@ async def on_message(message):
         return
     if content_lower == "!lang jp":
         db.set_user_lang(user_id, "jp")
-        await message.channel.send(f"わかったわ、{name}！これからは日本語でお話しするわ♪")
+        await message.channel.send(f"わかりました、{name}さん！これからは日本語でお話ししますね♪")
         return
 
     is_active_mode = (
