@@ -755,8 +755,11 @@ async def discount_event_loop():
 async def on_ready():
     print(f"Login: {client.user}")
     
-    # Load TTS on startup
-    load_tts_model()
+    # ★修正: モデル読み込みを裏側で行い、Botの接続を止めないようにする
+    # Load TTS on startup (in background)
+    if HAS_TTS and tts_model is None:
+        print("Starting TTS model loading in background...")
+        await client.loop.run_in_executor(None, load_tts_model)
 
     try:
         await tree.sync()
