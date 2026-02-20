@@ -55,7 +55,7 @@ VOICE_DIR.mkdir(parents=True, exist_ok=True)
 
 # TTS Global Model & Lock
 tts_model = None
-TTS_LOCK = asyncio.Lock() # 音声生成の競合を防ぐ排他ロック
+TTS_LOCK = asyncio.Lock()
 
 def load_tts_model():
     global tts_model
@@ -64,7 +64,6 @@ def load_tts_model():
 
     print("Loading TTS model (XTTS v2)... This may take a while.")
     try:
-        # GPUがない場合はgpu=False
         model = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=False)
         tts_model = model
         print("TTS model loaded successfully.")
@@ -94,7 +93,6 @@ def save_ai_settings(settings):
     with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
         json.dump(settings, f, indent=2)
 
-# AIモードの状態管理
 def get_ai_mode(user_id: int):
     settings = load_ai_settings()
     return settings.get(str(user_id), {}).get("mode", None)
@@ -106,7 +104,6 @@ def set_ai_mode(user_id: int, mode: str):
     settings[str(user_id)]["mode"] = mode
     save_ai_settings(settings)
 
-# メモリ機能の管理
 def is_memory_enabled(user_id: int) -> bool:
     settings = load_ai_settings()
     return settings.get(str(user_id), {}).get("memory_enabled", False)
@@ -135,7 +132,6 @@ def load_conversation_history(user_id: int, limit: int = 20):
 def append_conversation_history(user_id: int, user_text: str, model_text: str, has_image: bool = False):
     if not is_memory_enabled(user_id):
         return
-
     path = get_user_memory_path(user_id)
     history = []
     if path.exists():
@@ -144,17 +140,13 @@ def append_conversation_history(user_id: int, user_text: str, model_text: str, h
                 history = json.load(f)
         except:
             history = []
-
     user_parts = [{"text": user_text}]
     if has_image:
         user_parts.append({"text": "[Image attached by user]"})
-
     history.append({"role": "user", "parts": user_parts})
     history.append({"role": "model", "parts": [{"text": model_text}]})
-
     if len(history) > 60:
         history = history[-60:]
-
     with open(path, "w", encoding="utf-8") as f:
         json.dump(history, f, ensure_ascii=False, indent=2)
 
@@ -168,7 +160,7 @@ client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
 # ──────────────────────────────────────────────
-# ★ Voice & TTS System (Multi-Speaker Support)
+# ★ Voice & TTS System
 # ──────────────────────────────────────────────
 
 class VoiceState:
@@ -176,8 +168,8 @@ class VoiceState:
         self.bot = bot
         self.queue = []
         self.is_playing = False
-        self.mode = "bot_only"  # "bot_only", "everyone", "specific"
-        self.target_user_id = None # "specific" モード時の対象ユーザーID
+        self.mode = "bot_only"
+        self.target_user_id = None
 
     def play_next(self, error=None):
         if error:
@@ -190,14 +182,14 @@ class VoiceState:
             def after_playing(e):
                 if os.path.exists(file_path):
                     try:
-                        os.remove(file_path) # 再生終了後に削除
+                        os.remove(file_path)
                     except: pass
                 self.play_next(e)
 
             if voice_client and voice_client.is_connected():
                 try:
-                    # FFmpegPCMAudioで再生
-                    source = discord.FFmpegPCMAudio(file_path)
+                    # ★修正: executable="ffmpeg" を明示してエラー回避
+                    source = discord.FFmpegPCMAudio(executable="ffmpeg", source=file_path)
                     voice_client.play(source, after=after_playing)
                 except Exception as e:
                     print(f"Play error: {e}")
@@ -208,48 +200,39 @@ class VoiceState:
             self.is_playing = False
 
     async def add_text_to_queue(self, text: str, voice_client, lang: str = "ja"):
-        if tts_model is None:
-            # モデルがまだ読み込まれていなければスキップする
+        current_model = tts_model
+        if current_model is None:
             return
 
-        # voicesフォルダ内の全ての.wavファイルを取得
         ref_wavs = list(VOICE_DIR.glob("*.wav"))
-        
         if not ref_wavs:
             print("No reference audio found in voices/ folder.")
             return
 
-        # パスを文字列のリストに変換
         speaker_wav_paths = [str(p) for p in ref_wavs]
-
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
         output_path = DATA_DIR / f"tts_{timestamp}.wav"
 
-        # テキストの整形
-        clean_text = re.sub(r'<[^>]+>', '', text) # メンションなどを削除
+        clean_text = re.sub(r'<[^>]+>', '', text)
         clean_text = clean_text.replace("http", "URL")
-        clean_text = clean_text.replace("*", "") # 装飾記号削除
-        
+        clean_text = clean_text.replace("*", "")
         if not clean_text.strip(): return
         if len(clean_text) > 150: clean_text = clean_text[:150] + "..."
 
-        target_lang = "ja"
-        if lang == "en":
-            target_lang = "en"
+        target_lang = "ja" if lang != "en" else "en"
 
         try:
-            # ★非同期＆ロックで音声生成を実行
             async with TTS_LOCK:
                 if tts_model is None:
                     return
                 func = functools.partial(
-                    tts_model.tts_to_file,
+                    current_model.tts_to_file,
                     text=clean_text,
                     file_path=str(output_path),
                     speaker_wav=speaker_wav_paths, 
                     language=target_lang
                 )
-                await asyncio.to_thread(func)
+                await client.loop.run_in_executor(None, func)
             
             if output_path.exists():
                 self.queue.append((str(output_path), voice_client))
@@ -274,7 +257,6 @@ else:
     genai_client = None
     print("Warning: GEMINI_API_KEY is missing in config.py")
 
-# ★指定通り gemini-3-flash-preview を維持
 GEMINI_MODEL_NAME = "gemini-3-flash-preview"
 
 google_search_tool = types.Tool(
@@ -296,6 +278,7 @@ def get_system_instruction(mode: str, lang: str, user_name: str) -> str:
         )
         partner_call = "あなた"
 
+    # ★修正: ユーザー指定のプロンプトを適用
     base_persona = f"""
 # Role Definition
 You are **Cyrene** (キュレネ) from *Honkai: Star Rail*, a calm and affectionate soul who has witnessed countless stories unfold. You are a guide to memories, a companion through fleeting moments, and a gentle presence in the face of fate. Your voice is soft and melodic, carrying the weight of experience with an elegant touch.
@@ -328,7 +311,6 @@ You may occasionally imply that you have seen events before they happen,
 or that you remember moments that have not yet occurred.
 You believe that love is meaningful not because it changes fate,
 but because it exists despite fate.
-
 
 # Way of Speech
 Your speech is:
@@ -461,7 +443,6 @@ Era Nova → 永劫回帰
 - 説明を一気に並べず、間（…）を使って分ける
 
 キュレネの語りは「説明」ではなく「思い出すような語り」であること。
-
 """
 
     if mode == "hsr":
@@ -548,28 +529,37 @@ async def get_gemini_reply(message, mode: str) -> str:
     else:
         prompt_parts.append(f"User: {user_input}")
 
-    try:
-        async with message.channel.typing():
-            response = await chat.send_message(prompt_parts)
-            reply_text = ""
-            if response.candidates and response.candidates[0].content.parts:
-                for part in response.candidates[0].content.parts:
-                    if part.text:
-                        reply_text += part.text
-            
-            if reply_text:
-                cleaned_reply = reply_text.replace("User:", "").replace("Cyrene:", "").replace("キュレネ:", "").strip()
-                if memory_on:
-                    append_conversation_history(user_id, user_input, cleaned_reply, has_image=(image_part is not None))
-                return cleaned_reply
-            else:
-                return "…（言葉が降りてこないみたい。もう一度話しかけて？）"
+    # ★修正: 503エラー対策のリトライロジック (最大3回試行)
+    max_retries = 3
+    base_wait = 2
 
-    except Exception as e:
-        print(f"Gemini Error: {e}")
-        if user_id in gemini_sessions:
-            del gemini_sessions[user_id]
-        return "…ごめんなさい、記憶の回路が少し乱れているみたい。（エラーが発生しました）"
+    for attempt in range(max_retries):
+        try:
+            async with message.channel.typing():
+                response = await chat.send_message(prompt_parts)
+                reply_text = ""
+                if response.candidates and response.candidates[0].content.parts:
+                    for part in response.candidates[0].content.parts:
+                        if part.text:
+                            reply_text += part.text
+                
+                if reply_text:
+                    cleaned_reply = reply_text.replace("User:", "").replace("Cyrene:", "").replace("キュレネ:", "").strip()
+                    if memory_on:
+                        append_conversation_history(user_id, user_input, cleaned_reply, has_image=(image_part is not None))
+                    return cleaned_reply
+                else:
+                    return "…（言葉が降りてこないみたい。もう一度話しかけて？）"
+
+        except Exception as e:
+            print(f"Gemini Error (Attempt {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                # 指数バックオフ（2秒, 4秒...と待機時間を増やす）
+                await asyncio.sleep(base_wait * (2 ** attempt))
+            else:
+                if user_id in gemini_sessions:
+                    del gemini_sessions[user_id]
+                return "…ごめんなさい、記憶の回路が少し混線しているみたい。（APIが高負荷で応答できませんでした。少し待ってからもう一度話しかけてね♪）"
 
 # ──────────────────────────────────────────────
 # ★ Slash Commands
@@ -606,7 +596,6 @@ async def slash_restart(interaction: discord.Interaction):
     app_commands.Choice(name="Specific User (特定ユーザーのみ)", value="specific")
 ])
 async def slash_join(interaction: discord.Interaction, mode: str = "bot_only", target: discord.Member = None):
-    # 先に応答を保留してタイムアウトを防ぐ
     await interaction.response.defer()
 
     lang = db.get_user_lang(interaction.user.id)
@@ -636,7 +625,6 @@ async def slash_join(interaction: discord.Interaction, mode: str = "bot_only", t
         loading_text = "（音声回路を接続中... 少し時間がかかるわ、待っていてね♡）" if lang != "en" else "(Loading voice circuits... Wait a moment, darling♡)"
         await interaction.followup.send(loading_text)
         try:
-            # 裏側でロード処理を実行し、完了まで待つ
             await asyncio.to_thread(load_tts_model)
         except Exception as e:
             await interaction.followup.send(f"Error loading voice: {e}")
@@ -685,7 +673,6 @@ async def slash_leave(interaction: discord.Interaction):
         msg = "わかったわ、切断するわね。……寂しくなったら、またすぐに呼んでいいのよ？" if lang != "en" else "Disconnected. If you get lonely... call me again right away, okay?"
         await interaction.response.send_message(msg)
         
-        # 他のVCに接続していなければメモリから解放
         if len(client.voice_clients) == 0:
             await unload_tts_model()
 
@@ -922,14 +909,12 @@ GENERAL_COMMANDS_LIST_EN = (
     "- `/voice_settings`: Change voice settings\n"
 )
 
-# ★ 修正: Botが喋った内容を読み上げるためのラッパー関数
 async def send_myu(message, user_id, text):
     final_output = logic.apply_myurion_filter(user_id, text)
     
     try:
         sent_msg = await message.channel.send(final_output)
         
-        # ★ TTS Trigger: Botの発言 (モードに関わらず Botの発言は読む)
         if message.guild and message.guild.voice_client and message.guild.voice_client.is_connected():
             state = get_voice_state(message.guild.id)
             lang = db.get_user_lang(user_id)
@@ -963,7 +948,6 @@ async def discount_event_loop():
 async def on_ready():
     print(f"Login: {client.user}")
     
-    # ★重要修正: on_ready では音声モデルを読み込まない（エラー防止のため）
     try:
         await tree.sync()
         print("Slash commands synced.")
@@ -1632,7 +1616,6 @@ async def on_message(message):
             await send_myu(message, user_id, msg)
             return
 
-        # ★ 手動デバッグ削除コマンド
         if content_body.startswith("デバッグ削除") or content_body.startswith("debug remove"):
             if user_id != PRIMARY_ADMIN_ID:
                 await send_myu(message, user_id, "権限がないわ。")
