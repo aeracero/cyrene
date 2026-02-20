@@ -1,6 +1,6 @@
 [phases.setup]
-# システムパッケージのインストール (Python本体は runtime.txt で指定されるためここには書かない)
-nixPkgs = ["ffmpeg", "espeak-ng", "git", "gcc", "g++"]
+# nixPkgs を aptPkgs に変更して、標準パスに確実にインストールさせる
+aptPkgs = ["ffmpeg", "espeak-ng", "git", "gcc", "g++"]
 
 [start]
 cmd = "python cyrene.py"
