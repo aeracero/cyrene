@@ -8,7 +8,6 @@ import shutil
 import time
 import traceback
 import ctypes
-import glob
 from pathlib import Path
 import discord
 
@@ -36,53 +35,31 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 VOICE_DIR.mkdir(parents=True, exist_ok=True)
 
 # ──────────────────────────────────────────────
-# ★ Opus Loader (最強のNixpacks対応版)
+# ★ Opus Loader (Docker Standard)
 # ──────────────────────────────────────────────
 def init_opus():
-    if discord.opus.is_loaded():
-        return
-
-    import ctypes.util
-    print("[System Log] Attempting to load Opus library...")
-    
-    # 標準的なパスのリスト
-    paths = [
-        ctypes.util.find_library('opus'),
-        'libopus.so.0',
-        'libopus.so',
-        '/usr/lib/x86_64-linux-gnu/libopus.so.0',
-        '/usr/lib/x86_64-linux-gnu/libopus.so',
-        '/usr/lib/libopus.so.0',
-        '/usr/lib/libopus.so'
-    ]
-    
-    # ★追加: NixOS / Nixpacks の /nix/store/ 内の隠しフォルダから直接 .so ファイルを探し出す
-    nix_opus_paths = glob.glob('/nix/store/*/lib/libopus.so*')
-    paths.extend(nix_opus_paths)
-
-    for p in paths:
-        if p:
-            try:
-                discord.opus.load_opus(p)
-                if discord.opus.is_loaded():
-                    print(f"[System Log] Successfully loaded Opus from: {p}")
+    if not discord.opus.is_loaded():
+        try:
+            # Docker（Ubuntu環境）なら、この標準パス指定で100%確実にロードできます
+            discord.opus.load_opus('libopus.so.0')
+            print("[System Log] Successfully loaded Opus library (libopus.so.0)")
+        except Exception as e:
+            # 万が一のためのフォールバック
+            import ctypes.util
+            fallback = ctypes.util.find_library('opus')
+            if fallback:
+                try:
+                    discord.opus.load_opus(fallback)
+                    print(f"[System Log] Successfully loaded Opus library from {fallback}")
                     return
-            except Exception:
-                pass
-
-    print("[Player Error] CRITICAL: Opus library could not be loaded! Voice playback WILL fail.")
+                except:
+                    pass
+            print(f"[Player Error] Opus library could not be loaded: {e}")
 
 # ──────────────────────────────────────────────
 # ★ FFmpeg Setup
 # ──────────────────────────────────────────────
 def get_ffmpeg_path():
-    try:
-        import imageio_ffmpeg
-        path = imageio_ffmpeg.get_ffmpeg_exe()
-        if path and os.path.exists(path):
-            return path
-    except ImportError:
-        pass
     return shutil.which("ffmpeg") or "ffmpeg"
 
 # ──────────────────────────────────────────────
@@ -121,7 +98,7 @@ async def unload_tts_model():
                 if torch.cuda.is_available(): torch.cuda.empty_cache()
             except: pass
             
-            # RAMをOSに強制返却（1GB以下を維持）
+            # RAMをOSに強制返却（1GB以下を維持する魔法のコマンド）
             try:
                 libc = ctypes.CDLL("libc.so.6")
                 libc.malloc_trim(0)
