@@ -40,11 +40,9 @@ VOICE_DIR.mkdir(parents=True, exist_ok=True)
 def init_opus():
     if not discord.opus.is_loaded():
         try:
-            # Docker（Ubuntu環境）なら、この標準パス指定で100%確実にロードできます
             discord.opus.load_opus('libopus.so.0')
             print("[System Log] Successfully loaded Opus library (libopus.so.0)")
         except Exception as e:
-            # 万が一のためのフォールバック
             import ctypes.util
             fallback = ctypes.util.find_library('opus')
             if fallback:
@@ -52,8 +50,7 @@ def init_opus():
                     discord.opus.load_opus(fallback)
                     print(f"[System Log] Successfully loaded Opus library from {fallback}")
                     return
-                except:
-                    pass
+                except: pass
             print(f"[Player Error] Opus library could not be loaded: {e}")
 
 # ──────────────────────────────────────────────
@@ -98,7 +95,6 @@ async def unload_tts_model():
                 if torch.cuda.is_available(): torch.cuda.empty_cache()
             except: pass
             
-            # RAMをOSに強制返却（1GB以下を維持する魔法のコマンド）
             try:
                 libc = ctypes.CDLL("libc.so.6")
                 libc.malloc_trim(0)
@@ -154,27 +150,36 @@ class VoiceState:
         ref_wavs = list(VOICE_DIR.glob("*.wav"))
         if not ref_wavs: return
 
-        speaker_wav_paths = [str(p) for p in ref_wavs][:2]
+        # ★修正: リストをソートし、常に「一番最初のファイル1つだけ」を使うことで声を固定化・安定させる
+        ref_wavs.sort()
+        speaker_wav_path = str(ref_wavs[0])
+        print(f"[TTS Log] Using single reference audio for stable cloning: {speaker_wav_path}")
+
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
         output_path = DATA_DIR / f"tts_{timestamp}.wav"
 
-        clean_text = re.sub(r'<[^>]+>', '', text)
-        clean_text = clean_text.replace("http", "URL").replace("*", "")
+        # ★追加: XTTSを破壊する厄介な記号を徹底的に掃除するフィルター
+        clean_text = re.sub(r'<[^>]+>', '', text) # タグ除去
+        clean_text = re.sub(r'[♪♡♥❤♫♬♩*＊_]', '', clean_text) # 音符やハートなどの記号を消去
+        clean_text = clean_text.replace("〜", "ー").replace("~", "ー") # 波線を伸ばし棒に変換
+        clean_text = clean_text.replace("\n", "。").replace("http", "URL") # 改行を句点に
+        
         if not clean_text.strip(): return
         if len(clean_text) > 150: clean_text = clean_text[:150] + "..."
 
-        target_lang = "ja" if lang != "en" else "en"
+        target_lang = "ja" if lang in ["jp", "ja"] else "en"
 
         try:
             async with TTS_LOCK:
                 if tts_model is None: return
                 
                 start_time = time.time()
+                # speaker_wav には単一のファイルパスを渡す
                 func = functools.partial(
                     current_model.tts_to_file,
                     text=clean_text,
                     file_path=str(output_path),
-                    speaker_wav=speaker_wav_paths, 
+                    speaker_wav=speaker_wav_path, 
                     language=target_lang
                 )
                 loop = asyncio.get_running_loop()
