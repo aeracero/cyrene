@@ -1,5 +1,0 @@
-[phases.setup]
-nixPkgs = ["ffmpeg", "espeak-ng", "git", "gcc", "g++", "libopus"]
-
-[start]
-cmd = "python cyrene.py"
