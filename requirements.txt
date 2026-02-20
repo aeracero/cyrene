@@ -9,3 +9,4 @@ TTS
 cutlet
 fugashi
 unidic-lite
+imageio-ffmpeg

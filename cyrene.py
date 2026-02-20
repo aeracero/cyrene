@@ -10,6 +10,7 @@ import sys
 import shutil
 import time
 import traceback
+import ctypes # ★追加: OSレベルのメモリ解放用
 from pathlib import Path
 
 import discord
@@ -29,7 +30,6 @@ os.environ["COQUI_TOS_AGREED"] = "1"
 try:
     from TTS.api import TTS
     import torch
-    # ★追加: CPU推論時のスレッド数を適度に制限し、コンテキストスイッチのオーバーヘッドを減らして高速化
     torch.set_num_threads(4) 
     HAS_TTS = True
     print("[System] TTS library and Torch imported.")
@@ -55,7 +55,6 @@ import cthulhu_game
 DATA_DIR = Path("/data") if os.path.exists("/data") else Path("./data")
 MEMORY_DIR = DATA_DIR / "user_memories"
 SETTINGS_FILE = DATA_DIR / "ai_settings.json"
-# ★修正: スクリプトのディレクトリを基準にして安全にパスを取得
 VOICE_DIR = Path(__file__).parent / "voices" 
 
 MEMORY_DIR.mkdir(parents=True, exist_ok=True)
@@ -72,7 +71,6 @@ def load_tts_model():
 
     print("[TTS Log] Loading TTS model (XTTS v2)... This will take a moment and use RAM.")
     try:
-        # gpu=False のままでも、Torch側でスレッド最適化済み
         model = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=False)
         tts_model = model
         print("[TTS Log] TTS model loaded successfully.")
@@ -85,10 +83,14 @@ async def unload_tts_model():
     async with TTS_LOCK:
         if tts_model is not None:
             print("[System Log] Unloading TTS model to free RAM...")
+            try:
+                del tts_model.synthesizer
+            except:
+                pass
             del tts_model
             tts_model = None
             
-            # ★追加: ゴミ集めを強制実行し、PyTorchの内部キャッシュもクリアしてRAM使用量を激減させる
+            # 1. Pythonのガベージコレクションを強制
             gc.collect()
             try:
                 import torch
@@ -96,7 +98,16 @@ async def unload_tts_model():
                     torch.cuda.empty_cache()
             except:
                 pass
-            print("[System Log] TTS model unloaded. RAM should now be freed.")
+            
+            # 2. ★追加: Pythonが抱え込んでいるメモリをOSに強制返却する（Railway環境等で極めて有効）
+            try:
+                libc = ctypes.CDLL("libc.so.6")
+                libc.malloc_trim(0)
+                print("[System Log] malloc_trim(0) executed. Python returned RAM back to OS.")
+            except Exception as e:
+                print(f"[System Log] malloc_trim not supported or failed: {e}")
+
+            print("[System Log] TTS model unloaded. RAM should now be well below 1GB.")
 
 def load_ai_settings():
     if SETTINGS_FILE.exists():
@@ -169,6 +180,21 @@ def append_conversation_history(user_id: int, user_text: str, model_text: str, h
         json.dump(history, f, ensure_ascii=False, indent=2)
 
 # ──────────────────────────────────────────────
+# ★ FFmpeg Setup
+# ──────────────────────────────────────────────
+def get_ffmpeg_path():
+    # 1. imageio-ffmpegによる確実なバイナリ取得を試みる
+    try:
+        import imageio_ffmpeg
+        path = imageio_ffmpeg.get_ffmpeg_exe()
+        if path and os.path.exists(path):
+            return path
+    except ImportError:
+        pass
+    # 2. 失敗した場合はシステムのffmpegを探す
+    return shutil.which("ffmpeg") or "ffmpeg"
+
+# ──────────────────────────────────────────────
 # ★ Discord Client Setup
 # ──────────────────────────────────────────────
 intents = discord.Intents.default()
@@ -213,8 +239,9 @@ class VoiceState:
 
             if voice_client and voice_client.is_connected():
                 try:
-                    ffmpeg_executable = shutil.which("ffmpeg") or "ffmpeg"
-                    print(f"[Player Log] FFmpeg path: {ffmpeg_executable}")
+                    # ★修正: 絶対に機能するffmpegパス取得関数を使用
+                    ffmpeg_executable = get_ffmpeg_path()
+                    print(f"[Player Log] Using FFmpeg path: {ffmpeg_executable}")
                     source = discord.FFmpegPCMAudio(executable=ffmpeg_executable, source=file_path)
                     print("[Player Log] Starting voice_client.play()...")
                     voice_client.play(source, after=after_playing)
@@ -239,7 +266,6 @@ class VoiceState:
             print("[TTS Error] No reference audio found in voices/ folder.")
             return
 
-        # ★追加・修正: 参照用音声は最大2ファイルまでに制限し、計算を高速化
         speaker_wav_paths = [str(p) for p in ref_wavs][:2]
         print(f"[TTS Log] Using reference audios for cloning: {speaker_wav_paths}")
 
@@ -712,13 +738,11 @@ async def slash_voice_settings(interaction: discord.Interaction, mode: str, targ
     
     await interaction.response.send_message(msg)
 
-# ★修正: leave時に即座に再生を停止し、完全なメモリ解放を実行する
 @tree.command(name="leave", description="ボイスチャンネルから切断します。")
 async def slash_leave(interaction: discord.Interaction):
     lang = db.get_user_lang(interaction.user.id)
     if interaction.guild.voice_client:
         state = get_voice_state(interaction.guild.id)
-        # キューを空にして再生を即ストップ
         state.queue.clear()
         if interaction.guild.voice_client.is_playing():
             interaction.guild.voice_client.stop()
@@ -727,7 +751,6 @@ async def slash_leave(interaction: discord.Interaction):
         msg = "わかったわ、切断するわね。……寂しくなったら、またすぐに呼んでいいのよ？" if lang != "en" else "Disconnected. If you get lonely... call me again right away, okay?"
         await interaction.response.send_message(msg)
         
-        # ボットがどのVCにも接続していないならメモリを完全に解放する
         if len(client.voice_clients) == 0:
             await unload_tts_model()
 
