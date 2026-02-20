@@ -10,7 +10,7 @@ import sys
 import shutil
 import time
 import traceback
-import ctypes # ★追加: OSレベルのメモリ解放用
+import ctypes 
 from pathlib import Path
 
 import discord
@@ -90,7 +90,6 @@ async def unload_tts_model():
             del tts_model
             tts_model = None
             
-            # 1. Pythonのガベージコレクションを強制
             gc.collect()
             try:
                 import torch
@@ -99,7 +98,6 @@ async def unload_tts_model():
             except:
                 pass
             
-            # 2. ★追加: Pythonが抱え込んでいるメモリをOSに強制返却する（Railway環境等で極めて有効）
             try:
                 libc = ctypes.CDLL("libc.so.6")
                 libc.malloc_trim(0)
@@ -183,7 +181,6 @@ def append_conversation_history(user_id: int, user_text: str, model_text: str, h
 # ★ FFmpeg Setup
 # ──────────────────────────────────────────────
 def get_ffmpeg_path():
-    # 1. imageio-ffmpegによる確実なバイナリ取得を試みる
     try:
         import imageio_ffmpeg
         path = imageio_ffmpeg.get_ffmpeg_exe()
@@ -191,17 +188,40 @@ def get_ffmpeg_path():
             return path
     except ImportError:
         pass
-    # 2. 失敗した場合はシステムのffmpegを探す
     return shutil.which("ffmpeg") or "ffmpeg"
 
 # ──────────────────────────────────────────────
-# ★ Discord Client Setup
+# ★ Discord Client & Opus Setup
 # ──────────────────────────────────────────────
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True 
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
+
+# ★追加: Opus(音声エンコーダ)ライブラリを強制的にロードする処理
+if not discord.opus.is_loaded():
+    import ctypes.util
+    _opus_path = ctypes.util.find_library('opus')
+    if _opus_path:
+        try:
+            discord.opus.load_opus(_opus_path)
+            print(f"[System Log] Loaded Opus library from {_opus_path}")
+        except Exception as e:
+            print(f"[Opus Error] Failed to load from {_opus_path}: {e}")
+    
+    if not discord.opus.is_loaded():
+        for _libname in ['libopus.so.0', 'libopus.so', 'libopus.so.0.8.0']:
+            try:
+                discord.opus.load_opus(_libname)
+                print(f"[System Log] Loaded Opus library: {_libname}")
+                break
+            except:
+                pass
+
+if not discord.opus.is_loaded():
+    print("[Player Error] Failed to load libopus. Voice playback WILL fail. Ensure libopus is installed.")
+
 
 # ──────────────────────────────────────────────
 # ★ Voice & TTS System
@@ -239,7 +259,6 @@ class VoiceState:
 
             if voice_client and voice_client.is_connected():
                 try:
-                    # ★修正: 絶対に機能するffmpegパス取得関数を使用
                     ffmpeg_executable = get_ffmpeg_path()
                     print(f"[Player Log] Using FFmpeg path: {ffmpeg_executable}")
                     source = discord.FFmpegPCMAudio(executable=ffmpeg_executable, source=file_path)
