@@ -191,13 +191,41 @@ def get_ffmpeg_path():
     return shutil.which("ffmpeg") or "ffmpeg"
 
 # ──────────────────────────────────────────────
-# ★ Discord Client Setup
+# ★ Discord Client Setup & Opus Force Load
 # ──────────────────────────────────────────────
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True 
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
+
+# ★絶対確実なOpusライブラリロード処理
+if not discord.opus.is_loaded():
+    import ctypes.util
+    # Railway (Debian/Ubuntu) や Nix で考えられるあらゆるパスを網羅
+    opus_paths = [
+        ctypes.util.find_library('opus'),
+        'libopus.so.0',
+        'libopus.so',
+        '/usr/lib/x86_64-linux-gnu/libopus.so.0',
+        '/usr/lib/x86_64-linux-gnu/libopus.so',
+        '/usr/lib/libopus.so.0',
+        '/usr/lib/libopus.so',
+        '/lib/x86_64-linux-gnu/libopus.so.0'
+    ]
+    
+    for path in opus_paths:
+        if path:
+            try:
+                discord.opus.load_opus(path)
+                print(f"[System Log] Successfully loaded Opus from: {path}")
+                break
+            except Exception:
+                pass
+
+    if not discord.opus.is_loaded():
+        print("[Player Error] CRITICAL: Opus library could not be loaded! Voice playback WILL fail.")
+
 
 # ──────────────────────────────────────────────
 # ★ Voice & TTS System
