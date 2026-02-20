@@ -45,19 +45,20 @@ def init_opus():
     import ctypes.util
     print("[System Log] Attempting to load Opus library...")
     
-    # 検索するパスのリスト（Nix環境の特殊パスを全検索）
+    # 標準的なパスのリスト
     paths = [
         ctypes.util.find_library('opus'),
         'libopus.so.0',
         'libopus.so',
         '/usr/lib/x86_64-linux-gnu/libopus.so.0',
         '/usr/lib/x86_64-linux-gnu/libopus.so',
-        '/usr/lib/libopus.so.0'
+        '/usr/lib/libopus.so.0',
+        '/usr/lib/libopus.so'
     ]
     
-    # Nixのストア内に隠されたlibopusを探し出す
-    paths.extend(glob.glob('/nix/store/*-libopus-*/lib/libopus.so.0'))
-    paths.extend(glob.glob('/nix/store/*-libopus-*/lib/libopus.so'))
+    # ★追加: NixOS / Nixpacks の /nix/store/ 内の隠しフォルダから直接 .so ファイルを探し出す
+    nix_opus_paths = glob.glob('/nix/store/*/lib/libopus.so*')
+    paths.extend(nix_opus_paths)
 
     for p in paths:
         if p:
@@ -120,7 +121,7 @@ async def unload_tts_model():
                 if torch.cuda.is_available(): torch.cuda.empty_cache()
             except: pass
             
-            # RAMをOSに強制返却
+            # RAMをOSに強制返却（1GB以下を維持）
             try:
                 libc = ctypes.CDLL("libc.so.6")
                 libc.malloc_trim(0)
