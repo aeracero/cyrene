@@ -1,5 +1,6 @@
 [phases.setup]
-nixPkgs = ["ffmpeg", "espeak-ng", "git", "gcc", "g++", "libopus"]
+nixPkgs = ["ffmpeg", "espeak-ng", "git", "gcc", "g++"]
+aptPkgs = ["libopus0", "libopus-dev"]
 
 [start]
 cmd = "python cyrene.py"
