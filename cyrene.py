@@ -19,23 +19,9 @@ from discord.ext import tasks
 from google import genai
 from google.genai import types
 
-# ──────────────────────────────────────────────
-# ★ Fix: Auto-agree to Coqui TTS License
-# ──────────────────────────────────────────────
-os.environ["COQUI_TOS_AGREED"] = "1"
-
-# ──────────────────────────────────────────────
-# ★ Coqui TTS Import & Optimization
-# ──────────────────────────────────────────────
-try:
-    from TTS.api import TTS
-    import torch
-    torch.set_num_threads(4) 
-    HAS_TTS = True
-    print("[System] TTS library and Torch imported.")
-except ImportError:
-    HAS_TTS = False
-    print("[System] TTS library not found. Voice features disabled.")
+# ★追加: 新たに作成した音声読み上げモジュールをインポートし、Opusを初期化
+import voice_system as vs
+vs.init_opus()
 
 # 既存のモジュール読み込み
 from config import DISCORD_TOKEN, PRIMARY_ADMIN_ID, GEMINI_API_KEY
@@ -55,57 +41,8 @@ import cthulhu_game
 DATA_DIR = Path("/data") if os.path.exists("/data") else Path("./data")
 MEMORY_DIR = DATA_DIR / "user_memories"
 SETTINGS_FILE = DATA_DIR / "ai_settings.json"
-VOICE_DIR = Path(__file__).parent / "voices" 
 
 MEMORY_DIR.mkdir(parents=True, exist_ok=True)
-VOICE_DIR.mkdir(parents=True, exist_ok=True)
-
-# TTS Global Model & Lock
-tts_model = None
-TTS_LOCK = asyncio.Lock()
-
-def load_tts_model():
-    global tts_model
-    if not HAS_TTS: return
-    if tts_model is not None: return
-
-    print("[TTS Log] Loading TTS model (XTTS v2)... This will take a moment and use RAM.")
-    try:
-        model = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=False)
-        tts_model = model
-        print("[TTS Log] TTS model loaded successfully.")
-    except Exception as e:
-        print(f"[TTS Error] Failed to load TTS model: {e}")
-        traceback.print_exc()
-
-async def unload_tts_model():
-    global tts_model
-    async with TTS_LOCK:
-        if tts_model is not None:
-            print("[System Log] Unloading TTS model to free RAM...")
-            try:
-                del tts_model.synthesizer
-            except:
-                pass
-            del tts_model
-            tts_model = None
-            
-            gc.collect()
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except:
-                pass
-            
-            try:
-                libc = ctypes.CDLL("libc.so.6")
-                libc.malloc_trim(0)
-                print("[System Log] malloc_trim(0) executed. Python returned RAM back to OS.")
-            except Exception as e:
-                print(f"[System Log] malloc_trim not supported or failed: {e}")
-
-            print("[System Log] TTS model unloaded. RAM should now be well below 1GB.")
 
 def load_ai_settings():
     if SETTINGS_FILE.exists():
@@ -178,20 +115,7 @@ def append_conversation_history(user_id: int, user_text: str, model_text: str, h
         json.dump(history, f, ensure_ascii=False, indent=2)
 
 # ──────────────────────────────────────────────
-# ★ FFmpeg Setup
-# ──────────────────────────────────────────────
-def get_ffmpeg_path():
-    try:
-        import imageio_ffmpeg
-        path = imageio_ffmpeg.get_ffmpeg_exe()
-        if path and os.path.exists(path):
-            return path
-    except ImportError:
-        pass
-    return shutil.which("ffmpeg") or "ffmpeg"
-
-# ──────────────────────────────────────────────
-# ★ Discord Client Setup & Opus Force Load
+# ★ Discord Client Setup
 # ──────────────────────────────────────────────
 intents = discord.Intents.default()
 intents.message_content = True
@@ -199,147 +123,6 @@ intents.members = True
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
-# ★絶対確実なOpusライブラリロード処理
-if not discord.opus.is_loaded():
-    import ctypes.util
-    # Railway (Debian/Ubuntu) や Nix で考えられるあらゆるパスを網羅
-    opus_paths = [
-        ctypes.util.find_library('opus'),
-        'libopus.so.0',
-        'libopus.so',
-        '/usr/lib/x86_64-linux-gnu/libopus.so.0',
-        '/usr/lib/x86_64-linux-gnu/libopus.so',
-        '/usr/lib/libopus.so.0',
-        '/usr/lib/libopus.so',
-        '/lib/x86_64-linux-gnu/libopus.so.0'
-    ]
-    
-    for path in opus_paths:
-        if path:
-            try:
-                discord.opus.load_opus(path)
-                print(f"[System Log] Successfully loaded Opus from: {path}")
-                break
-            except Exception:
-                pass
-
-    if not discord.opus.is_loaded():
-        print("[Player Error] CRITICAL: Opus library could not be loaded! Voice playback WILL fail.")
-
-
-# ──────────────────────────────────────────────
-# ★ Voice & TTS System
-# ──────────────────────────────────────────────
-
-class VoiceState:
-    def __init__(self, bot):
-        self.bot = bot
-        self.queue = []
-        self.is_playing = False
-        self.mode = "bot_only"
-        self.target_user_id = None
-        self.read_channel_id = None
-
-    def play_next(self, error=None):
-        if error:
-            print(f"[Player Error] Previous track error: {error}")
-        
-        if self.queue:
-            self.is_playing = True
-            file_path, voice_client = self.queue.pop(0)
-            print(f"[Player Log] Preparing to play file: {file_path}")
-            
-            def after_playing(e):
-                print(f"[Player Log] Finished playing: {file_path}")
-                if e:
-                    print(f"[Player Error] Error during playback: {e}")
-                if os.path.exists(file_path):
-                    try:
-                        os.remove(file_path)
-                        print(f"[Player Log] Deleted temp file: {file_path}")
-                    except Exception as del_err:
-                        print(f"[Player Error] Could not delete {file_path}: {del_err}")
-                self.play_next(e)
-
-            if voice_client and voice_client.is_connected():
-                try:
-                    ffmpeg_executable = get_ffmpeg_path()
-                    print(f"[Player Log] Using FFmpeg path: {ffmpeg_executable}")
-                    source = discord.FFmpegPCMAudio(executable=ffmpeg_executable, source=file_path)
-                    print("[Player Log] Starting voice_client.play()...")
-                    voice_client.play(source, after=after_playing)
-                except Exception as e:
-                    print(f"[Player Error] Exception in play_next: {e}")
-                    traceback.print_exc()
-                    self.play_next(e)
-            else:
-                print("[Player Log] Voice client is no longer connected. Skipping.")
-                self.play_next(None)
-        else:
-            print("[Player Log] Queue is empty. is_playing set to False.")
-            self.is_playing = False
-
-    async def add_text_to_queue(self, text: str, voice_client, lang: str = "ja"):
-        current_model = tts_model
-        if current_model is None:
-            return
-
-        ref_wavs = list(VOICE_DIR.glob("*.wav"))
-        if not ref_wavs:
-            print("[TTS Error] No reference audio found in voices/ folder.")
-            return
-
-        speaker_wav_paths = [str(p) for p in ref_wavs][:2]
-        print(f"[TTS Log] Using reference audios for cloning: {speaker_wav_paths}")
-
-        timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
-        output_path = DATA_DIR / f"tts_{timestamp}.wav"
-
-        clean_text = re.sub(r'<[^>]+>', '', text)
-        clean_text = clean_text.replace("http", "URL")
-        clean_text = clean_text.replace("*", "")
-        if not clean_text.strip(): return
-        if len(clean_text) > 150: clean_text = clean_text[:150] + "..."
-
-        target_lang = "ja" if lang != "en" else "en"
-        print(f"[TTS Log] Starting generation for text: '{clean_text}' (Lang: {target_lang})")
-
-        try:
-            async with TTS_LOCK:
-                if tts_model is None:
-                    print("[TTS Log] Model became None while waiting. Aborting.")
-                    return
-                
-                start_time = time.time()
-                func = functools.partial(
-                    current_model.tts_to_file,
-                    text=clean_text,
-                    file_path=str(output_path),
-                    speaker_wav=speaker_wav_paths, 
-                    language=target_lang
-                )
-                print("[TTS Log] Handing over to executor thread...")
-                await client.loop.run_in_executor(None, func)
-                elapsed = time.time() - start_time
-                print(f"[TTS Log] Generation completed in {elapsed:.2f} seconds.")
-            
-            if output_path.exists():
-                print(f"[TTS Log] File successfully created at {output_path}. Adding to queue.")
-                self.queue.append((str(output_path), voice_client))
-                if not self.is_playing:
-                    self.play_next()
-            else:
-                print(f"[TTS Error] Expected file {output_path} was NOT created by the model.")
-        except Exception as e:
-            print(f"[TTS Error] Exception during TTS generation: {e}")
-            traceback.print_exc()
-
-voice_states = {}
-
-def get_voice_state(guild_id):
-    if guild_id not in voice_states:
-        voice_states[guild_id] = VoiceState(client)
-    return voice_states[guild_id]
 
 # ──────────────────────────────────────────────
 # ★ Gemini AI Setup
@@ -673,7 +456,8 @@ async def slash_restart(interaction: discord.Interaction):
             try: await vc.disconnect()
             except: pass
     
-    await unload_tts_model()
+    # ★修正: vs経由で呼び出し
+    await vs.unload_tts_model()
     
     print("Restarting bot via /restart command...")
     await client.close()
@@ -702,7 +486,8 @@ async def slash_join(interaction: discord.Interaction, mode: str = "bot_only", t
         await channel.connect()
         action_msg = f"**{channel.name}** に接続したわ。" if lang != "en" else f"Connected to **{channel.name}**."
     
-    state = get_voice_state(interaction.guild.id)
+    # ★修正: vs経由で呼び出し
+    state = vs.get_voice_state(client, interaction.guild.id)
     state.mode = mode
     state.target_user_id = target.id if target else None
 
@@ -713,12 +498,12 @@ async def slash_join(interaction: discord.Interaction, mode: str = "bot_only", t
     if mode == "everyone": mode_text = "Everyone"
     elif mode == "specific": mode_text = f"Specific User ({target.display_name if target else 'Unknown'})"
 
-    global tts_model
-    if tts_model is None:
+    # ★修正: vs経由で呼び出し
+    if vs.tts_model is None:
         loading_text = "（音声回路を接続中... 読み込みに少し時間がかかるわ、待っていてね♡）" if lang != "en" else "(Loading voice circuits... Wait a moment, darling♡)"
         await interaction.followup.send(loading_text)
         try:
-            await asyncio.to_thread(load_tts_model)
+            await asyncio.to_thread(vs.load_tts_model)
         except Exception as e:
             await interaction.followup.send(f"Error loading voice: {e}")
             return
@@ -744,7 +529,8 @@ async def slash_voice_settings(interaction: discord.Interaction, mode: str, targ
         await interaction.response.send_message(msg, ephemeral=True)
         return
 
-    state = get_voice_state(interaction.guild.id)
+    # ★修正: vs経由で呼び出し
+    state = vs.get_voice_state(client, interaction.guild.id)
     state.mode = mode
     state.target_user_id = target.id if target else None
     if read_channel:
@@ -765,7 +551,8 @@ async def slash_voice_settings(interaction: discord.Interaction, mode: str, targ
 async def slash_leave(interaction: discord.Interaction):
     lang = db.get_user_lang(interaction.user.id)
     if interaction.guild.voice_client:
-        state = get_voice_state(interaction.guild.id)
+        # ★修正: vs経由で呼び出し
+        state = vs.get_voice_state(client, interaction.guild.id)
         state.queue.clear()
         if interaction.guild.voice_client.is_playing():
             interaction.guild.voice_client.stop()
@@ -775,7 +562,7 @@ async def slash_leave(interaction: discord.Interaction):
         await interaction.response.send_message(msg)
         
         if len(client.voice_clients) == 0:
-            await unload_tts_model()
+            await vs.unload_tts_model() # ★修正
 
     else:
         msg = "あら？ あたしはまだ接続してないわ。" if lang != "en" else "Oh? I'm not connected yet."
@@ -1017,7 +804,8 @@ async def send_myu(message, user_id, text):
         sent_msg = await message.channel.send(final_output)
         
         if message.guild and message.guild.voice_client and message.guild.voice_client.is_connected():
-            state = get_voice_state(message.guild.id)
+            # ★修正: vs経由で呼び出し
+            state = vs.get_voice_state(client, message.guild.id)
             if state.read_channel_id is None or state.read_channel_id == message.channel.id:
                 lang = db.get_user_lang(user_id)
                 await state.add_text_to_queue(final_output, message.guild.voice_client, lang=lang)
@@ -1069,7 +857,8 @@ async def on_message(message):
     if message.guild and message.guild.voice_client and message.guild.voice_client.is_connected():
         is_cmd = content.startswith("/") or content.startswith("!")
         if not is_cmd:
-            state = get_voice_state(message.guild.id)
+            # ★修正: vs経由で呼び出し
+            state = vs.get_voice_state(client, message.guild.id)
             should_read = False
             
             if state.read_channel_id is None or state.read_channel_id == message.channel.id:
