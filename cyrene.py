@@ -7,8 +7,11 @@ import json
 import functools
 import gc
 import sys
-import shutil # ★追加: ffmpegのパスを動的に見つけるため
+import shutil
+import time
+import traceback
 from pathlib import Path
+
 import discord
 from discord import app_commands
 from discord.ext import tasks
@@ -21,15 +24,18 @@ from google.genai import types
 os.environ["COQUI_TOS_AGREED"] = "1"
 
 # ──────────────────────────────────────────────
-# ★ Coqui TTS Import
+# ★ Coqui TTS Import & Optimization
 # ──────────────────────────────────────────────
 try:
     from TTS.api import TTS
+    import torch
+    # ★追加: CPU推論時のスレッド数を適度に制限し、コンテキストスイッチのオーバーヘッドを減らして高速化
+    torch.set_num_threads(4) 
     HAS_TTS = True
-    print("TTS library imported.")
+    print("[System] TTS library and Torch imported.")
 except ImportError:
     HAS_TTS = False
-    print("TTS library not found. Voice features disabled.")
+    print("[System] TTS library not found. Voice features disabled.")
 
 # 既存のモジュール読み込み
 from config import DISCORD_TOKEN, PRIMARY_ADMIN_ID, GEMINI_API_KEY
@@ -49,7 +55,8 @@ import cthulhu_game
 DATA_DIR = Path("/data") if os.path.exists("/data") else Path("./data")
 MEMORY_DIR = DATA_DIR / "user_memories"
 SETTINGS_FILE = DATA_DIR / "ai_settings.json"
-VOICE_DIR = Path("./voices") # 音声ファイル置き場
+# ★修正: スクリプトのディレクトリを基準にして安全にパスを取得
+VOICE_DIR = Path(__file__).parent / "voices" 
 
 MEMORY_DIR.mkdir(parents=True, exist_ok=True)
 VOICE_DIR.mkdir(parents=True, exist_ok=True)
@@ -63,23 +70,33 @@ def load_tts_model():
     if not HAS_TTS: return
     if tts_model is not None: return
 
-    print("Loading TTS model (XTTS v2)... This may take a while.")
+    print("[TTS Log] Loading TTS model (XTTS v2)... This will take a moment and use RAM.")
     try:
+        # gpu=False のままでも、Torch側でスレッド最適化済み
         model = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=False)
         tts_model = model
-        print("TTS model loaded successfully.")
+        print("[TTS Log] TTS model loaded successfully.")
     except Exception as e:
-        print(f"Failed to load TTS model: {e}")
+        print(f"[TTS Error] Failed to load TTS model: {e}")
+        traceback.print_exc()
 
 async def unload_tts_model():
     global tts_model
     async with TTS_LOCK:
         if tts_model is not None:
-            print("Unloading TTS model to free RAM...")
+            print("[System Log] Unloading TTS model to free RAM...")
             del tts_model
             tts_model = None
+            
+            # ★追加: ゴミ集めを強制実行し、PyTorchの内部キャッシュもクリアしてRAM使用量を激減させる
             gc.collect()
-            print("TTS model unloaded.")
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except:
+                pass
+            print("[System Log] TTS model unloaded. RAM should now be freed.")
 
 def load_ai_settings():
     if SETTINGS_FILE.exists():
@@ -171,35 +188,45 @@ class VoiceState:
         self.is_playing = False
         self.mode = "bot_only"
         self.target_user_id = None
-        self.read_channel_id = None # ★追加: 読み上げ対象のテキストチャンネルID
+        self.read_channel_id = None
 
     def play_next(self, error=None):
         if error:
-            print(f"Player error: {error}")
+            print(f"[Player Error] Previous track error: {error}")
         
         if self.queue:
             self.is_playing = True
             file_path, voice_client = self.queue.pop(0)
+            print(f"[Player Log] Preparing to play file: {file_path}")
             
             def after_playing(e):
+                print(f"[Player Log] Finished playing: {file_path}")
+                if e:
+                    print(f"[Player Error] Error during playback: {e}")
                 if os.path.exists(file_path):
                     try:
                         os.remove(file_path)
-                    except: pass
+                        print(f"[Player Log] Deleted temp file: {file_path}")
+                    except Exception as del_err:
+                        print(f"[Player Error] Could not delete {file_path}: {del_err}")
                 self.play_next(e)
 
             if voice_client and voice_client.is_connected():
                 try:
-                    # ★修正: shutilを使ってffmpegのパスを動的に取得する
                     ffmpeg_executable = shutil.which("ffmpeg") or "ffmpeg"
+                    print(f"[Player Log] FFmpeg path: {ffmpeg_executable}")
                     source = discord.FFmpegPCMAudio(executable=ffmpeg_executable, source=file_path)
+                    print("[Player Log] Starting voice_client.play()...")
                     voice_client.play(source, after=after_playing)
                 except Exception as e:
-                    print(f"Play error: {e}")
+                    print(f"[Player Error] Exception in play_next: {e}")
+                    traceback.print_exc()
                     self.play_next(e)
             else:
+                print("[Player Log] Voice client is no longer connected. Skipping.")
                 self.play_next(None)
         else:
+            print("[Player Log] Queue is empty. is_playing set to False.")
             self.is_playing = False
 
     async def add_text_to_queue(self, text: str, voice_client, lang: str = "ja"):
@@ -209,10 +236,13 @@ class VoiceState:
 
         ref_wavs = list(VOICE_DIR.glob("*.wav"))
         if not ref_wavs:
-            print("No reference audio found in voices/ folder.")
+            print("[TTS Error] No reference audio found in voices/ folder.")
             return
 
-        speaker_wav_paths = [str(p) for p in ref_wavs]
+        # ★追加・修正: 参照用音声は最大2ファイルまでに制限し、計算を高速化
+        speaker_wav_paths = [str(p) for p in ref_wavs][:2]
+        print(f"[TTS Log] Using reference audios for cloning: {speaker_wav_paths}")
+
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
         output_path = DATA_DIR / f"tts_{timestamp}.wav"
 
@@ -223,11 +253,15 @@ class VoiceState:
         if len(clean_text) > 150: clean_text = clean_text[:150] + "..."
 
         target_lang = "ja" if lang != "en" else "en"
+        print(f"[TTS Log] Starting generation for text: '{clean_text}' (Lang: {target_lang})")
 
         try:
             async with TTS_LOCK:
                 if tts_model is None:
+                    print("[TTS Log] Model became None while waiting. Aborting.")
                     return
+                
+                start_time = time.time()
                 func = functools.partial(
                     current_model.tts_to_file,
                     text=clean_text,
@@ -235,14 +269,21 @@ class VoiceState:
                     speaker_wav=speaker_wav_paths, 
                     language=target_lang
                 )
+                print("[TTS Log] Handing over to executor thread...")
                 await client.loop.run_in_executor(None, func)
+                elapsed = time.time() - start_time
+                print(f"[TTS Log] Generation completed in {elapsed:.2f} seconds.")
             
             if output_path.exists():
+                print(f"[TTS Log] File successfully created at {output_path}. Adding to queue.")
                 self.queue.append((str(output_path), voice_client))
                 if not self.is_playing:
                     self.play_next()
+            else:
+                print(f"[TTS Error] Expected file {output_path} was NOT created by the model.")
         except Exception as e:
-            print(f"TTS Generation Error: {e}")
+            print(f"[TTS Error] Exception during TTS generation: {e}")
+            traceback.print_exc()
 
 voice_states = {}
 
@@ -588,7 +629,6 @@ async def slash_restart(interaction: discord.Interaction):
     print("Restarting bot via /restart command...")
     await client.close()
 
-# ★修正: 読み上げるテキストチャンネルを指定できるように引数(read_channel)を追加
 @tree.command(name="join", description="ボイスチャンネルに参加し、読み上げを開始します。")
 @app_commands.describe(mode="読み上げモード", target="特定ユーザーのみ読む場合", read_channel="読み上げるテキストチャンネル（指定なしで現在のチャンネル）")
 @app_commands.choices(mode=[
@@ -617,7 +657,6 @@ async def slash_join(interaction: discord.Interaction, mode: str = "bot_only", t
     state.mode = mode
     state.target_user_id = target.id if target else None
 
-    # ★追加: 読み上げ対象のチャンネル設定（指定がなければコマンド実行チャンネル）
     target_text_channel = read_channel if read_channel else interaction.channel
     state.read_channel_id = target_text_channel.id
 
@@ -627,7 +666,7 @@ async def slash_join(interaction: discord.Interaction, mode: str = "bot_only", t
 
     global tts_model
     if tts_model is None:
-        loading_text = "（音声回路を接続中... 少し時間がかかるわ、待っていてね♡）" if lang != "en" else "(Loading voice circuits... Wait a moment, darling♡)"
+        loading_text = "（音声回路を接続中... 読み込みに少し時間がかかるわ、待っていてね♡）" if lang != "en" else "(Loading voice circuits... Wait a moment, darling♡)"
         await interaction.followup.send(loading_text)
         try:
             await asyncio.to_thread(load_tts_model)
@@ -642,7 +681,6 @@ async def slash_join(interaction: discord.Interaction, mode: str = "bot_only", t
     
     await interaction.followup.send(msg)
 
-# ★修正: voice_settingsにも読み上げチャンネルの変更機能を追加
 @tree.command(name="voice_settings", description="読み上げ設定を変更します（VC接続中のみ）。")
 @app_commands.describe(mode="読み上げモード", target="特定ユーザーのみ読む場合", read_channel="読み上げるテキストチャンネル（指定なしで変更なし）")
 @app_commands.choices(mode=[
@@ -674,14 +712,22 @@ async def slash_voice_settings(interaction: discord.Interaction, mode: str, targ
     
     await interaction.response.send_message(msg)
 
+# ★修正: leave時に即座に再生を停止し、完全なメモリ解放を実行する
 @tree.command(name="leave", description="ボイスチャンネルから切断します。")
 async def slash_leave(interaction: discord.Interaction):
     lang = db.get_user_lang(interaction.user.id)
     if interaction.guild.voice_client:
+        state = get_voice_state(interaction.guild.id)
+        # キューを空にして再生を即ストップ
+        state.queue.clear()
+        if interaction.guild.voice_client.is_playing():
+            interaction.guild.voice_client.stop()
+
         await interaction.guild.voice_client.disconnect()
         msg = "わかったわ、切断するわね。……寂しくなったら、またすぐに呼んでいいのよ？" if lang != "en" else "Disconnected. If you get lonely... call me again right away, okay?"
         await interaction.response.send_message(msg)
         
+        # ボットがどのVCにも接続していないならメモリを完全に解放する
         if len(client.voice_clients) == 0:
             await unload_tts_model()
 
@@ -926,7 +972,6 @@ async def send_myu(message, user_id, text):
         
         if message.guild and message.guild.voice_client and message.guild.voice_client.is_connected():
             state = get_voice_state(message.guild.id)
-            # ★追加: Botの発言も、読み上げ設定されたチャンネルと一致している場合のみ読み上げる
             if state.read_channel_id is None or state.read_channel_id == message.channel.id:
                 lang = db.get_user_lang(user_id)
                 await state.add_text_to_queue(final_output, message.guild.voice_client, lang=lang)
@@ -981,7 +1026,6 @@ async def on_message(message):
             state = get_voice_state(message.guild.id)
             should_read = False
             
-            # ★修正: 読み上げ対象のチャンネルでのみ処理を許可する
             if state.read_channel_id is None or state.read_channel_id == message.channel.id:
                 if state.mode == "everyone":
                     if message.author.voice and message.author.voice.channel == message.guild.voice_client.channel:
