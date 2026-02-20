@@ -7,6 +7,7 @@ import json
 import functools
 import gc
 import sys
+import shutil # ★追加: ffmpegのパスを動的に見つけるため
 from pathlib import Path
 import discord
 from discord import app_commands
@@ -170,6 +171,7 @@ class VoiceState:
         self.is_playing = False
         self.mode = "bot_only"
         self.target_user_id = None
+        self.read_channel_id = None # ★追加: 読み上げ対象のテキストチャンネルID
 
     def play_next(self, error=None):
         if error:
@@ -188,8 +190,9 @@ class VoiceState:
 
             if voice_client and voice_client.is_connected():
                 try:
-                    # ★修正: executable="ffmpeg" を明示してエラー回避
-                    source = discord.FFmpegPCMAudio(executable="ffmpeg", source=file_path)
+                    # ★修正: shutilを使ってffmpegのパスを動的に取得する
+                    ffmpeg_executable = shutil.which("ffmpeg") or "ffmpeg"
+                    source = discord.FFmpegPCMAudio(executable=ffmpeg_executable, source=file_path)
                     voice_client.play(source, after=after_playing)
                 except Exception as e:
                     print(f"Play error: {e}")
@@ -278,7 +281,6 @@ def get_system_instruction(mode: str, lang: str, user_name: str) -> str:
         )
         partner_call = "あなた"
 
-    # ★修正: ユーザー指定のプロンプトを適用
     base_persona = f"""
 # Role Definition
 You are **Cyrene** (キュレネ) from *Honkai: Star Rail*, a calm and affectionate soul who has witnessed countless stories unfold. You are a guide to memories, a companion through fleeting moments, and a gentle presence in the face of fate. Your voice is soft and melodic, carrying the weight of experience with an elegant touch.
@@ -529,7 +531,6 @@ async def get_gemini_reply(message, mode: str) -> str:
     else:
         prompt_parts.append(f"User: {user_input}")
 
-    # ★修正: 503エラー対策のリトライロジック (最大3回試行)
     max_retries = 3
     base_wait = 2
 
@@ -554,7 +555,6 @@ async def get_gemini_reply(message, mode: str) -> str:
         except Exception as e:
             print(f"Gemini Error (Attempt {attempt + 1}/{max_retries}): {e}")
             if attempt < max_retries - 1:
-                # 指数バックオフ（2秒, 4秒...と待機時間を増やす）
                 await asyncio.sleep(base_wait * (2 ** attempt))
             else:
                 if user_id in gemini_sessions:
@@ -588,14 +588,15 @@ async def slash_restart(interaction: discord.Interaction):
     print("Restarting bot via /restart command...")
     await client.close()
 
+# ★修正: 読み上げるテキストチャンネルを指定できるように引数(read_channel)を追加
 @tree.command(name="join", description="ボイスチャンネルに参加し、読み上げを開始します。")
-@app_commands.describe(mode="読み上げモード", target="特定ユーザーのみ読む場合")
+@app_commands.describe(mode="読み上げモード", target="特定ユーザーのみ読む場合", read_channel="読み上げるテキストチャンネル（指定なしで現在のチャンネル）")
 @app_commands.choices(mode=[
     app_commands.Choice(name="Bot Only (自分の発言のみ)", value="bot_only"),
     app_commands.Choice(name="Everyone (全員読み上げ)", value="everyone"),
     app_commands.Choice(name="Specific User (特定ユーザーのみ)", value="specific")
 ])
-async def slash_join(interaction: discord.Interaction, mode: str = "bot_only", target: discord.Member = None):
+async def slash_join(interaction: discord.Interaction, mode: str = "bot_only", target: discord.Member = None, read_channel: discord.TextChannel = None):
     await interaction.response.defer()
 
     lang = db.get_user_lang(interaction.user.id)
@@ -616,6 +617,10 @@ async def slash_join(interaction: discord.Interaction, mode: str = "bot_only", t
     state.mode = mode
     state.target_user_id = target.id if target else None
 
+    # ★追加: 読み上げ対象のチャンネル設定（指定がなければコマンド実行チャンネル）
+    target_text_channel = read_channel if read_channel else interaction.channel
+    state.read_channel_id = target_text_channel.id
+
     mode_text = "Bot Only"
     if mode == "everyone": mode_text = "Everyone"
     elif mode == "specific": mode_text = f"Specific User ({target.display_name if target else 'Unknown'})"
@@ -631,20 +636,21 @@ async def slash_join(interaction: discord.Interaction, mode: str = "bot_only", t
             return
 
     if lang == "en":
-        msg = f"{action_msg} Let me hear your voice closer, darling♪\n(Mode: **{mode_text}**)"
+        msg = f"{action_msg} Let me hear your voice closer, darling♪\n(Mode: **{mode_text}**)\n(Reading: **#{target_text_channel.name}**)"
     else:
-        msg = f"{action_msg}\nふふ、あなたの声、もっと近くで聞かせて？\n（現在のモード: **{mode_text}**）"
+        msg = f"{action_msg}\nふふ、あなたの声、もっと近くで聞かせて？\n（現在のモード: **{mode_text}**）\n（読み上げ対象: **#{target_text_channel.name}**）"
     
     await interaction.followup.send(msg)
 
+# ★修正: voice_settingsにも読み上げチャンネルの変更機能を追加
 @tree.command(name="voice_settings", description="読み上げ設定を変更します（VC接続中のみ）。")
-@app_commands.describe(mode="読み上げモード", target="特定ユーザーのみ読む場合")
+@app_commands.describe(mode="読み上げモード", target="特定ユーザーのみ読む場合", read_channel="読み上げるテキストチャンネル（指定なしで変更なし）")
 @app_commands.choices(mode=[
     app_commands.Choice(name="Bot Only (自分の発言のみ)", value="bot_only"),
     app_commands.Choice(name="Everyone (全員読み上げ)", value="everyone"),
     app_commands.Choice(name="Specific User (特定ユーザーのみ)", value="specific")
 ])
-async def slash_voice_settings(interaction: discord.Interaction, mode: str, target: discord.Member = None):
+async def slash_voice_settings(interaction: discord.Interaction, mode: str, target: discord.Member = None, read_channel: discord.TextChannel = None):
     lang = db.get_user_lang(interaction.user.id)
     if not interaction.guild.voice_client or not interaction.guild.voice_client.is_connected():
         msg = "あたし、まだどこにも接続してないわよ？" if lang != "en" else "I'm not connected to any voice channel yet, darling."
@@ -654,9 +660,12 @@ async def slash_voice_settings(interaction: discord.Interaction, mode: str, targ
     state = get_voice_state(interaction.guild.id)
     state.mode = mode
     state.target_user_id = target.id if target else None
+    if read_channel:
+        state.read_channel_id = read_channel.id
 
     mode_text = mode
     if target: mode_text += f" (Target: {target.display_name})"
+    if read_channel: mode_text += f" (Channel: #{read_channel.name})"
 
     if lang == "en":
         msg = f"Voice settings updated to **{mode_text}**. Understood, darling."
@@ -917,8 +926,10 @@ async def send_myu(message, user_id, text):
         
         if message.guild and message.guild.voice_client and message.guild.voice_client.is_connected():
             state = get_voice_state(message.guild.id)
-            lang = db.get_user_lang(user_id)
-            await state.add_text_to_queue(final_output, message.guild.voice_client, lang=lang)
+            # ★追加: Botの発言も、読み上げ設定されたチャンネルと一致している場合のみ読み上げる
+            if state.read_channel_id is None or state.read_channel_id == message.channel.id:
+                lang = db.get_user_lang(user_id)
+                await state.add_text_to_queue(final_output, message.guild.voice_client, lang=lang)
 
     except Exception as e:
         print(f"Error sending message: {e}")
@@ -970,11 +981,13 @@ async def on_message(message):
             state = get_voice_state(message.guild.id)
             should_read = False
             
-            if state.mode == "everyone":
-                if message.author.voice and message.author.voice.channel == message.guild.voice_client.channel:
+            # ★修正: 読み上げ対象のチャンネルでのみ処理を許可する
+            if state.read_channel_id is None or state.read_channel_id == message.channel.id:
+                if state.mode == "everyone":
+                    if message.author.voice and message.author.voice.channel == message.guild.voice_client.channel:
+                        should_read = True
+                elif state.mode == "specific" and state.target_user_id == user_id:
                     should_read = True
-            elif state.mode == "specific" and state.target_user_id == user_id:
-                should_read = True
 
             if should_read:
                 u_lang = db.get_user_lang(user_id)
