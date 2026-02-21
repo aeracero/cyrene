@@ -35,7 +35,7 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 VOICE_DIR.mkdir(parents=True, exist_ok=True)
 
 # ──────────────────────────────────────────────
-# ★ Opus Loader (Docker Standard)
+# ★ Opus Loader
 # ──────────────────────────────────────────────
 def init_opus():
     if not discord.opus.is_loaded():
@@ -48,7 +48,7 @@ def init_opus():
             if fallback:
                 try:
                     discord.opus.load_opus(fallback)
-                    print(f"[System Log] Successfully loaded Opus library from {fallback}")
+                    print(f"[System Log] Successfully loaded Opus from {fallback}")
                     return
                 except: pass
             print(f"[Player Error] Opus library could not be loaded: {e}")
@@ -102,7 +102,7 @@ async def unload_tts_model():
             except: pass
 
 # ──────────────────────────────────────────────
-# ★ VoiceState Manager
+# ★ VoiceState Manager (日本語バグ対策版)
 # ──────────────────────────────────────────────
 class VoiceState:
     def __init__(self, bot):
@@ -148,51 +148,65 @@ class VoiceState:
         if current_model is None: return
 
         ref_wavs = list(VOICE_DIR.glob("*.wav"))
-        if not ref_wavs: return
+        if not ref_wavs: 
+            print("[TTS Error] No reference audio found!")
+            return
 
-        # ★修正: リストをソートし、常に「一番最初のファイル1つだけ」を使うことで声を固定化・安定させる
         ref_wavs.sort()
-        speaker_wav_path = str(ref_wavs[0])
-        print(f"[TTS Log] Using single reference audio for stable cloning: {speaker_wav_path}")
-
-        timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
-        output_path = DATA_DIR / f"tts_{timestamp}.wav"
-
-        # ★追加: XTTSを破壊する厄介な記号を徹底的に掃除するフィルター
-        clean_text = re.sub(r'<[^>]+>', '', text) # タグ除去
-        clean_text = re.sub(r'[♪♡♥❤♫♬♩*＊_]', '', clean_text) # 音符やハートなどの記号を消去
-        clean_text = clean_text.replace("〜", "ー").replace("~", "ー") # 波線を伸ばし棒に変換
-        clean_text = clean_text.replace("\n", "。").replace("http", "URL") # 改行を句点に
+        speaker_wav_paths = [str(p) for p in ref_wavs[:3]]
+        
+        # 記号の徹底除去
+        clean_text = re.sub(r'<[^>]+>', '', text)
+        clean_text = re.sub(r'[♪♡♥❤♫♬♩*＊_~〜]', '', clean_text)
+        clean_text = clean_text.replace("\n", "。").replace("http", "URL")
         
         if not clean_text.strip(): return
-        if len(clean_text) > 150: clean_text = clean_text[:150] + "..."
+        if len(clean_text) > 300: clean_text = clean_text[:300] + "..."
 
-        target_lang = "ja" if lang in ["jp", "ja"] else "en"
-
-        try:
-            async with TTS_LOCK:
-                if tts_model is None: return
-                
-                start_time = time.time()
-                # speaker_wav には単一のファイルパスを渡す
-                func = functools.partial(
-                    current_model.tts_to_file,
-                    text=clean_text,
-                    file_path=str(output_path),
-                    speaker_wav=speaker_wav_path, 
-                    language=target_lang
-                )
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, func)
-                elapsed = time.time() - start_time
-                print(f"[TTS Log] Generation completed in {elapsed:.2f} seconds.")
+        raw_sentences = re.split(r'(?<=[。！？.!?])', clean_text)
+        
+        sentences = []
+        for s in raw_sentences:
+            s = s.strip()
+            if not s: continue
             
-            if output_path.exists():
-                self.queue.append((str(output_path), voice_client))
-                if not self.is_playing:
-                    self.play_next()
-        except Exception as e:
-            print(f"[TTS Error] Exception: {e}")
+            # ★ 最重要バグ対策: 文末に句読点がない場合、強制的に「。」を追加して暴走を防ぐ
+            if not re.search(r'[。！？.!?]$', s):
+                s += '。'
+            
+            sentences.append(s)
+
+        for i, sentence in enumerate(sentences):
+            if len(sentence) < 2 and not re.search(r'[ぁ-んァ-ン一-龥]', sentence):
+                continue
+                
+            target_lang = "ja" if re.search(r'[ぁ-んァ-ン一-龥]', sentence) else "en"
+
+            timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
+            output_path = DATA_DIR / f"tts_{timestamp}_{i}.wav"
+
+            try:
+                async with TTS_LOCK:
+                    start_time = time.time()
+                    func = functools.partial(
+                        current_model.tts_to_file,
+                        text=sentence,
+                        file_path=str(output_path),
+                        speaker_wav=speaker_wav_paths, 
+                        language=target_lang
+                    )
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(None, func)
+                    elapsed = time.time() - start_time
+                    print(f"[TTS Log] Chunk {i} generated in {elapsed:.2f}s: '{sentence}' (Lang: {target_lang})")
+                
+                if output_path.exists():
+                    self.queue.append((str(output_path), voice_client))
+                    if not self.is_playing:
+                        self.play_next()
+            except Exception as e:
+                print(f"[TTS Error] Chunk {i} failed: {e}")
+                traceback.print_exc()
 
 voice_states = {}
 
