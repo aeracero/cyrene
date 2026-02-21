@@ -102,7 +102,7 @@ async def unload_tts_model():
             except: pass
 
 # ──────────────────────────────────────────────
-# ★ VoiceState Manager
+# ★ VoiceState Manager (超高速チャンク再生・自然な抑揚対応)
 # ──────────────────────────────────────────────
 class VoiceState:
     def __init__(self, bot):
@@ -143,63 +143,79 @@ class VoiceState:
         else:
             self.is_playing = False
 
-    async def add_text_to_queue(self, text: str, voice_client, lang: str = "ja"):
+    async def add_text_to_queue(self, text: str, voice_client, lang: str = "en"):
         current_model = tts_model
         if current_model is None: return
 
         ref_wavs = list(VOICE_DIR.glob("*.wav"))
         if not ref_wavs: return
 
-        # ★修正: 1つのファイルだと機械的になりやすいので、最大3つをブレンドして自然で豊かな声質にする
         ref_wavs.sort()
         speaker_wav_paths = [str(p) for p in ref_wavs[:3]]
-        print(f"[TTS Log] Using reference audios for natural blending: {speaker_wav_paths}")
 
-        timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
-        output_path = DATA_DIR / f"tts_{timestamp}.wav"
-
-        # ★追加: XTTSの「間」の取り方を最適化する強力なフィルター
+        # ★ XTTSの「間」の取り方を最適化する強力なフィルター
         clean_text = re.sub(r'<[^>]+>', '', text)
         clean_text = re.sub(r'[♪♡♥❤♫♬♩*＊_~〜]', '', clean_text)
         
-        # 「...」や「…」をカンマに変換して、長すぎる無音（2秒のフリーズ）を防止
+        # 1. 「...」や「…」をカンマに変換して、フリーズ（長すぎる無音）を防止
         clean_text = re.sub(r'\.{2,}|…', ',', clean_text)
         
-        # ? や ! の後の不自然な間を減らすため、連続する記号を1つにまとめる
+        # 2. 連続する記号を1つにまとめる
         clean_text = re.sub(r'\?+', '?', clean_text)
         clean_text = re.sub(r'!+', '!', clean_text)
         
-        clean_text = clean_text.replace("\n", " ").replace("http", "URL")
+        # 3. ★重要: カンマやピリオド、疑問符の後に強制的にスペースを入れ、AIに自然な「息継ぎ（抑揚）」をさせる
+        clean_text = re.sub(r'([,.?!])', r'\1 ', clean_text)
         
-        if not clean_text.strip(): return
-        if len(clean_text) > 150: clean_text = clean_text[:150] + "..."
+        # 4. 余分なスペースや改行を消去
+        clean_text = re.sub(r'\s+', ' ', clean_text).strip()
+        clean_text = clean_text.replace("http", "URL")
+        
+        if not clean_text: return
+        if len(clean_text) > 300: clean_text = clean_text[:300] + "..."
 
-        target_lang = "ja" if lang in ["jp", "ja"] else "en"
+        target_lang = "en" # 英語ベースで動作させる
 
-        try:
-            async with TTS_LOCK:
-                if tts_model is None: return
+        # ★ 生成時間短縮の魔法：文章をピリオドや疑問符で「分割」する（チャンク処理）
+        # こうすることで、最初の1文が合成できた瞬間に声が出始めます！
+        sentences = re.split(r'(?<=[.?!])\s+', clean_text)
+        sentences = [s.strip() for s in sentences if s.strip()]
+        
+        if not sentences:
+            sentences = [clean_text]
+
+        for i, sentence in enumerate(sentences):
+            # 文字数が少なすぎるノイズはスキップ
+            if len(sentence) < 2 and not re.search(r'[a-zA-Z]', sentence):
+                continue
+
+            timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
+            output_path = DATA_DIR / f"tts_{timestamp}_{i}.wav"
+
+            try:
+                # ブロックして1文ずつ生成
+                async with TTS_LOCK:
+                    start_time = time.time()
+                    func = functools.partial(
+                        current_model.tts_to_file,
+                        text=sentence,
+                        file_path=str(output_path),
+                        speaker_wav=speaker_wav_paths, 
+                        language=target_lang
+                    )
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(None, func)
+                    elapsed = time.time() - start_time
+                    print(f"[TTS Log] Chunk {i} generated in {elapsed:.2f}s: '{sentence}'")
                 
-                start_time = time.time()
-                # speaker_wav にリストを渡してブレンドさせる
-                func = functools.partial(
-                    current_model.tts_to_file,
-                    text=clean_text,
-                    file_path=str(output_path),
-                    speaker_wav=speaker_wav_paths, 
-                    language=target_lang
-                )
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, func)
-                elapsed = time.time() - start_time
-                print(f"[TTS Log] Generation completed in {elapsed:.2f} seconds.")
-            
-            if output_path.exists():
-                self.queue.append((str(output_path), voice_client))
-                if not self.is_playing:
-                    self.play_next()
-        except Exception as e:
-            print(f"[TTS Error] Exception: {e}")
+                # ファイルが出来次第、すぐに再生キューに放り込んで再生スタート！
+                if output_path.exists():
+                    self.queue.append((str(output_path), voice_client))
+                    if not self.is_playing:
+                        self.play_next()
+            except Exception as e:
+                print(f"[TTS Error] Chunk {i} failed: {e}")
+                traceback.print_exc()
 
 voice_states = {}
 
