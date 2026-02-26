@@ -384,7 +384,7 @@ async def get_gemini_reply(message, mode: str) -> str:
                 config=types.GenerateContentConfig(
                     temperature=0.9,
                     top_p=0.95,
-                    max_output_tokens=1500,
+                    max_output_tokens=30000,
                     tools=[google_search_tool], 
                     system_instruction=system_instruction
                 ),
