@@ -38,13 +38,11 @@ import cthulhu_game
 # ★ アップデート情報（更新のたびにここを書き換えてください）
 # ──────────────────────────────────────────────
 LATEST_UPDATE_INFO = """
-ふふっ、システムを少し整えてあげたわ。♪
+ver 6.2
+・Botを起動（更新）したときに、新しいアプデ情報があれば自動でお知らせするようになったわよ。
+・何度も同じメッセージを送らないように、ちゃーんと記憶しておくから安心してね。
 
-【今回のアップデート内容】
-・`/announcement` コマンドを追加したわ。これでアプデ告知のチャンネルとメンションするロールを固定できるわよ。
-・「アプデ実行」とチャットで打つだけで、この文章が自動で指定のチャンネルに飛ぶようになったの。
-
-これからもよろしくね、あなた♪
+これからもよろしくね♪
 """
 
 # ──────────────────────────────────────────────
@@ -55,6 +53,7 @@ DATA_DIR = Path("/data") if os.path.exists("/data") else Path("./data")
 MEMORY_DIR = DATA_DIR / "user_memories"
 SETTINGS_FILE = DATA_DIR / "ai_settings.json"
 ANNOUNCEMENT_CONFIG_FILE = DATA_DIR / "announcement_config.json"
+LAST_UPDATE_FILE = DATA_DIR / "last_update.txt"  # 連続送信防止用のファイル
 
 MEMORY_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -752,7 +751,7 @@ ADMIN_COMMANDS_LIST_JP = (
     "- `/language`: 言語設定の変更\n"
     "- `/toggle_memory`: 記憶設定の切替\n"
     "- `/announcement`: アプデ告知先の設定 (スラッシュコマンド)\n"
-    "- `アプデ実行`: 設定先へアップデート情報を送信\n"
+    "- `アプデ実行`: 設定先へアップデート情報を送信（または再起動時に自動で送られるわ）\n"
     "- `/status`, `/gacha`: ステータス確認・ガチャ\n"
     "- `!mode auto`: 自動返信モード（AIモードOFF時用）\n"
     "- `データ管理`: 管理者メニューを開くわ\n"
@@ -874,6 +873,36 @@ async def on_ready():
         print(f"Sync Error: {e}")
     if not discount_event_loop.is_running(): discount_event_loop.start()
 
+    # ★ 起動時の自動アプデ告知処理 ★
+    try:
+        config_data = load_announcement_config()
+        ch_id = config_data.get("channel_id")
+        role_id = config_data.get("role_id")
+
+        if ch_id:
+            target_channel = client.get_channel(ch_id)
+            if target_channel:
+                # 既にこのバージョンのアップデート情報を送信したか確認
+                already_sent = False
+                current_info = LATEST_UPDATE_INFO.strip()
+                
+                if LAST_UPDATE_FILE.exists():
+                    with open(LAST_UPDATE_FILE, "r", encoding="utf-8") as f:
+                        if f.read().strip() == current_info:
+                            already_sent = True
+                
+                if not already_sent and current_info:
+                    mention_text = f"<@&{role_id}>" if role_id else ""
+                    final_msg = f"{mention_text}\n\n{current_info}"
+                    await target_channel.send(final_msg)
+                    print("Update announcement sent automatically.")
+                    
+                    # 送信した内容を保存して、次回の再起動で送られないようにする
+                    with open(LAST_UPDATE_FILE, "w", encoding="utf-8") as f:
+                        f.write(current_info)
+    except Exception as e:
+        print(f"Auto-announcement Error: {e}")
+
 @client.event
 async def on_message(message):
     if message.author.bot: return
@@ -930,7 +959,7 @@ async def on_message(message):
     ACHIEVE_KEYWORDS = ["実績", "achievement", "進捗", "progress"]
     TITLE_KEYWORDS = ["二つ名", "change title"]
 
-    # ★ アプデ実行コマンド
+    # 手動アプデ実行コマンド (自動化しましたが念のため残しています)
     if content_body == "アプデ実行":
         if not db.is_admin(user_id):
             await send_myu(message, user_id, "あら、そのコマンドは管理者専用よ。" if lang != "en" else "Admin only, darling.")
@@ -953,6 +982,11 @@ async def on_message(message):
         final_msg = f"{mention_text}\n\n{LATEST_UPDATE_INFO.strip()}"
 
         await target_channel.send(final_msg)
+        
+        # 手動実行時も二重送信を防ぐために記憶を更新
+        with open(LAST_UPDATE_FILE, "w", encoding="utf-8") as f:
+            f.write(LATEST_UPDATE_INFO.strip())
+
         await message.channel.send("指定のチャンネルにアップデート告知を送信したわよ。♪" if lang != "en" else "Update announcement sent successfully♪")
         return
 
