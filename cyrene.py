@@ -19,7 +19,7 @@ from discord.ext import tasks
 from google import genai
 from google.genai import types
 
-# ★追加: 新たに作成した音声読み上げモジュールをインポートし、Opusを初期化
+# ★音声読み上げモジュールをインポートし、Opusを初期化
 import voice_system as vs
 vs.init_opus()
 
@@ -33,7 +33,19 @@ from forms import get_user_form, set_user_form, resolve_form_code, get_form_disp
 from special_unlocks import inc_janken_win, get_janken_wins, is_nanoka_unlocked, set_nanoka_unlocked, has_danheng_stage1, mark_danheng_stage1, is_danheng_unlocked, set_danheng_unlocked
 import kimera_game
 import cthulhu_game
-import update_system  # ★追加: アップデート告知用システム
+
+# ──────────────────────────────────────────────
+# ★ アップデート情報（更新のたびにここを書き換えてください）
+# ──────────────────────────────────────────────
+LATEST_UPDATE_INFO = """
+ふふっ、システムを少し整えてあげたわ。♪
+
+【今回のアップデート内容】
+・`/announcement` コマンドを追加したわ。これでアプデ告知のチャンネルとメンションするロールを固定できるわよ。
+・「アプデ実行」とチャットで打つだけで、この文章が自動で指定のチャンネルに飛ぶようになったの。
+
+これからもよろしくね、あなた♪
+"""
 
 # ──────────────────────────────────────────────
 # ★ Memory & Data Management
@@ -42,8 +54,23 @@ import update_system  # ★追加: アップデート告知用システム
 DATA_DIR = Path("/data") if os.path.exists("/data") else Path("./data")
 MEMORY_DIR = DATA_DIR / "user_memories"
 SETTINGS_FILE = DATA_DIR / "ai_settings.json"
+ANNOUNCEMENT_CONFIG_FILE = DATA_DIR / "announcement_config.json"
 
 MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+
+def save_announcement_config(channel_id: int, role_id: int):
+    data = {"channel_id": channel_id, "role_id": role_id}
+    with open(ANNOUNCEMENT_CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+def load_announcement_config():
+    if ANNOUNCEMENT_CONFIG_FILE.exists():
+        try:
+            with open(ANNOUNCEMENT_CONFIG_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            pass
+    return {"channel_id": None, "role_id": None}
 
 def load_ai_settings():
     if SETTINGS_FILE.exists():
@@ -124,7 +151,6 @@ intents.members = True
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
-
 # ──────────────────────────────────────────────
 # ★ Gemini AI Setup
 # ──────────────────────────────────────────────
@@ -135,10 +161,7 @@ else:
     print("Warning: GEMINI_API_KEY is missing in config.py")
 
 GEMINI_MODEL_NAME = "gemini-3-flash-preview"
-
-google_search_tool = types.Tool(
-    google_search=types.GoogleSearch()
-)
+google_search_tool = types.Tool(google_search=types.GoogleSearch())
 
 def get_system_instruction(mode: str, lang: str, user_name: str) -> str:
     if lang == "en":
@@ -439,6 +462,17 @@ async def get_gemini_reply(message, mode: str) -> str:
 # ★ Slash Commands
 # ──────────────────────────────────────────────
 
+@tree.command(name="announcement", description="【管理者専用】アップデート告知の送信先とメンションするロールを設定します。")
+@app_commands.describe(channel="告知を送信するチャンネル", role="メンションするロール（任意）")
+async def slash_announcement(interaction: discord.Interaction, channel: discord.TextChannel, role: discord.Role = None):
+    if not db.is_admin(interaction.user.id):
+        await interaction.response.send_message("あら、そのコマンドは管理者専用よ。", ephemeral=True)
+        return
+    
+    save_announcement_config(channel.id, role.id if role else None)
+    role_text = f" とロール {role.mention} " if role else " "
+    await interaction.response.send_message(f"アップデート告知の送信先を {channel.mention}{role_text}に設定したわ。/data に保存したわよ♪")
+
 @tree.command(name="restart", description="システムを再起動し、状態をリセットします。")
 async def slash_restart(interaction: discord.Interaction):
     user_id = interaction.user.id
@@ -457,7 +491,6 @@ async def slash_restart(interaction: discord.Interaction):
             try: await vc.disconnect()
             except: pass
     
-    # ★修正: vs経由で呼び出し
     await vs.unload_tts_model()
     
     print("Restarting bot via /restart command...")
@@ -487,7 +520,6 @@ async def slash_join(interaction: discord.Interaction, mode: str = "bot_only", t
         await channel.connect()
         action_msg = f"**{channel.name}** に接続したわ。" if lang != "en" else f"Connected to **{channel.name}**."
     
-    # ★修正: vs経由で呼び出し
     state = vs.get_voice_state(client, interaction.guild.id)
     state.mode = mode
     state.target_user_id = target.id if target else None
@@ -499,7 +531,6 @@ async def slash_join(interaction: discord.Interaction, mode: str = "bot_only", t
     if mode == "everyone": mode_text = "Everyone"
     elif mode == "specific": mode_text = f"Specific User ({target.display_name if target else 'Unknown'})"
 
-    # ★修正: vs経由で呼び出し
     if vs.tts_model is None:
         loading_text = "（音声回路を接続中... 読み込みに少し時間がかかるわ、待っていてね♡）" if lang != "en" else "(Loading voice circuits... Wait a moment, darling♡)"
         await interaction.followup.send(loading_text)
@@ -530,7 +561,6 @@ async def slash_voice_settings(interaction: discord.Interaction, mode: str, targ
         await interaction.response.send_message(msg, ephemeral=True)
         return
 
-    # ★修正: vs経由で呼び出し
     state = vs.get_voice_state(client, interaction.guild.id)
     state.mode = mode
     state.target_user_id = target.id if target else None
@@ -552,7 +582,6 @@ async def slash_voice_settings(interaction: discord.Interaction, mode: str, targ
 async def slash_leave(interaction: discord.Interaction):
     lang = db.get_user_lang(interaction.user.id)
     if interaction.guild.voice_client:
-        # ★修正: vs経由で呼び出し
         state = vs.get_voice_state(client, interaction.guild.id)
         state.queue.clear()
         if interaction.guild.voice_client.is_playing():
@@ -563,7 +592,7 @@ async def slash_leave(interaction: discord.Interaction):
         await interaction.response.send_message(msg)
         
         if len(client.voice_clients) == 0:
-            await vs.unload_tts_model() # ★修正
+            await vs.unload_tts_model()
 
     else:
         msg = "あら？ あたしはまだ接続してないわ。" if lang != "en" else "Oh? I'm not connected yet."
@@ -700,7 +729,6 @@ async def slash_help(interaction: discord.Interaction):
 # ★ Main Bot Logic & Events
 # ──────────────────────────────────────────────
 
-# --- State ---
 waiting_for_nickname = set()
 waiting_for_rename = set()
 admin_data_mode = set()
@@ -717,13 +745,14 @@ FORCE_RPS_WIN_NEXT = set()
 MYURION_QUIZ_STATE = {}
 USER_FORM_HISTORY = {} 
 
-# --- Help Text ---
 ADMIN_COMMANDS_LIST_JP = (
     "【データの管理ね？ 任せてちょうだい♪】\n"
     "このモードでは以下のコマンドが使えるわ。\n\n"
     "- `/chat_mode`: AI会話モードの切替 (ON/OFF)\n"
     "- `/language`: 言語設定の変更\n"
     "- `/toggle_memory`: 記憶設定の切替\n"
+    "- `/announcement`: アプデ告知先の設定 (スラッシュコマンド)\n"
+    "- `アプデ実行`: 設定先へアップデート情報を送信\n"
     "- `/status`, `/gacha`: ステータス確認・ガチャ\n"
     "- `!mode auto`: 自動返信モード（AIモードOFF時用）\n"
     "- `データ管理`: 管理者メニューを開くわ\n"
@@ -752,6 +781,7 @@ ADMIN_COMMANDS_LIST_EN = (
     "- `/chat_mode`: Toggle AI Chat Mode (ON/OFF)\n"
     "- `/language`: Change Language\n"
     "- `/toggle_memory`: Toggle Memory\n"
+    "- `/announcement`: Set announcement channel/role\n"
     "- `/status`, `/gacha`: Check status / Pull gacha\n"
     "- `!mode auto`: Auto-reply mode (When AI mode is OFF)\n"
     "- `Data Management`: Open admin menu\n"
@@ -805,7 +835,6 @@ async def send_myu(message, user_id, text):
         sent_msg = await message.channel.send(final_output)
         
         if message.guild and message.guild.voice_client and message.guild.voice_client.is_connected():
-            # ★修正: vs経由で呼び出し
             state = vs.get_voice_state(client, message.guild.id)
             if state.read_channel_id is None or state.read_channel_id == message.channel.id:
                 lang = db.get_user_lang(user_id)
@@ -838,7 +867,6 @@ async def discount_event_loop():
 @client.event
 async def on_ready():
     print(f"Login: {client.user}")
-    
     try:
         await tree.sync()
         print("Slash commands synced.")
@@ -852,13 +880,9 @@ async def on_message(message):
     user_id = message.author.id
     content = message.content.strip()
     
-    # ──────────────────────────────────────────────
-    # ★ VC 読み上げロジック (User Messages)
-    # ──────────────────────────────────────────────
     if message.guild and message.guild.voice_client and message.guild.voice_client.is_connected():
         is_cmd = content.startswith("/") or content.startswith("!")
         if not is_cmd:
-            # ★修正: vs経由で呼び出し
             state = vs.get_voice_state(client, message.guild.id)
             should_read = False
             
@@ -873,14 +897,10 @@ async def on_message(message):
                 u_lang = db.get_user_lang(user_id)
                 await state.add_text_to_queue(content, message.guild.voice_client, lang=u_lang)
 
-    # ──────────────────────────────────────────────
-    # ★ AI Logic & Commands
-    # ──────────────────────────────────────────────
     ai_mode = get_ai_mode(user_id)
     is_command_prefix = content.startswith("/") or content.startswith("!")
     is_admin_cmd = content in ["データ管理", "data management"]
     
-    # AI Mode
     if ai_mode and not is_command_prefix and not is_admin_cmd:
         if not content and not message.attachments: return
         ai_reply = await get_gemini_reply(message, ai_mode)
@@ -909,6 +929,32 @@ async def on_message(message):
     AFF_KEYWORDS = ["好感度", "affection"]
     ACHIEVE_KEYWORDS = ["実績", "achievement", "進捗", "progress"]
     TITLE_KEYWORDS = ["二つ名", "change title"]
+
+    # ★ アプデ実行コマンド
+    if content_body == "アプデ実行":
+        if not db.is_admin(user_id):
+            await send_myu(message, user_id, "あら、そのコマンドは管理者専用よ。" if lang != "en" else "Admin only, darling.")
+            return
+
+        config_data = load_announcement_config()
+        ch_id = config_data.get("channel_id")
+        role_id = config_data.get("role_id")
+
+        if not ch_id:
+            await message.channel.send("先に `/announcement` コマンドで送信先のチャンネルを設定してちょうだいね。" if lang != "en" else "Set the channel with `/announcement` first.")
+            return
+
+        target_channel = client.get_channel(ch_id)
+        if not target_channel:
+            await message.channel.send("設定されたチャンネルが見つからないわ。Botがアクセスできるか確認してね。" if lang != "en" else "Channel not found. Make sure I have access.")
+            return
+
+        mention_text = f"<@&{role_id}>" if role_id else ""
+        final_msg = f"{mention_text}\n\n{LATEST_UPDATE_INFO.strip()}"
+
+        await target_channel.send(final_msg)
+        await message.channel.send("指定のチャンネルにアップデート告知を送信したわよ。♪" if lang != "en" else "Update announcement sent successfully♪")
+        return
 
     if content_body in ["ログ確認モード", "log mode"]:
         if is_main_admin:
@@ -1005,60 +1051,6 @@ async def on_message(message):
         
         res = f"Sent to {sent_count} channels♪" if lang=="en" else f"ふふっ、{sent_count}個のチャンネルに声を届けてきたわ♪"
         await message.channel.send(res)
-        return
-
-    # ★追加: アプデ告知設定・実行用のコマンド
-    if content_body.startswith("アプデ設定"):
-        if not db.is_admin(user_id):
-            await send_myu(message, user_id, "あら、そのコマンドは管理者専用よ。" if lang != "en" else "Admin only, darling.")
-            return
-        
-        parts = content_body.split()
-        if len(parts) >= 3:
-            try:
-                channel_id = int(parts[1])
-                role_id = int(parts[2])
-                update_system.save_config(channel_id, role_id)
-                msg = f"アプデ告知のチャンネルを <#{channel_id}>、メンションするロールを <@&{role_id}> に設定したわ。/data に保存しておいたわよ♪" if lang != "en" else f"Update channel set to <#{channel_id}> and role to <@&{role_id}>."
-                await message.channel.send(msg)
-            except ValueError:
-                await message.channel.send("IDは数字で指定してちょうだいね。" if lang != "en" else "IDs must be numbers.")
-        else:
-            await message.channel.send("使い方: `アプデ設定 [チャンネルID] [ロールID]` よ。" if lang != "en" else "Usage: `アプデ設定 [ChannelID] [RoleID]`")
-        return
-
-    if content_body.startswith("アプデ告知"):
-        if not db.is_admin(user_id):
-            await send_myu(message, user_id, "あら、そのコマンドは管理者専用よ。" if lang != "en" else "Admin only, darling.")
-            return
-        
-        raw_text = content_body.replace("アプデ告知", "").strip()
-        if not raw_text:
-            await message.channel.send("告知する内容がないみたいだけれど？" if lang != "en" else "The update message is empty.")
-            return
-
-        upd_config = update_system.load_config()
-        if not upd_config["channel_id"]:
-            await message.channel.send("先に `アプデ設定 [チャンネルID] [ロールID]` で送信先を設定してちょうだい。" if lang != "en" else "Please set the channel first with `アプデ設定 [ChannelID] [RoleID]`.")
-            return
-
-        target_channel = client.get_channel(upd_config["channel_id"])
-        if not target_channel:
-            await message.channel.send("設定されたチャンネルが見つからないわ。Botがアクセスできるか確認してね。" if lang != "en" else "Channel not found. Make sure I have access.")
-            return
-
-        await message.channel.send("告知文を考えているわ…少し待っててね。♪" if lang != "en" else "Thinking of the announcement text... wait a moment♪")
-
-        # AIでキュレネ口調に変換
-        cyrene_text = update_system.generate_cyrene_update_message(raw_text)
-        
-        # ロールメンションの作成
-        mention_text = f"<@&{upd_config['role_id']}>" if upd_config["role_id"] else ""
-        
-        # 指定チャンネルに送信
-        final_msg = f"{mention_text}\n\n{cyrene_text}"
-        await target_channel.send(final_msg)
-        await message.channel.send("指定のチャンネルに告知を出しておいたわよ。♪" if lang != "en" else "Update announcement sent successfully♪")
         return
 
     if content_lower == "!mode auto":
