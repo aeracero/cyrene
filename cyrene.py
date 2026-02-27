@@ -33,6 +33,7 @@ from forms import get_user_form, set_user_form, resolve_form_code, get_form_disp
 from special_unlocks import inc_janken_win, get_janken_wins, is_nanoka_unlocked, set_nanoka_unlocked, has_danheng_stage1, mark_danheng_stage1, is_danheng_unlocked, set_danheng_unlocked
 import kimera_game
 import cthulhu_game
+import update_system  # ★追加: アップデート告知用システム
 
 # ──────────────────────────────────────────────
 # ★ Memory & Data Management
@@ -1004,6 +1005,60 @@ async def on_message(message):
         
         res = f"Sent to {sent_count} channels♪" if lang=="en" else f"ふふっ、{sent_count}個のチャンネルに声を届けてきたわ♪"
         await message.channel.send(res)
+        return
+
+    # ★追加: アプデ告知設定・実行用のコマンド
+    if content_body.startswith("アプデ設定"):
+        if not db.is_admin(user_id):
+            await send_myu(message, user_id, "あら、そのコマンドは管理者専用よ。" if lang != "en" else "Admin only, darling.")
+            return
+        
+        parts = content_body.split()
+        if len(parts) >= 3:
+            try:
+                channel_id = int(parts[1])
+                role_id = int(parts[2])
+                update_system.save_config(channel_id, role_id)
+                msg = f"アプデ告知のチャンネルを <#{channel_id}>、メンションするロールを <@&{role_id}> に設定したわ。/data に保存しておいたわよ♪" if lang != "en" else f"Update channel set to <#{channel_id}> and role to <@&{role_id}>."
+                await message.channel.send(msg)
+            except ValueError:
+                await message.channel.send("IDは数字で指定してちょうだいね。" if lang != "en" else "IDs must be numbers.")
+        else:
+            await message.channel.send("使い方: `アプデ設定 [チャンネルID] [ロールID]` よ。" if lang != "en" else "Usage: `アプデ設定 [ChannelID] [RoleID]`")
+        return
+
+    if content_body.startswith("アプデ告知"):
+        if not db.is_admin(user_id):
+            await send_myu(message, user_id, "あら、そのコマンドは管理者専用よ。" if lang != "en" else "Admin only, darling.")
+            return
+        
+        raw_text = content_body.replace("アプデ告知", "").strip()
+        if not raw_text:
+            await message.channel.send("告知する内容がないみたいだけれど？" if lang != "en" else "The update message is empty.")
+            return
+
+        upd_config = update_system.load_config()
+        if not upd_config["channel_id"]:
+            await message.channel.send("先に `アプデ設定 [チャンネルID] [ロールID]` で送信先を設定してちょうだい。" if lang != "en" else "Please set the channel first with `アプデ設定 [ChannelID] [RoleID]`.")
+            return
+
+        target_channel = client.get_channel(upd_config["channel_id"])
+        if not target_channel:
+            await message.channel.send("設定されたチャンネルが見つからないわ。Botがアクセスできるか確認してね。" if lang != "en" else "Channel not found. Make sure I have access.")
+            return
+
+        await message.channel.send("告知文を考えているわ…少し待っててね。♪" if lang != "en" else "Thinking of the announcement text... wait a moment♪")
+
+        # AIでキュレネ口調に変換
+        cyrene_text = update_system.generate_cyrene_update_message(raw_text)
+        
+        # ロールメンションの作成
+        mention_text = f"<@&{upd_config['role_id']}>" if upd_config["role_id"] else ""
+        
+        # 指定チャンネルに送信
+        final_msg = f"{mention_text}\n\n{cyrene_text}"
+        await target_channel.send(final_msg)
+        await message.channel.send("指定のチャンネルに告知を出しておいたわよ。♪" if lang != "en" else "Update announcement sent successfully♪")
         return
 
     if content_lower == "!mode auto":
