@@ -48,7 +48,7 @@ def generate_cyrene_update_message():
     
     try:
         model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash",
+            model_name="gemini-3-flash-preview",
             system_instruction=system_instruction
         )
         response = model.generate_content(f"以下のアップデート情報を告知して：\n{LATEST_UPDATE_INFO}")
