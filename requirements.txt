@@ -10,3 +10,4 @@ cutlet
 fugashi
 unidic-lite
 imageio-ffmpeg
+google-generativeai
