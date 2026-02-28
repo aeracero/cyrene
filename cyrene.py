@@ -365,6 +365,7 @@ Era Nova → 永劫回帰
 """
 
 gemini_sessions = {}
+translation_sessions = {} # ★ 通訳機能用に追加
 
 async def get_gemini_reply(message, mode: str) -> str:
     if not genai_client:
@@ -460,6 +461,26 @@ async def get_gemini_reply(message, mode: str) -> str:
 # ──────────────────────────────────────────────
 # ★ Slash Commands
 # ──────────────────────────────────────────────
+
+# ★ 通訳機能用に追加
+@tree.command(name="translate", description="指定した2つの言語間で相互に翻訳します。引数なしで翻訳モードを終了します。")
+@app_commands.describe(lang1="言語1 (例: jp, en, kr 等)", lang2="言語2 (例: en, jp, zh 等)")
+async def slash_translate(interaction: discord.Interaction, lang1: str = None, lang2: str = None):
+    user_id = interaction.user.id
+    lang = db.get_user_lang(user_id)
+    
+    # 引数がない場合、同じ言語を指定した場合、offと入力した場合は翻訳モード終了
+    if not lang1 or not lang2 or lang1.lower() == "off" or lang2.lower() == "off" or lang1 == lang2:
+        if user_id in translation_sessions:
+            del translation_sessions[user_id]
+        msg = "翻訳モードを終了したわ♪" if lang != "en" else "Translation mode deactivated, darling♪"
+        await interaction.response.send_message(msg)
+        return
+    
+    # 翻訳言語ペアを記憶
+    translation_sessions[user_id] = (lang1, lang2)
+    msg = f"翻訳モードを起動したわ。これからは {lang1} と {lang2} の間で通訳するわね♪" if lang != "en" else f"Translation mode activated. I'll interpret between {lang1} and {lang2} for you♪"
+    await interaction.response.send_message(msg)
 
 @tree.command(name="announcement", description="【管理者専用】アップデート告知の送信先とメンションするロールを設定します。")
 @app_commands.describe(channel="告知を送信するチャンネル", role="メンションするロール（任意）")
@@ -750,6 +771,7 @@ ADMIN_COMMANDS_LIST_JP = (
     "- `/chat_mode`: AI会話モードの切替 (ON/OFF)\n"
     "- `/language`: 言語設定の変更\n"
     "- `/toggle_memory`: 記憶設定の切替\n"
+    "- `/translate`: 通訳モードのON/OFF\n"
     "- `/announcement`: アプデ告知先の設定 (スラッシュコマンド)\n"
     "- `アプデ実行`: 設定先へアップデート情報を送信（または再起動時に自動で送られるわ）\n"
     "- `/status`, `/gacha`: ステータス確認・ガチャ\n"
@@ -780,6 +802,7 @@ ADMIN_COMMANDS_LIST_EN = (
     "- `/chat_mode`: Toggle AI Chat Mode (ON/OFF)\n"
     "- `/language`: Change Language\n"
     "- `/toggle_memory`: Toggle Memory\n"
+    "- `/translate`: Toggle Interpretation Mode\n"
     "- `/announcement`: Set announcement channel/role\n"
     "- `/status`, `/gacha`: Check status / Pull gacha\n"
     "- `!mode auto`: Auto-reply mode (When AI mode is OFF)\n"
@@ -794,6 +817,7 @@ GENERAL_COMMANDS_LIST_JP = (
     "- `/chat_mode off`: お話しモードを終了するわ\n"
     "- `/language [jp/en]`: 言語を変えるわ\n"
     "- `/toggle_memory`: 会話を覚えるかどうか設定できるわ\n"
+    "- `/translate`: 2つの言語を通訳するわよ\n"
     "- (画像を送ると感想を言うわよ♪)\n\n"
     "**★ 通常機能**\n"
     "- `/daily`: デイリー報酬を受け取るわ\n"
@@ -814,6 +838,7 @@ GENERAL_COMMANDS_LIST_EN = (
     "- `/chat_mode off`: Turn OFF chat mode\n"
     "- `/language [jp/en]`: Change language\n"
     "- `/toggle_memory`: Toggle memory settings\n"
+    "- `/translate`: Interpret between two languages\n"
     "- (I can see images if you send them♪)\n\n"
     "**★ Standard Features**\n"
     "- `/daily`: Claim daily rewards\n"
@@ -929,6 +954,37 @@ async def on_message(message):
     ai_mode = get_ai_mode(user_id)
     is_command_prefix = content.startswith("/") or content.startswith("!")
     is_admin_cmd = content in ["データ管理", "data management"]
+
+    # ──────────────────────────────────────────────
+    # ★ 翻訳モード（通訳機能）の処理
+    # ──────────────────────────────────────────────
+    if user_id in translation_sessions and not is_command_prefix and not is_admin_cmd and content:
+        lang1, lang2 = translation_sessions[user_id]
+        
+        # Geminiに言語を自動判定させ、逆の言語に翻訳するプロンプト
+        prompt = (f"Translate the following text.\n"
+                  f"If it is mostly in {lang1}, translate it completely to {lang2}.\n"
+                  f"If it is mostly in {lang2}, translate it completely to {lang1}.\n"
+                  f"Output ONLY the translated text without any extra explanations, greetings, or markdown blocks.\n\n"
+                  f"Text: {content}")
+        try:
+            async with message.channel.typing():
+                if genai_client:
+                    response = await genai_client.aio.models.generate_content(
+                        model=GEMINI_MODEL_NAME,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(temperature=0.3)
+                    )
+                    translated_text = response.text.strip()
+                    await message.reply(translated_text)
+                else:
+                    await message.reply("AI回路が繋がっていないみたい。")
+        except Exception as e:
+            print(f"Translation Error: {e}")
+            await message.reply("…ごめんなさい、うまく翻訳できなかったみたい。")
+            
+        return # 翻訳モード中は通常のAI応答やコマンド処理をスキップ
+    # ──────────────────────────────────────────────
     
     if ai_mode and not is_command_prefix and not is_admin_cmd:
         if not content and not message.attachments: return
