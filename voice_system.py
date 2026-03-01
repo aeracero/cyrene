@@ -110,7 +110,7 @@ class VoiceState:
         
         if not clean_text: return
         # APIのタイムアウトやエラーを防ぐため150文字でカット
-        if len(clean_text) > 150: clean_text = clean_text[:150] + "..."
+        if len(clean_text) > 500: clean_text = clean_text[:500] + "..."
 
         target_lang = "en" if lang == "en" else "ja"
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
