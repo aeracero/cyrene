@@ -11,9 +11,6 @@ import ctypes
 from pathlib import Path
 import discord
 
-# データベースから言語設定を取得する関数をインポート
-from database import get_user_lang
-
 # ──────────────────────────────────────────────
 # ★ Coqui TTS License & Import
 # ──────────────────────────────────────────────
@@ -27,7 +24,6 @@ try:
     import torch
     
     # 物理コア数に合わせてスレッド数を最適化 (CPU推論時の高速化)
-    # ※サーバーのスペックに合わせて変更してください（例: 4〜8）
     torch.set_num_threads(4) 
     
     HAS_TTS = True
@@ -44,11 +40,10 @@ VOICE_DIR = Path(__file__).parent / "voices"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 VOICE_DIR.mkdir(parents=True, exist_ok=True)
 
-# 言語ごとの最適なWAVファイルを指定（アップロード済みのファイル名を割り当ててください）
-# ※ 5〜10秒程度で、BGMがなく、平坦なトーンの音声が最も高品質になります。
+# 言語ごとの最適なWAVファイルを指定
 WAV_MAPPING = {
-    "ja": str(VOICE_DIR / "VO_JA_Archive_Cyrene_1.wav"),  # 日本語用のクリーンな音声
-    "en": str(VOICE_DIR / "VO_Archive_Cyrene_1.wav")   # 英語用のクリーンな音声
+    "ja": str(VOICE_DIR / "VO_Archive_Cyrene_1.wav"),  # 最も綺麗な日本語音声のファイル名
+    "en": str(VOICE_DIR / "VO_Archive_Cyrene_5.wav")   # 英語音声のファイル名
 }
 
 # ──────────────────────────────────────────────
@@ -154,7 +149,7 @@ class VoiceState:
         else:
             self.is_playing = False
 
-    async def add_text_to_queue(self, text: str, voice_client, user_id: int = None):
+    async def add_text_to_queue(self, text: str, voice_client, lang: str = "ja"):
         current_model = tts_model
         if current_model is None: return
 
@@ -176,11 +171,8 @@ class VoiceState:
         # 生成速度を優先し、長文はカット（高速化・省メモリ）
         if len(clean_text) > 150: clean_text = clean_text[:150] + "..."
 
-        # ★ データベースから言語を取得し、対応するWAVファイルを選択
-        target_uid = user_id or self.target_user_id
-        db_lang = get_user_lang(target_uid) if target_uid else "jp"
-        
-        target_lang = "en" if db_lang == "en" else "ja"
+        # ★ cyrene.py から渡された lang ("ja" または "en") をそのまま使用
+        target_lang = "en" if lang == "en" else "ja"
         
         # 言語に対応したWAVファイルを取得（見つからない場合はフォールバック）
         speaker_wav_path = WAV_MAPPING.get(target_lang)
