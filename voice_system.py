@@ -18,7 +18,6 @@ import discord
 TTS_API_URL = os.getenv("TTS_API_URL", "http://127.0.0.1:9880/")
 
 # ⚠️ 注意: ここは「Mac上での」お手本音声の絶対パスです！
-# 外部(Railway)からリクエストを送る際も、Mac上のAPIが自分のMac内のファイルを探すため、このままにします。
 DEFAULT_REF_WAV = "/Users/aeracero/Desktop/Programming/cyrene_discord_bot/voice_optimized/cyrene_hi.ogg"
 DEFAULT_PROMPT_TEXT = "ハーイ、久しぶりね！2人きりの素敵な時間を、あなたはどう過ごしたいかしら？"
 DEFAULT_PROMPT_LANG = "ja"
@@ -128,11 +127,15 @@ class VoiceState:
             f"&text_split_method=cut4"
         )
 
+        # ★ ngrokの無料版警告画面をスキップするためのヘッダー
+        headers = {"ngrok-skip-browser-warning": "true"}
+
         try:
             start_time = time.time()
             # Botをフリーズさせないための非同期(aiohttp)通信
             async with aiohttp.ClientSession() as session:
-                async with session.get(url) as response:
+                # ヘッダーを含めてリクエストを送信
+                async with session.get(url, headers=headers) as response:
                     if response.status == 200:
                         audio_data = await response.read()
                         with open(output_path, "wb") as f:
