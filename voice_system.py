@@ -18,7 +18,7 @@ import discord
 TTS_API_URL = os.getenv("TTS_API_URL", "http://127.0.0.1:9880/")
 
 # ⚠️ 注意: ここは「Mac上での」お手本音声の絶対パスです！
-DEFAULT_REF_WAV = "/Users/aeracero/Desktop/Programming/cyrene_discord_bot/voice_optimized/cyrene_hi.ogg"
+DEFAULT_REF_WAV = "/Users/aeracero/Desktop/Programming/cyrene_discord_bot/voice_optimized/cyrene_hi2.ogg"
 DEFAULT_PROMPT_TEXT = "ハーイ、久しぶりね！2人きりの素敵な時間を、あなたはどう過ごしたいかしら？"
 DEFAULT_PROMPT_LANG = "ja"
 
