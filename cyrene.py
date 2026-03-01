@@ -939,26 +939,28 @@ async def on_message(message):
     user_id = message.author.id
     content = message.content.strip()
     
+    # ▼ここから書き換え▼
+    is_vc_target = False
     if message.guild and message.guild.voice_client and message.guild.voice_client.is_connected():
         is_cmd = content.startswith("/") or content.startswith("!")
         if not is_cmd:
             state = vs.get_voice_state(client, message.guild.id)
-            should_read = False
-            
             if state.read_channel_id is None or state.read_channel_id == message.channel.id:
                 if state.mode == "everyone":
                     if message.author.voice and message.author.voice.channel == message.guild.voice_client.channel:
-                        should_read = True
+                        is_vc_target = True
                 elif state.mode == "specific" and state.target_user_id == user_id:
-                    should_read = True
-
-            if should_read:
-                u_lang = db.get_user_lang(user_id)
-                await state.add_text_to_queue(content, message.guild.voice_client, lang=u_lang)
+                    is_vc_target = True
 
     ai_mode = get_ai_mode(user_id)
+    
+    # VCのターゲット指定されている場合は、メンションがなくても一時的にAIモード(casual)として扱う
+    if is_vc_target and not ai_mode:
+        ai_mode = "casual"
+        
     is_command_prefix = content.startswith("/") or content.startswith("!")
     is_admin_cmd = content in ["データ管理", "data management"]
+    # ▲ここまで書き換え▲
 
     # ──────────────────────────────────────────────
     # ★ 翻訳モード（通訳機能）の処理
