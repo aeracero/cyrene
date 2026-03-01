@@ -16,14 +16,13 @@ import discord
 # ──────────────────────────────────────────────
 os.environ["COQUI_TOS_AGREED"] = "1"
 
-# 省メモリ・高速化のための環境変数設定（PyTorchのメモリ割当を最適化）
+# 省メモリ・高速化のための環境変数設定
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 try:
     from TTS.api import TTS
     import torch
     
-    # 物理コア数に合わせてスレッド数を最適化 (CPU推論時の高速化)
     torch.set_num_threads(4) 
     
     HAS_TTS = True
@@ -40,10 +39,20 @@ VOICE_DIR = Path(__file__).parent / "voices"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 VOICE_DIR.mkdir(parents=True, exist_ok=True)
 
-# 言語ごとの最適なWAVファイルを指定
+# ★ 3つのWAVファイルをリストとして指定してクオリティを最大化する
+# もし日本語と英語で使う3つのファイルを分けたい場合は、ここのリストの中身を変更してください。
+# 現在は、アップロードされている3つのファイルを両方の言語で共通して使用する設定にしています。
 WAV_MAPPING = {
-    "ja": str(VOICE_DIR / "VO_Archive_Cyrene_1.wav"),  # 最も綺麗な日本語音声のファイル名
-    "en": str(VOICE_DIR / "VO_Archive_Cyrene_5.wav")   # 英語音声のファイル名
+    "ja": [
+        str(VOICE_DIR / "VO_JA_Archive_Cyrene_1-_1_.wav"),
+        str(VOICE_DIR / "VO_JA_Archive_Cyrene_5.wav"),
+        str(VOICE_DIR / "VO_JA_Archive_Cyrene_14.wav")
+    ],
+    "en": [
+        str(VOICE_DIR / "VO_Archive_Cyrene_1.wav"),
+        str(VOICE_DIR / "VO_Archive_Cyrene_5.wav"),
+        str(VOICE_DIR / "VO_Archive_Cyrene_14.wav")
+    ]
 }
 
 # ──────────────────────────────────────────────
@@ -76,10 +85,7 @@ def load_tts_model():
 
     print("[TTS Log] Loading TTS model (XTTS v2)...")
     try:
-        # ★ 高速化・省メモリ化の要: GPUが使える環境なら自動でGPUをオンにする
         use_gpu = torch.cuda.is_available()
-        
-        # モデルをロード
         model = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=use_gpu)
         tts_model = model
         print(f"[TTS Log] TTS model loaded successfully. (GPU Enabled: {use_gpu})")
@@ -98,7 +104,6 @@ async def unload_tts_model():
             del tts_model
             tts_model = None
             
-            # 強制的なガベージコレクションとVRAM/RAMの解放
             gc.collect()
             try:
                 if torch.cuda.is_available():
@@ -139,7 +144,6 @@ class VoiceState:
             if voice_client and voice_client.is_connected():
                 try:
                     ffmpeg_executable = get_ffmpeg_path()
-                    # 高速再生用にオプションを最適化
                     source = discord.FFmpegPCMAudio(executable=ffmpeg_executable, source=file_path)
                     voice_client.play(source, after=after_playing)
                 except Exception as e:
@@ -153,12 +157,10 @@ class VoiceState:
         current_model = tts_model
         if current_model is None: return
 
-        # テキストのクレンジング（音質安定化のため）
         clean_text = re.sub(r'https?://\S+', '', text)
         clean_text = re.sub(r'<[^>]+>', '', clean_text)
         clean_text = re.sub(r'[♪♡♥❤♫♬♩*＊_~〜]', '', clean_text)
         
-        # 読点や疑問符をXTTSが最も綺麗に発音できる形式に正規化
         clean_text = clean_text.replace('。', '. ').replace('、', ', ')
         clean_text = clean_text.replace('？', '?').replace('！', '!')
         clean_text = re.sub(r'\.{2,}|…', ',', clean_text)
@@ -168,18 +170,18 @@ class VoiceState:
         clean_text = re.sub(r'\s+', ' ', clean_text).strip()
         
         if not clean_text: return
-        # 生成速度を優先し、長文はカット（高速化・省メモリ）
         if len(clean_text) > 150: clean_text = clean_text[:150] + "..."
 
-        # ★ cyrene.py から渡された lang ("ja" または "en") をそのまま使用
         target_lang = "en" if lang == "en" else "ja"
         
-        # 言語に対応したWAVファイルを取得（見つからない場合はフォールバック）
-        speaker_wav_path = WAV_MAPPING.get(target_lang)
-        if not speaker_wav_path or not os.path.exists(speaker_wav_path):
+        # ★ ここでリスト（3つのファイルパス）を取得します
+        speaker_wav_paths = WAV_MAPPING.get(target_lang)
+        
+        # 万が一指定したファイルが見つからない場合のフォールバック（voices内の全wavを使う）
+        if not speaker_wav_paths or not all(os.path.exists(p) for p in speaker_wav_paths):
             ref_wavs = list(VOICE_DIR.glob("*.wav"))
             if not ref_wavs: return
-            speaker_wav_path = str(ref_wavs[0])
+            speaker_wav_paths = [str(w) for w in ref_wavs] # 見つかったWAVをすべてリスト化
 
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
         output_path = DATA_DIR / f"tts_{timestamp}.wav"
@@ -188,12 +190,12 @@ class VoiceState:
             async with TTS_LOCK:
                 start_time = time.time()
                 
-                # スピード向上と品質維持のための推論設定
+                # speaker_wav にリストを渡して実行
                 func = functools.partial(
                     current_model.tts_to_file,
                     text=clean_text,
                     file_path=str(output_path),
-                    speaker_wav=speaker_wav_path, 
+                    speaker_wav=speaker_wav_paths, # ★ 複数のファイルを同時に使用
                     language=target_lang
                 )
                 loop = asyncio.get_running_loop()
@@ -202,7 +204,6 @@ class VoiceState:
                 elapsed = time.time() - start_time
                 print(f"[TTS Log] Generated in {elapsed:.2f}s (Lang: {target_lang}): '{clean_text}'")
                 
-                # ★ メモリリークを防ぐための即時クリーンアップ
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
             
