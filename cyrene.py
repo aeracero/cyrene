@@ -572,13 +572,10 @@ async def slash_join(interaction: discord.Interaction, mode: str = "bot_only", t
     
     await interaction.followup.send(msg)
 
-@tree.command(name="voice_settings", description="読み上げ設定を変更します（VC接続中のみ）。")
-@app_commands.describe(mode="読み上げモード", target="特定ユーザーのみ読む場合", read_channel="読み上げるテキストチャンネル（指定なしで変更なし）")
-@app_commands.choices(mode=[
-    app_commands.Choice(name="Bot Only (自分の発言のみ)", value="bot_only"),
-    app_commands.Choice(name="Everyone (全員読み上げ)", value="everyone"),
-    app_commands.Choice(name="Specific User (特定ユーザーのみ)", value="specific")
-])
+    # ▼【新規追加】Mac側の監視役(Watchdog)へ「AIを起動して！」の合図を送る
+    await interaction.channel.send("[SYSTEM_WAKEUP] キュレネの音声システムを起動中...（Mac側で準備をしているから、約15秒待っててね！）")
+
+    
 async def slash_voice_settings(interaction: discord.Interaction, mode: str, target: discord.Member = None, read_channel: discord.TextChannel = None):
     lang = db.get_user_lang(interaction.user.id)
     if not interaction.guild.voice_client or not interaction.guild.voice_client.is_connected():
@@ -615,6 +612,9 @@ async def slash_leave(interaction: discord.Interaction):
         await interaction.guild.voice_client.disconnect()
         msg = "わかったわ、切断するわね。……寂しくなったら、またすぐに呼んでいいのよ？" if lang != "en" else "Disconnected. If you get lonely... call me again right away, okay?"
         await interaction.response.send_message(msg)
+        
+        # ▼【新規追加】Mac側の監視役(Watchdog)へ「AIを停止して！」の合図を送る
+        await interaction.channel.send("[SYSTEM_SHUTDOWN] 音声システムを停止するわね。")
         
         if len(client.voice_clients) == 0:
             await vs.unload_tts_model()
@@ -935,18 +935,32 @@ async def on_ready():
 
 @client.event
 async def on_message(message):
-    if message.author.bot: return
+    # ▼【新規】Bot自身のシステム通信（URL自動連携）をキャッチする
+    if message.author.id == client.user.id:
+        if message.content.startswith("[INTERNAL_URL_UPDATE]"):
+            parts = message.content.split()
+            if len(parts) >= 2:
+                new_url = parts[1]
+                vs.set_api_url(new_url)
+                await message.delete() # 裏通信ログを消す
+                await message.channel.send("🎙️ 音声システムの接続が完了したわ！いっぱいお話ししましょう♪")
+            return
+        elif message.content.startswith("[SYSTEM_WAKEUP]") or message.content.startswith("[SYSTEM_SHUTDOWN]"):
+            return # Macへの合図用メッセージなので無視する
+
+    if message.author.bot:
+        return
+
     user_id = message.author.id
     content = message.content.strip()
 
-    # ▼ここから書き換え▼
+    # ▼読み上げ処理▼
     if message.guild and message.guild.voice_client and message.guild.voice_client.is_connected():
         is_cmd = content.startswith("/") or content.startswith("!")
         if not is_cmd:
             state = vs.get_voice_state(client, message.guild.id)
             should_read_user_msg = False
             
-            # 読み上げ対象のチャンネルか確認
             if state.read_channel_id is None or state.read_channel_id == message.channel.id:
                 if state.mode == "everyone":
                     if message.author.voice and message.author.voice.channel == message.guild.voice_client.channel:
@@ -954,7 +968,6 @@ async def on_message(message):
                 elif state.mode == "specific" and state.target_user_id == user_id:
                     should_read_user_msg = True
 
-            # Bot Only「以外」のモードなら、ユーザーの送信したテキストをそのまま読み上げる
             if should_read_user_msg:
                 u_lang = db.get_user_lang(user_id)
                 await state.add_text_to_queue(content, message.guild.voice_client, lang=u_lang)
@@ -962,7 +975,9 @@ async def on_message(message):
     ai_mode = get_ai_mode(user_id)
     is_command_prefix = content.startswith("/") or content.startswith("!")
     is_admin_cmd = content in ["データ管理", "data management"]
-    # ▲ここまで書き換え▲
+
+    # --- 以下、既存の返信処理へ続く ---
+    # （これ以降の get_reply などの部分はそのまま残してください）
 
     # ──────────────────────────────────────────────
     # ★ 翻訳モード（通訳機能）の処理
