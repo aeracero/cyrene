@@ -528,7 +528,7 @@ async def slash_restart(interaction: discord.Interaction):
     app_commands.Choice(name="Everyone (全員読み上げ)", value="everyone"),
     app_commands.Choice(name="Specific User (特定ユーザーのみ)", value="specific")
 ])
-async def slash_join(interaction: discord.Interaction, mode: str = "bot_only", target: discord.Member = None, read_channel: discord.TextChannel = None):
+async def slash_join(interaction: discord.Interaction, mode: str = "bot_only", target: discord.Member = None, read_channel: discord.TextChannel | discord.VoiceChannel = None):
     await interaction.response.defer()
 
     lang = db.get_user_lang(interaction.user.id)
@@ -576,7 +576,7 @@ async def slash_join(interaction: discord.Interaction, mode: str = "bot_only", t
     await interaction.channel.send("[SYSTEM_WAKEUP] キュレネの音声システムを起動中...（Mac側で準備をしているから、約15秒待っててね！）")
 
     
-async def slash_voice_settings(interaction: discord.Interaction, mode: str, target: discord.Member = None, read_channel: discord.TextChannel = None):
+async def slash_voice_settings(interaction: discord.Interaction, mode: str, target: discord.Member = None, read_channel: discord.TextChannel | discord.VoiceChannel = None):
     lang = db.get_user_lang(interaction.user.id)
     if not interaction.guild.voice_client or not interaction.guild.voice_client.is_connected():
         msg = "あたし、まだどこにも接続してないわよ？" if lang != "en" else "I'm not connected to any voice channel yet, darling."
