@@ -542,8 +542,13 @@ async def slash_join(interaction: discord.Interaction, mode: str = "bot_only", t
         await interaction.guild.voice_client.move_to(channel)
         action_msg = f"**{channel.name}** に移動したわ。" if lang != "en" else f"Moved to **{channel.name}**."
     else:
-        await channel.connect()
-        action_msg = f"**{channel.name}** に接続したわ。" if lang != "en" else f"Connected to **{channel.name}**."
+        try:
+            # ▼【修正】タイムアウト時間を延ばし、接続を安定させるオプションを追加
+            await channel.connect(timeout=60.0, reconnect=True)
+            action_msg = f"**{channel.name}** に接続したわ。" if lang != "en" else f"Connected to **{channel.name}**."
+        except discord.errors.ClientException:
+            # すでに接続されている場合は無視して進む
+            action_msg = f"**{channel.name}** に接続したわ。" if lang != "en" else f"Connected to **{channel.name}**."
     
     state = vs.get_voice_state(client, interaction.guild.id)
     state.mode = mode
