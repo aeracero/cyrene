@@ -372,6 +372,102 @@ Era Nova → 永劫回帰
 gemini_sessions = {}
 translation_sessions = {} # ★ 通訳機能用に追加
 
+# ★ 新規追加: talk_along フリートーク機能の状態管理
+TALK_ALONG_CHANNELS = set()
+TALK_ALONG_HISTORY = {}     # {channel_id: ["UserA: hello", "UserB: hi", "Cyrene: ふふ♪"]}
+TALK_ALONG_COOLDOWNS = {}   # {channel_id: int}
+
+async def handle_talk_along(message: discord.Message) -> bool:
+    """Talk Alongモードの処理。応答した場合はTrueを返す。"""
+    channel_id = message.channel.id
+    if channel_id not in TALK_ALONG_CHANNELS:
+        return False
+
+    content = message.content.strip()
+    # 空メッセージやコマンドは無視
+    if not content or content.startswith("/") or content.startswith("!"):
+        return False
+
+    # 履歴の更新
+    if channel_id not in TALK_ALONG_HISTORY:
+        TALK_ALONG_HISTORY[channel_id] = []
+
+    user_name = message.author.display_name
+    TALK_ALONG_HISTORY[channel_id].append(f"{user_name}: {content}")
+    if len(TALK_ALONG_HISTORY[channel_id]) > 10:
+        TALK_ALONG_HISTORY[channel_id].pop(0)
+
+    # クールダウンの処理
+    if TALK_ALONG_COOLDOWNS.get(channel_id, 0) > 0:
+        TALK_ALONG_COOLDOWNS[channel_id] -= 1
+        # メンションされていない限りはスルー
+        if not client.user.mentioned_in(message):
+            return False
+
+    # 反応判定ロジック
+    keywords = ["cyrene", "キュレネ", "サイレーン", "ai", "bot", "あたし"]
+    should_reply = False
+    
+    if client.user.mentioned_in(message) or any(k in content.lower() for k in keywords):
+        should_reply = True
+    elif content.endswith("？") or content.endswith("?"):
+        should_reply = random.random() < 0.35  # 疑問形には少し高めの確率で反応
+    else:
+        should_reply = random.random() < 0.15  # ランダムに相槌を打つ
+
+    if not should_reply:
+        return False
+
+    # 返信を生成・送信する
+    # 「読んでいる」感を出すためのランダム遅延
+    await asyncio.sleep(random.uniform(1.0, 2.5))
+
+    try:
+        async with message.channel.typing():
+            lang = db.get_user_lang(message.author.id)
+            # 既存のシステムプロンプトをベースに、Talk Along専用の指示を追加
+            sys_inst = get_system_instruction("casual", lang, "みんな")
+            sys_inst += (
+                "\n\n# Talk Along Mode (Group Chat)\n"
+                "You are participating in a group chat with multiple people.\n"
+                "CRITICAL RULES FOR THIS MODE:\n"
+                "1. **Be extremely concise:** Reply with very short sentences. Often 1-2 phrases or a simple reaction is enough.\n"
+                "2. **Be a participant, not an assistant:** Do not answer every question perfectly. Just react, agree, tease, or add a small comment naturally.\n"
+                "3. **Natural flow:** Use conversational fillers ('ふふ', 'へー', 'そうなんだ', 'わかるわ').\n"
+                "4. **No Prefix:** Output ONLY your reply text. Do not prefix with your name."
+            )
+
+            chat_log = "\n".join(TALK_ALONG_HISTORY[channel_id])
+            prompt = f"【Recent Chat Log】\n{chat_log}\n\nBased on the chat log, provide a short, natural reply as Cyrene."
+
+            response = await genai_client.aio.models.generate_content(
+                model=GEMINI_MODEL_NAME,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.8,
+                    system_instruction=sys_inst
+                )
+            )
+
+            reply_text = response.text.strip()
+            # 万が一プレフィックスがついてしまった場合のクリーニング
+            reply_text = re.sub(r"^(Cyrene|キュレネ|サイレーン):\s*", "", reply_text, flags=re.IGNORECASE)
+
+            # 「タイピングしている」感を出すための文字数比例遅延
+            typing_delay = min(len(reply_text) * 0.1, 4.0)
+            await asyncio.sleep(typing_delay)
+
+        await message.channel.send(reply_text)
+        TALK_ALONG_HISTORY[channel_id].append(f"Cyrene: {reply_text}")
+        
+        # 連投を防ぐためのクールダウン（2〜4メッセージ分は自発的に発言しない）
+        TALK_ALONG_COOLDOWNS[channel_id] = random.randint(2, 4)
+        return True
+
+    except Exception as e:
+        print(f"TalkAlong Error: {e}")
+        return False
+
 async def get_gemini_reply(message, mode: str) -> str:
     if not genai_client:
         return "ごめんなさい、AI回路（APIキー）が繋がっていないみたい…。"
@@ -466,6 +562,25 @@ async def get_gemini_reply(message, mode: str) -> str:
 # ──────────────────────────────────────────────
 # ★ Slash Commands
 # ──────────────────────────────────────────────
+
+# ★ 新規追加: /talk_along コマンド
+@tree.command(name="talk_along", description="自然な会話参加モード（フリートーク）をON/OFFします")
+async def slash_talk_along(interaction: discord.Interaction):
+    channel_id = interaction.channel.id
+    lang = db.get_user_lang(interaction.user.id)
+
+    if channel_id in TALK_ALONG_CHANNELS:
+        TALK_ALONG_CHANNELS.remove(channel_id)
+        if channel_id in TALK_ALONG_HISTORY:
+            del TALK_ALONG_HISTORY[channel_id]
+        msg = "💤 talk_alongモードをOFFにしました。静かに見守っているわね。" if lang != "en" else "💤 Talk-along mode deactivated. I'll watch quietly."
+        await interaction.response.send_message(msg)
+    else:
+        TALK_ALONG_CHANNELS.add(channel_id)
+        TALK_ALONG_HISTORY[channel_id] = []
+        TALK_ALONG_COOLDOWNS[channel_id] = 0
+        msg = "💬 talk_alongモードをONにしました！みんなの会話に適当に混ざるわね♪" if lang != "en" else "💬 Talk-along mode activated! I'll join the conversation naturally♪"
+        await interaction.response.send_message(msg)
 
 # ★ 通訳機能用に追加
 @tree.command(name="translate", description="指定した2つの言語間で相互に翻訳します。引数なしで翻訳モードを終了します。")
@@ -782,6 +897,7 @@ ADMIN_COMMANDS_LIST_JP = (
     "- `/language`: 言語設定の変更\n"
     "- `/toggle_memory`: 記憶設定の切替\n"
     "- `/translate`: 通訳モードのON/OFF\n"
+    "- `/talk_along`: フリートーク機能のON/OFF\n"
     "- `/announcement`: アプデ告知先の設定 (スラッシュコマンド)\n"
     "- `アプデ実行`: 設定先へアップデート情報を送信（または再起動時に自動で送られるわ）\n"
     "- `/status`, `/gacha`: ステータス確認・ガチャ\n"
@@ -813,6 +929,7 @@ ADMIN_COMMANDS_LIST_EN = (
     "- `/language`: Change Language\n"
     "- `/toggle_memory`: Toggle Memory\n"
     "- `/translate`: Toggle Interpretation Mode\n"
+    "- `/talk_along`: Toggle Talk-along Mode\n"
     "- `/announcement`: Set announcement channel/role\n"
     "- `/status`, `/gacha`: Check status / Pull gacha\n"
     "- `!mode auto`: Auto-reply mode (When AI mode is OFF)\n"
@@ -828,6 +945,7 @@ GENERAL_COMMANDS_LIST_JP = (
     "- `/language [jp/en]`: 言語を変えるわ\n"
     "- `/toggle_memory`: 会話を覚えるかどうか設定できるわ\n"
     "- `/translate`: 2つの言語を通訳するわよ\n"
+    "- `/talk_along`: チャンネルの会話に自然に混ざるモードよ\n"
     "- (画像を送ると感想を言うわよ♪)\n\n"
     "**★ 通常機能**\n"
     "- `/daily`: デイリー報酬を受け取るわ\n"
@@ -849,6 +967,7 @@ GENERAL_COMMANDS_LIST_EN = (
     "- `/language [jp/en]`: Change language\n"
     "- `/toggle_memory`: Toggle memory settings\n"
     "- `/translate`: Interpret between two languages\n"
+    "- `/talk_along`: I'll join the channel's conversation naturally\n"
     "- (I can see images if you send them♪)\n\n"
     "**★ Standard Features**\n"
     "- `/daily`: Claim daily rewards\n"
@@ -981,9 +1100,6 @@ async def on_message(message):
     is_command_prefix = content.startswith("/") or content.startswith("!")
     is_admin_cmd = content in ["データ管理", "data management"]
 
-    # --- 以下、既存の返信処理へ続く ---
-    # （これ以降の get_reply などの部分はそのまま残してください）
-
     # ──────────────────────────────────────────────
     # ★ 翻訳モード（通訳機能）の処理
     # ──────────────────────────────────────────────
@@ -1015,11 +1131,17 @@ async def on_message(message):
         return # 翻訳モード中は通常のAI応答やコマンド処理をスキップ
     # ──────────────────────────────────────────────
     
+    # ★ ユーザー個別のAIモード判定
     if ai_mode and not is_command_prefix and not is_admin_cmd:
         if not content and not message.attachments: return
         ai_reply = await get_gemini_reply(message, ai_mode)
         await send_myu(message, user_id, f"{message.author.mention} {ai_reply}")
         return
+
+    # ★ Talk Along（チャンネル全体フリートーク）判定
+    if not is_command_prefix and not is_admin_cmd:
+        if await handle_talk_along(message):
+            return  # talk_alongで返信した場合は以降の通常コマンド処理をスキップ
 
     content_body = re.sub(rf"<@!?{client.user.id}>", "", content).strip()
     content_body_lower = content_body.lower()
