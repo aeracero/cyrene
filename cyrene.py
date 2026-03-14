@@ -38,16 +38,10 @@ import cthulhu_game
 # ★ アップデート情報（更新のたびにここを書き換えてください）
 # ──────────────────────────────────────────────
 LATEST_UPDATE_INFO = """
-ver 6.4
-製作者は数学ができずに嘆いてたから代わりにあたしがアプデ報告するわね♪
+ver 6.5
+対話ができるようになったわ♪
+/talk_along とすることで発動できるらしいわよ
 
-・声の回路（GPT-SoVITS）を新しくしたわ
-    これからはもっとあたしらしい自然な声で、そして今までよりもサクサクお話しできるようになったわ♪
-・システムもうーんと軽くなったから、みんなを待たせることも減るはずよ
-    その代わり、読み上げ等の機能は製作者のPC経由になったらしいわよ♪
-    ついでに英語の話し方忘れちゃったわ、てへへっ
-
-これからもよろしくね♪
 """
 
 # ──────────────────────────────────────────────
@@ -370,15 +364,17 @@ Era Nova → 永劫回帰
 """
 
 gemini_sessions = {}
-translation_sessions = {} # ★ 通訳機能用に追加
+translation_sessions = {}
 
-# ★ 新規追加: talk_along フリートーク機能の状態管理
+# ──────────────────────────────────────────────
+# ★ Talk Along 機能用データ (履歴＆状態管理)
+# ──────────────────────────────────────────────
 TALK_ALONG_CHANNELS = set()
-TALK_ALONG_HISTORY = {}     # {channel_id: ["UserA: hello", "UserB: hi", "Cyrene: ふふ♪"]}
+TALK_ALONG_HISTORY = {}     # {channel_id: ["UserA: hello", "Cyrene: Hi♪", ...]}
 TALK_ALONG_COOLDOWNS = {}   # {channel_id: int}
 
 async def handle_talk_along(message: discord.Message) -> bool:
-    """Talk Alongモードの処理。応答した場合はTrueを返す。"""
+    """Talk Alongモードの処理。チャンネル単位で履歴を管理し、応答した場合はTrueを返す。"""
     channel_id = message.channel.id
     if channel_id not in TALK_ALONG_CHANNELS:
         return False
@@ -388,13 +384,15 @@ async def handle_talk_along(message: discord.Message) -> bool:
     if not content or content.startswith("/") or content.startswith("!"):
         return False
 
-    # 履歴の更新
+    # チャンネルごとの履歴の更新
     if channel_id not in TALK_ALONG_HISTORY:
         TALK_ALONG_HISTORY[channel_id] = []
 
     user_name = message.author.display_name
     TALK_ALONG_HISTORY[channel_id].append(f"{user_name}: {content}")
-    if len(TALK_ALONG_HISTORY[channel_id]) > 10:
+    
+    # 履歴は直近15メッセージを保持して文脈を保つ
+    if len(TALK_ALONG_HISTORY[channel_id]) > 15:
         TALK_ALONG_HISTORY[channel_id].pop(0)
 
     # クールダウンの処理
@@ -425,20 +423,23 @@ async def handle_talk_along(message: discord.Message) -> bool:
     try:
         async with message.channel.typing():
             lang = db.get_user_lang(message.author.id)
-            # 既存のシステムプロンプトをベースに、Talk Along専用の指示を追加
+            
+            # ★ ご指定通り、既存のプロンプトをそのまま取得
             sys_inst = get_system_instruction("casual", lang, "みんな")
+            
+            # グループチャットで長文をペラペラ喋らないようにするための微調整指示を追記
             sys_inst += (
-                "\n\n# Talk Along Mode (Group Chat)\n"
-                "You are participating in a group chat with multiple people.\n"
+                "\n\n# Group Chat Mode Instructions\n"
+                "You are currently participating in a multi-user group chat.\n"
                 "CRITICAL RULES FOR THIS MODE:\n"
-                "1. **Be extremely concise:** Reply with very short sentences. Often 1-2 phrases or a simple reaction is enough.\n"
-                "2. **Be a participant, not an assistant:** Do not answer every question perfectly. Just react, agree, tease, or add a small comment naturally.\n"
-                "3. **Natural flow:** Use conversational fillers ('ふふ', 'へー', 'そうなんだ', 'わかるわ').\n"
-                "4. **No Prefix:** Output ONLY your reply text. Do not prefix with your name."
+                "1. **Keep it very short:** Reply with 1-2 short sentences. Act as a natural chat participant, not an answering machine.\n"
+                "2. **Natural flow:** Use conversational fillers ('ふふ', 'へー', 'そうなんだ', 'わかるわ').\n"
+                "3. **No Prefix:** Output ONLY your reply text. Do not prefix your response with your name."
             )
 
+            # 会話履歴を1つのプロンプトとして構築してGeminiに渡す
             chat_log = "\n".join(TALK_ALONG_HISTORY[channel_id])
-            prompt = f"【Recent Chat Log】\n{chat_log}\n\nBased on the chat log, provide a short, natural reply as Cyrene."
+            prompt = f"【Recent Chat Log】\n{chat_log}\n\nBased on the chat log above, provide a short, natural reply as Cyrene."
 
             response = await genai_client.aio.models.generate_content(
                 model=GEMINI_MODEL_NAME,
@@ -450,14 +451,16 @@ async def handle_talk_along(message: discord.Message) -> bool:
             )
 
             reply_text = response.text.strip()
-            # 万が一プレフィックスがついてしまった場合のクリーニング
-            reply_text = re.sub(r"^(Cyrene|キュレネ|サイレーン):\s*", "", reply_text, flags=re.IGNORECASE)
+            # 万が一「Cyrene:」などのプレフィックスがついてしまった場合のクリーニング
+            reply_text = re.sub(r"^(Cyrene|キュレネ|サイレーン):\s*", "", reply_text, flags=re.IGNORECASE).strip()
 
             # 「タイピングしている」感を出すための文字数比例遅延
             typing_delay = min(len(reply_text) * 0.1, 4.0)
             await asyncio.sleep(typing_delay)
 
         await message.channel.send(reply_text)
+        
+        # ボット自身の発言も履歴に追加
         TALK_ALONG_HISTORY[channel_id].append(f"Cyrene: {reply_text}")
         
         # 連投を防ぐためのクールダウン（2〜4メッセージ分は自発的に発言しない）
@@ -563,26 +566,25 @@ async def get_gemini_reply(message, mode: str) -> str:
 # ★ Slash Commands
 # ──────────────────────────────────────────────
 
-# ★ 新規追加: /talk_along コマンド
 @tree.command(name="talk_along", description="自然な会話参加モード（フリートーク）をON/OFFします")
 async def slash_talk_along(interaction: discord.Interaction):
     channel_id = interaction.channel.id
     lang = db.get_user_lang(interaction.user.id)
 
+    # チャンネルIDが登録されていればOFF、されていなければONにする
     if channel_id in TALK_ALONG_CHANNELS:
         TALK_ALONG_CHANNELS.remove(channel_id)
         if channel_id in TALK_ALONG_HISTORY:
             del TALK_ALONG_HISTORY[channel_id]
-        msg = "💤 talk_alongモードをOFFにしました。静かに見守っているわね。" if lang != "en" else "💤 Talk-along mode deactivated. I'll watch quietly."
+        msg = "💤 このチャンネルのtalk_alongモードをOFFにしたわ。静かに見守っているわね。" if lang != "en" else "💤 Talk-along mode deactivated for this channel. I'll watch quietly."
         await interaction.response.send_message(msg)
     else:
         TALK_ALONG_CHANNELS.add(channel_id)
         TALK_ALONG_HISTORY[channel_id] = []
         TALK_ALONG_COOLDOWNS[channel_id] = 0
-        msg = "💬 talk_alongモードをONにしました！みんなの会話に適当に混ざるわね♪" if lang != "en" else "💬 Talk-along mode activated! I'll join the conversation naturally♪"
+        msg = "💬 このチャンネルでtalk_alongモードをONにしたわ！みんなの会話に適当に混ざるわね♪" if lang != "en" else "💬 Talk-along mode activated for this channel! I'll join the conversation naturally♪"
         await interaction.response.send_message(msg)
 
-# ★ 通訳機能用に追加
 @tree.command(name="translate", description="指定した2つの言語間で相互に翻訳します。引数なしで翻訳モードを終了します。")
 @app_commands.describe(lang1="言語1 (例: jp, en, kr 等)", lang2="言語2 (例: en, jp, zh 等)")
 async def slash_translate(interaction: discord.Interaction, lang1: str = None, lang2: str = None):
@@ -1166,7 +1168,7 @@ async def on_message(message):
     ACHIEVE_KEYWORDS = ["実績", "achievement", "進捗", "progress"]
     TITLE_KEYWORDS = ["二つ名", "change title"]
 
-    # 手動アプデ実行コマンド (自動化しましたが念のため残しています)
+    # 手動アプデ実行コマンド
     if content_body == "アプデ実行":
         if not db.is_admin(user_id):
             await send_myu(message, user_id, "あら、そのコマンドは管理者専用よ。" if lang != "en" else "Admin only, darling.")
@@ -1190,7 +1192,6 @@ async def on_message(message):
 
         await target_channel.send(final_msg)
         
-        # 手動実行時も二重送信を防ぐために記憶を更新
         with open(LAST_UPDATE_FILE, "w", encoding="utf-8") as f:
             f.write(LATEST_UPDATE_INFO.strip())
 
