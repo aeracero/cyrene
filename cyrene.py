@@ -33,6 +33,7 @@ from forms import get_user_form, set_user_form, resolve_form_code, get_form_disp
 from special_unlocks import inc_janken_win, get_janken_wins, is_nanoka_unlocked, set_nanoka_unlocked, has_danheng_stage1, mark_danheng_stage1, is_danheng_unlocked, set_danheng_unlocked
 import kimera_game
 import cthulhu_game
+import pull_calc
 
 # ──────────────────────────────────────────────
 # ★ アップデート情報（更新のたびにここを書き換えてください）
@@ -840,6 +841,131 @@ async def slash_gacha(interaction: discord.Interaction, pulls: int):
         if unlocks: res += "\n" + "\n".join(unlocks)
     await interaction.response.send_message(res)
 
+@tree.command(name="pull_calc", description="HSRの凸確率をシミュレーションします。")
+@app_commands.describe(
+    pulls="所持している天井数（引ける回数）",
+    current_eidolon="現在の凸数（未所持なら -1）",
+    target_eidolon="目標の凸数",
+    pity="現在の5★ピティ数（前の5★からの引き数）",
+    guarantee="次の5★で確率保証（50/50勝利保証）があるか",
+)
+@app_commands.choices(
+    current_eidolon=[
+        app_commands.Choice(name="未所持 (not owned)", value=-1),
+        app_commands.Choice(name="E0", value=0),
+        app_commands.Choice(name="E1", value=1),
+        app_commands.Choice(name="E2", value=2),
+        app_commands.Choice(name="E3", value=3),
+        app_commands.Choice(name="E4", value=4),
+        app_commands.Choice(name="E5", value=5),
+        app_commands.Choice(name="E6", value=6),
+    ],
+    target_eidolon=[
+        app_commands.Choice(name="E0", value=0),
+        app_commands.Choice(name="E1", value=1),
+        app_commands.Choice(name="E2", value=2),
+        app_commands.Choice(name="E3", value=3),
+        app_commands.Choice(name="E4", value=4),
+        app_commands.Choice(name="E5", value=5),
+        app_commands.Choice(name="E6", value=6),
+    ],
+    guarantee=[
+        app_commands.Choice(name="あり (guaranteed)", value=1),
+        app_commands.Choice(name="なし (50/50)", value=0),
+    ],
+)
+async def slash_pull_calc(
+    interaction: discord.Interaction,
+    pulls:            int,
+    current_eidolon:  int  = -1,
+    target_eidolon:   int  = 0,
+    pity:             int  = 0,
+    guarantee:        int  = 0,
+):
+    user_id  = interaction.user.id
+    lang     = db.get_user_lang(user_id)
+
+    # バリデーション
+    pulls = max(0, min(pulls, 10000))
+    pity  = max(0, min(pity, 89))
+    if current_eidolon >= target_eidolon:
+        msg = ("Already at or past the target eidolon!" if lang == "en"
+               else "現在の凸数がすでに目標以上よ！")
+        await interaction.response.send_message(msg, ephemeral=True)
+        return
+
+    await interaction.response.defer()
+
+    # CPU負荷を別スレッドで実行
+    loop = asyncio.get_event_loop()
+    inp, sim, hi = await loop.run_in_executor(
+        None,
+        pull_calc.calc,
+        pulls, current_eidolon, target_eidolon, pity, bool(guarantee)
+    )
+
+    # ── Embed 構築 ──────────────────────────────────
+    need = inp.need
+    sr   = sim["success_rate"]
+    se   = sim["se"]
+
+    cur_label  = "未所持" if current_eidolon < 0 else f"E{current_eidolon}"
+    guar_label = ("あり ✅" if guarantee else "なし") if lang != "en" else ("Yes ✅" if guarantee else "No")
+
+    # 成功確率の色分け
+    if sr >= 0.90:
+        color = 0x22C55E   # green
+    elif sr >= 0.60:
+        color = 0xF59E0B   # gold
+    else:
+        color = 0xEF4444   # red
+
+    # 最悪ケーステキスト
+    if lang == "en":
+        wc_text = ("🎉 Hard pity guarantees it!" if hi["hard_guaranteed"]
+                   else f"Worst-case needs {hi['pulls_worst_all_losses']} pulls")
+        title   = "🌟 Eidolon Pull Calculator"
+        footer  = f"Monte Carlo: {inp.simulations:,} simulations • soft pity starts at pull 74"
+        fl      = [
+            ("🎯 Goal",            f"{cur_label} → E{target_eidolon} ({need} copies needed)", False),
+            ("🎟 Guarantee / Pity", f"Guarantee: {guar_label}  |  Pity: {pity}", False),
+            ("📊 Success Chance",   f"**{sr*100:.1f}%**   ±{se*1.96*100:.1f}% (95% CI)\n"
+                                    f"({sim['successes']:,} / {inp.simulations:,} sims)", False),
+            ("🎲 Avg 5★ pulls",    f"{sim['avg_five_stars']:.2f} total", True),
+            ("😭 Avg 50/50 losses", f"{sim['avg_losses_before']:.2f} before target", True),
+            ("🏁 Pulls to finish",  f"P10: **{sim['p10']}**  |  Median: **{sim['median']}**  |  P90: **{sim['p90']}**", False),
+            ("💎 4★ Starlight EV",  f"{sim['avg_starlight4']:.1f} ≈ {sim['avg_starlight4']/20:.1f} extra pulls", True),
+            ("⚡ Worst case",       wc_text, True),
+        ]
+    else:
+        wc_text = ("🎉 ハードピティで確定！" if hi["hard_guaranteed"]
+                   else f"最悪 **{hi['pulls_worst_all_losses']}** 連が必要")
+        title   = "🌟 凸確率シミュレーター"
+        footer  = f"モンテカルロ法: {inp.simulations:,} 回シミュレーション • ソフトピティ 74連目〜"
+        fl      = [
+            ("🎯 目標",            f"{cur_label} → E{target_eidolon}（あと **{need}** 凸）", False),
+            ("🎟 保証 / ピティ",   f"保証: {guar_label}  |  現在ピティ: {pity}", False),
+            ("📊 成功確率",        f"**{sr*100:.1f}%**   ±{se*1.96*100:.1f}% (95%CI)\n"
+                                   f"（{sim['successes']:,} / {inp.simulations:,} 回成功）", False),
+            ("🎲 平均5★数",       f"{sim['avg_five_stars']:.2f} 体", True),
+            ("😭 平均50/50負け",   f"目標前: {sim['avg_losses_before']:.2f} 回", True),
+            ("🏁 目標達成連数",    f"P10: **{sim['p10']}**  |  中央値: **{sim['median']}**  |  P90: **{sim['p90']}**", False),
+            ("💎 4★スターライト EV", f"{sim['avg_starlight4']:.1f} ≈ {sim['avg_starlight4']/20:.1f} 連相当", True),
+            ("⚡ 最悪ケース",      wc_text, True),
+        ]
+
+    embed = discord.Embed(title=title, color=color)
+    embed.description = (
+        f"**{pulls}** {'pulls' if lang == 'en' else '連'} での計算結果"
+        if lang != "en"
+        else f"Results for **{pulls}** pulls"
+    )
+    for name, value, inline in fl:
+        embed.add_field(name=name, value=value, inline=inline)
+    embed.set_footer(text=footer)
+
+    await interaction.followup.send(embed=embed)
+
 @tree.command(name="transform", description="変身コードを使って別の姿に変身します。")
 async def slash_transform(interaction: discord.Interaction, code: str):
     user_id = interaction.user.id
@@ -952,6 +1078,7 @@ GENERAL_COMMANDS_LIST_JP = (
     "**★ 通常機能**\n"
     "- `/daily`: デイリー報酬を受け取るわ\n"
     "- `/gacha`: ガチャを回すわ\n"
+    "- `/pull_calc`: HSRの凸確率をシミュレーションするわ\n"
     "- `/status`: ステータスを確認するわ\n"
     "- `/transform`: 変身コードを入力してね\n"
     "- `じゃんけん`: 勝負よ！\n"
@@ -974,6 +1101,7 @@ GENERAL_COMMANDS_LIST_EN = (
     "**★ Standard Features**\n"
     "- `/daily`: Claim daily rewards\n"
     "- `/gacha`: Pull gacha\n"
+    "- `/pull_calc`: Simulate HSR eidolon pull probability\n"
     "- `/status`: Check status\n"
     "- `/transform`: Change form\n"
     "- `RPS`: Rock-Paper-Scissors!\n"
@@ -1023,6 +1151,7 @@ async def discount_event_loop():
 async def on_ready():
     print(f"Login: {client.user}")
     try:
+        tree.clear_commands(guild=None)  # ★ 強制再登録（確認後に消してOK）
         await tree.sync()
         print("Slash commands synced.")
     except Exception as e:
