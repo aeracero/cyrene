@@ -1151,7 +1151,6 @@ async def discount_event_loop():
 async def on_ready():
     print(f"Login: {client.user}")
     try:
-        tree.clear_commands(guild=None)  # ★ 強制再登録（確認後に消してOK）
         await tree.sync()
         print("Slash commands synced.")
     except Exception as e:
