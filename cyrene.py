@@ -159,7 +159,7 @@ else:
     genai_client = None
     print("Warning: GEMINI_API_KEY is missing in config.py")
 
-GEMINI_MODEL_NAME = "gemini-4-argon"
+GEMINI_MODEL_NAME = "gemini-3.8-flash"
 google_search_tool = types.Tool(google_search=types.GoogleSearch())
 
 def get_system_instruction(mode: str, lang: str, user_name: str) -> str:
