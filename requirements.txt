@@ -1,13 +1,6 @@
 discord.py==2.6.4
 python-dotenv
 google-genai
-PyNaCl
-transformers==4.33.0
-torch==2.1.0
-torchaudio==2.1.0
-TTS
-cutlet
-fugashi
-unidic-lite
-imageio-ffmpeg
 google-generativeai
+PyNaCl
+aiohttp
